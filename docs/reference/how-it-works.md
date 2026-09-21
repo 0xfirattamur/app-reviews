@@ -1,3 +1,7 @@
+---
+description: Understand provider selection, paging, filtering, concurrency, and stop reasons in app-reviews.
+---
+
 # How It Works
 
 What the package does when you call `client.fetch()`.
@@ -95,10 +99,8 @@ Authenticated REST API for app developers.
 **Endpoint:** `https://api.appstoreconnect.apple.com/v1/apps/{app_id}/customerReviews`
 
 - Signs a JWT using your `.p8` private key (ES256).
-- Higher limits and more metadata than the RSS feed.
 - You can only access reviews for apps you own.
 - Requires Apple Developer Program membership ($99/year).
-- Rate limit: ~450 requests/minute.
 
 ### Google Play: Web Scraper
 
@@ -108,7 +110,7 @@ Sends requests to Google Play's internal batch endpoint.
 
 - Up to 200 reviews per request, follows continuation tokens.
 - Automatic exponential backoff on rate limits.
-- Returns: review ID, rating, body, author, timestamps, app version, language.
+- Returns: review ID, rating, body, author, creation timestamp and app version.
 - **Undocumented endpoint**: can break if Google changes their internal API.
 - Google Play reviews do not have titles.
 
@@ -120,6 +122,8 @@ Authenticated REST API (v3).
 
 - Signs a JWT using service account key (RS256), exchanges for OAuth2 token.
 - Structured pagination.
+- Requests up to 100 reviews per page.
+- Preserves `reviewerLanguage` and legacy tab-separated titles when present.
 - You can only access reviews for apps you own.
 - Requires Google Cloud + Google Play Developer account.
 - Permissions can take up to 24 hours to propagate.
@@ -189,13 +193,19 @@ for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
   transport.
 - **Classified errors, one vocabulary.** A failed exchange (a bad status, a
   transport failure, or a malformed response body) is classified into an
-  `ErrorKind` (`rate_limited`, `auth`, `not_found`, `server`, `transport`,
-  `parse`), so callers branch on `kind` instead of parsing exception text. How
-  it reaches you depends on the layer: `fetch`/`iter_pages` walk many pages
+  `ErrorKind` (`rate_limited`, `auth`, `not_found`, `request`, `server`,
+  `transport`, `parse`), so callers branch on `kind` instead of parsing
+  exception text. A completed permanent 4xx rejection maps to `request` and
+  `RequestError`; it is not retryable. A 401/403 maps to `auth` only when an
+  official endpoint received credentials. Credential-free public RSS, web,
+  search, and lookup endpoints have no credentials to repair, so their 401/403
+  maps to `request` instead. Delivery depends on the layer:
+  `fetch`/`iter_pages` walk many pages
   across many countries where partial success is normal, so they report a
   `FetchError` as data; `search`/`lookup` are single requests with a single
-  outcome, so they raise: `RateLimitError`, `AuthError`, `ServerError` and the
-  rest, all under `HttpError`/`AppReviewsError`. The class is the classification.
+  outcome, so they raise: `RateLimitError`, `AuthError`, `RequestError`,
+  `ServerError` and the rest, all under `HttpError`/`AppReviewsError`. The class
+  is the classification.
   Both are importable from the package root.
 
 ---

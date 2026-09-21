@@ -22,6 +22,20 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+      - name: Install social card system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libcairo2-dev \
+            libfreetype6-dev \
+            libffi-dev \
+            libjpeg-dev \
+            libpng-dev \
+            zlib1g-dev
       - run: uv sync --locked --group dev
       - run: uv run mkdocs build --strict
+        env:
+          ENABLE_SOCIAL_CARDS: "true"
       - run: uv run mkdocs gh-deploy --force
+        env:
+          ENABLE_SOCIAL_CARDS: "true"

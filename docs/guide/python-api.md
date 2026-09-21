@@ -1,3 +1,7 @@
+---
+description: Public sync and async app-reviews Python API, result models, errors, search, and metadata.
+---
+
 # Python API
 
 Four main classes: two for reviews, two for search and lookup. All follow the same pattern: create a client, call a method.
@@ -78,7 +82,8 @@ result = client.fetch(
     ratings=None,    # list[int] | None: filter to specific star ratings
     sort=Sort.NEWEST,# Sort: sort order
     limit=None,      # int | None: max reviews to return
-    concurrency=None,# int | None: max countries fetched in parallel (default: one worker per country)
+    concurrency=None,# int | None: max countries fetched in parallel (default: 8)
+    max_pages=None,  # int | None: request budget per country (default: 10,000)
 )
 ```
 
@@ -259,11 +264,13 @@ if result.errors:
 
 ### Serialise
 
-`to_dicts()` gives you JSON-serialisable plain dicts: timestamps as ISO 8601
-strings, and the provider payload (`raw`) left out unless you ask for it:
+`to_dict()` gives you the complete JSON-safe result envelope, including errors,
+outcomes and skipped-record counts. `to_dicts()` is the compatibility helper for
+review rows only. Provider payloads (`raw`) are left out unless you ask for them:
 
 ```python
-records = result.to_dicts()                    # list[dict], JSON-safe
+payload = result.to_dict()                     # reviews + diagnostics
+records = result.to_dicts()                    # review rows only
 records = result.to_dicts(include_raw=True)    # keep the provider payload
 ```
 
@@ -278,10 +285,11 @@ json.dumps(result.to_dicts(), indent=2)                      # JSON
 "\n".join(json.dumps(d) for d in result.to_dicts())          # JSONL
 
 rows = result.to_dicts()
-with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
+if rows:
+    with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
 ```
 
 `newline=""` is required when writing CSV; without it, review bodies
@@ -295,10 +303,10 @@ containing newlines produce broken rows on some platforms.
 |-------|------|-------------|
 | `id` | `str` | Raw identifier assigned by the source ([details](../reference/models.md#review-ids)) |
 | `store` | `Store` | `"appstore"` or `"googleplay"` |
-| `app_id` | `str` | App Store ID or package name |
+| `app_id` | `str` | Numeric Apple app ID or Google Play package name |
 | `country` | `str \| None` | Storefront queried. `None` if the source does not report one (e.g. `googleplay_official`, `googleplay_scraper`) |
 | `rating` | `int` | Star rating (`1`-`5`) |
-| `title` | `str \| None` | Review title. `None` for sources with no title concept (Google Play) |
+| `title` | `str \| None` | Review title. Google Play web has none; the official API may expose a legacy title |
 | `body` | `str` | Review text |
 | `author_name` | `str` | Reviewer display name |
 | `app_version` | `str \| None` | App version at time of review |
@@ -307,7 +315,7 @@ containing newlines produce broken rows on some platforms.
 | `source` | `Source` | Provider (e.g. `"appstore_scraper"`, `"googleplay_official"`) |
 | `language` | `str \| None` | Review language code |
 | `fetched_at` | `datetime \| None` | When the review was fetched |
-| `raw` | `dict \| list \| None` | Raw API response payload. A list from Play, which sends arrays |
+| `raw` | `dict \| list \| None` | Raw provider payload. Apple and official Play use objects; Play web uses arrays |
 
 ### Error handling
 
@@ -363,8 +371,9 @@ when the exchange never produced one.
 |---|---|---|
 | `RateLimitError` | HTTP 429 | yes, later |
 | `ServerError` | HTTP 5xx | yes |
-| `TransportError` | connection refused, timeout, bad URL, unmapped sub-500 | yes |
-| `AuthError` | credentials rejected, or unusable | **no** |
+| `TransportError` | connection refused, timeout, or an exchange that did not complete | yes |
+| `AuthError` | credentials rejected, or unusable; 401/403 from an official credentialed endpoint | **no** |
+| `RequestError` | another permanent HTTP 4xx rejection, including 401/403 from a credential-free public endpoint | no |
 | `NotFoundError` | HTTP 404 | no |
 | `ParseError` | a success carrying an unreadable body | no |
 
@@ -492,12 +501,12 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `app_id` | `str` | Bundle ID (App Store) or package name (Google Play) |
+| `app_id` | `str` | Numeric track ID for App Store results, or Google Play package name |
 | `store` | `Store` | `"appstore"` or `"googleplay"` |
 | `name` | `str` | App display name |
 | `developer` | `str` | Developer or publisher name |
 | `category` | `str` | Primary category (e.g. `"Social Networking"`) |
-| `price` | `str` | Formatted price (e.g. `"Free"`, `"$4.99"`) |
+| `price` | `str` | Localized store price, ISO fallback, `"Free"`, or `"Unknown"` |
 | `version` | `str` | Current version string |
 | `rating` | `float` | Average star rating (`0.0`-`5.0`) |
 | `rating_count` | `int` | Total number of ratings |
@@ -513,10 +522,13 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 
 > **Note:** Google Play search results may have `"Unknown"` for `name`,
 > `developer` and `category`, and `0` for `rating_count`, because a regular search hit
-> carries no count. `price` falls back to `"Free"` when the store reports none,
-> and `version` is always `"Varies with device"`, because a regular search hit
-> carries no version field. Use `lookup()` for a real rating count, and for the
-> real version when the app publishes one.
+> carries no count. Google Play `price` prefers the localized display value;
+> absent data or numeric zero becomes `"Free"`, a positive numeric amount plus
+> ISO currency becomes an ISO-formatted fallback, and malformed/non-finite data
+> or a missing currency becomes `"Unknown"`. `version` is always
+> `"Varies with device"`, because a regular search hit carries no version field.
+> Use `lookup()` for a real rating count, and for the real version when the app
+> publishes one.
 
 ### Examples
 

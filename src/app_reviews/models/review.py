@@ -18,8 +18,8 @@ class Review:
     ``country`` is the storefront that was queried, not the reviewer's
     location. ``None`` means the source does not report it.
 
-    ``title`` is ``None`` where the source has no title concept; Google Play
-    reviews have no titles.
+    ``title`` is ``None`` where the source has no title concept. Google Play's
+    public web source has none; the official API may expose a legacy title.
 
     No source reports both timestamps, so exactly one of ``created_at`` and
     ``updated_at`` is set and it is the field that source orders by. Read
@@ -43,10 +43,10 @@ class Review:
     raw: dict[str, Any] | list[Any] | None = None
     """The provider's own payload, exactly as it arrived.
 
-    A list as well as an object because the two stores disagree: the iTunes and
-    Connect APIs send JSON objects, while Play's endpoints send positional
-    arrays. Wrapping the arrays would make ``raw`` mean "what the source sent,
-    unless the source is Play", which is worse than one wider type.
+    A list as well as an object because the sources disagree: Apple and the
+    official Play API send JSON objects, while Play's web endpoint sends
+    positional arrays. Wrapping the arrays would make ``raw`` stop meaning
+    "what the source sent" for that provider.
     """
 
     def __post_init__(self) -> None:

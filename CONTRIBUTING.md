@@ -2,10 +2,13 @@
 
 Thanks for helping out. Bug reports, fixes, and new store support are all welcome.
 
+Participation is covered by the
+[Code of Conduct](https://github.com/0xfirattamur/app-reviews/blob/main/CODE_OF_CONDUCT.md).
+
 ## Setup
 
 ```bash
-git clone https://github.com/firattamurcw/app-reviews.git
+git clone https://github.com/0xfirattamur/app-reviews.git
 cd app-reviews
 make install
 pre-commit install
@@ -32,8 +35,12 @@ Live tests hit real store endpoints and are skipped by default. Run them with `m
 
 ## Pull requests
 
-Branch from `main`, add tests, run `make all`, open the PR. For anything large, open an issue first so we can agree on the approach. Small fixes can go straight to a PR.
+Branch from `main`, add tests, run `make all`, and open the PR. For anything
+large, open an issue first so the interface can be discussed. Small fixes can go
+straight to a PR. Never include store credentials or personal review data in a
+fixture or report.
 
 ## Security
 
-Please don't file public issues for vulnerabilities. See [SECURITY.md](SECURITY.md).
+Please don't file public issues for vulnerabilities. See the
+[security policy](https://github.com/0xfirattamur/app-reviews/blob/main/SECURITY.md).

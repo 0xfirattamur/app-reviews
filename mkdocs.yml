@@ -1,8 +1,8 @@
 site_name: App Reviews
-site_description: Fetch app reviews from the Apple App Store and Google Play Store with Python
-site_url: https://firattamurcw.github.io/app-reviews/
-repo_url: https://github.com/firattamurcw/app-reviews
-repo_name: firattamurcw/app-reviews
+site_description: Typed sync and async Python client for App Store and Google Play reviews, app search, metadata, and resumable cursors
+site_url: https://0xfirattamur.github.io/app-reviews/
+repo_url: https://github.com/0xfirattamur/app-reviews
+repo_name: 0xfirattamur/app-reviews
 
 theme:
   name: material
@@ -37,11 +37,39 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
   - tables
   - attr_list
 
+plugins:
+  - search
+  - social:
+      enabled: !ENV [ENABLE_SOCIAL_CARDS, false]
+  - llmstxt:
+      full_output: llms-full.txt
+      markdown_description: >-
+        Typed Python APIs for bounded Apple App Store and Google Play review
+        ingestion, app search, metadata lookup, and resumable pagination.
+      sections:
+        Getting started:
+          - index.md
+          - getting-started/*.md
+        Guides and reference:
+          - guide/*.md
+          - reference/*.md
+        Project:
+          - comparison.md
+          - faq.md
+          - changelog.md
+          - contributing.md
+
 nav:
   - Home: index.md
+  - Comparison: comparison.md
+  - FAQ: faq.md
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
@@ -54,3 +82,5 @@ nav:
       - Models: reference/models.md
       - Source Capabilities: reference/capabilities.md
       - How It Works: reference/how-it-works.md
+  - Changelog: changelog.md
+  - Contributing: contributing.md

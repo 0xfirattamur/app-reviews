@@ -1,3 +1,7 @@
+---
+description: Bound review requests, resume cursors, and stream pages without buffering entire review corpora.
+---
+
 # Paging and cursors
 
 `fetch()` walks every page for you. When you need to own the loop (to

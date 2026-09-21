@@ -5,8 +5,9 @@ This module is the API. Every name below is importable straight from
 
     from app_reviews import AppStoreReviews, Country, Sort
 
-Reviews come back as ``Review`` objects; ``FetchResult.to_dicts()`` gives you
-JSON-serialisable plain dicts when you want to hand them to ``json`` or ``csv``.
+Reviews come back as ``Review`` objects. ``FetchResult.to_dict()`` gives an
+automation boundary the complete JSON-safe result, while ``to_dicts()`` keeps
+the review-row compatibility shape used for JSONL or CSV.
 
 Nothing else needs importing from a submodule path, which is deliberate: it is
 what lets the package's internal shape change without breaking callers. Two

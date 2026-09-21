@@ -1,3 +1,7 @@
+---
+description: Compare country behavior, ordering, history, and fields across four review sources.
+---
+
 # How the sources differ
 
 Four sources back two stores, and they do not behave alike. This page is the
@@ -29,6 +33,8 @@ answers the country question directly: it returns `[""]` for a global source.
 | History | unbounded | unbounded | unbounded | **last 7 days** |
 | Ceiling | **~500 per storefront** | unbounded | unbounded | unbounded |
 | `review.country` | set | set | `None` | `None` |
+| `review.title` | set | set | `None` | legacy text only |
+| `review.language` | `None` | `None` | `None` | set when reported |
 | `review.raw` | populated | populated | populated | populated |
 
 ---
@@ -102,8 +108,9 @@ keep an append-only observation log: a day fetched without `raw` can never be
 reprocessed, so a mapping bug found later has nothing to go back to.
 
 Prior to 0.6.0 the Play scraper set `raw=None` while the other three populated
-it. Its shape differs by source: the iTunes and Connect APIs send JSON objects
-while Play's endpoints send positional arrays, so `raw` is `dict | list | None`.
+it. Its shape differs by source: Apple and the official Play API send JSON
+objects, while Play's web endpoint sends positional arrays, so `raw` is
+`dict | list | None`.
 
 `to_dicts()` omits it unless you ask: `result.to_dicts(include_raw=True)`. It is
 off by default because the payload routinely dwarfs the review around it.

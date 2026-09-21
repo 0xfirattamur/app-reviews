@@ -6,7 +6,7 @@ The latest released version of `app-reviews` receives security updates. Older ve
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities through [GitHub Security Advisories](https://github.com/firattamurcw/app-reviews/security/advisories/new) so the report stays private until a fix ships. Don't open a public issue.
+Please report vulnerabilities through [GitHub Security Advisories](https://github.com/0xfirattamur/app-reviews/security/advisories/new) so the report stays private until a fix ships. Don't open a public issue.
 
 Helpful to include:
 

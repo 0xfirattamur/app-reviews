@@ -1,3 +1,7 @@
+---
+description: Install app-reviews with pip or uv on Python 3.11 and newer.
+---
+
 # Installation
 
 ## Requirements
@@ -23,7 +27,7 @@ uv add app-reviews
 ## Install from Source
 
 ```bash
-git clone https://github.com/firattamurcw/app-reviews.git
+git clone https://github.com/0xfirattamur/app-reviews.git
 cd app-reviews
 uv sync
 ```

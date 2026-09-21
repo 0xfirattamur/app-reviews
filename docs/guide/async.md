@@ -1,3 +1,7 @@
+---
+description: Fetch, stream, search, and look up app reviews with native async Python APIs.
+---
+
 # Async
 
 Every entry point has an async twin using real async I/O over `httpx`, not a
