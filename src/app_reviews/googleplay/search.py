@@ -18,6 +18,7 @@ from app_reviews.core.search import (
     scraped_number,
     scraped_text,
 )
+from app_reviews.core.validation import require_non_negative
 from app_reviews.errors import ParseError
 from app_reviews.models.country import Country, normalise_country
 from app_reviews.models.metadata import AppMetadata
@@ -129,6 +130,9 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return get_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -144,6 +148,9 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return (
             await aget_and_parse(
                 self._http,
@@ -206,7 +213,7 @@ class GooglePlaySearch(PooledClient):
         page with no results section at all is unreadable, which is a different
         answer and must not arrive as ``[]``.
         """
-        raise_for_http_failure(response, "Google Play search")
+        raise_for_http_failure(response, "Google Play search", credentialed=False)
         datasets = self._datasets_or_raise(response)
         readable = False
 
@@ -235,7 +242,7 @@ class GooglePlaySearch(PooledClient):
         """
         if response.status == 404:
             return None
-        raise_for_http_failure(response, "Google Play")
+        raise_for_http_failure(response, "Google Play", credentialed=False)
         datasets = self._datasets_or_raise(response)
 
         for data in self._preferring(datasets, self.DETAIL_DATASET):

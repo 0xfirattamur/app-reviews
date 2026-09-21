@@ -133,6 +133,28 @@ page, because one empty page followed by more data is normal (a Play page whose
 rows all failed to parse, a filtered Connect page).
 """
 
+_STOP_REASON_PRIORITY: dict[StopReason, int] = {
+    "error": 0,
+    "exhausted": 1,
+    "since": 2,
+    "limit": 3,
+    "cycle": 4,
+    "stalled": 5,
+    "max_pages": 6,
+}
+"""Which truthful stop reason wins when two conditions land on one page."""
+
+
+def prefer_stop_reason(
+    current: StopReason | None, candidate: StopReason | None
+) -> StopReason | None:
+    """Return the higher-priority reason under ``StopPolicy`` precedence."""
+    if current is None:
+        return candidate
+    if candidate is None:
+        return current
+    return min((current, candidate), key=_STOP_REASON_PRIORITY.__getitem__)
+
 
 class StopPolicy:
     """Decides when a walk ends. One instance per country walk, since it keeps count."""

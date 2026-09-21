@@ -5,6 +5,7 @@ same kind of thing (inputs you build before a fetch, as opposed to the results
 you get back), so they share a module.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -25,7 +26,7 @@ class RetryConfig:
     max_retries: int = 3
     backoff_factor: float = 0.5
     timeout: float = 30.0
-    retry_on: list[int] = field(default_factory=lambda: [500, 502, 503, 504, 429])
+    retry_on: Collection[int] = field(default_factory=lambda: (500, 502, 503, 504, 429))
 
     max_backoff: float = 60.0
     """Ceiling on one wait, in seconds.
@@ -36,6 +37,7 @@ class RetryConfig:
     """
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "retry_on", tuple(self.retry_on))
         if self.max_retries < 0:
             raise ValueError("max_retries must be >= 0")
         if self.backoff_factor < 0:

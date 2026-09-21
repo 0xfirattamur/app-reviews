@@ -8,7 +8,7 @@ import pytest
 
 from app_reviews.appstore.search import AppStoreSearch
 from app_reviews.core.http import HttpClient
-from app_reviews.errors import AppReviewsError, HttpError, ParseError
+from app_reviews.errors import AppReviewsError, HttpError, ParseError, RequestError
 from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
 
@@ -59,6 +59,29 @@ class TestConstruction:
 
 
 class TestSearch:
+    def test_zero_limit_returns_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([_itunes_result()]))
+
+        assert _client(handler).search("whatsapp", limit=0) == []
+        assert calls == 0
+
+    def test_negative_limit_is_rejected_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([]))
+
+        with pytest.raises(ValueError, match="limit"):
+            _client(handler).search("whatsapp", limit=-1)
+        assert calls == 0
+
     def test_maps_results(self):
         def handler(request):
             return httpx.Response(200, text=_payload([_itunes_result()]))
@@ -140,6 +163,10 @@ class TestSearch:
 
         with pytest.raises(HttpError, match="503"):
             _client(handler).search("whatsapp")
+
+    def test_public_search_403_is_not_an_auth_error(self):
+        with pytest.raises(RequestError, match="403"):
+            _client(lambda request: httpx.Response(403)).search("whatsapp")
 
     def test_malformed_json_raises_rather_than_looking_empty(self):
         """An unreadable body is not "no results"; see
@@ -443,6 +470,33 @@ class TestTheAsyncPathSendsTheSameQuery:
         assert "term=whatsapp" in seen["url"]
         assert "country=de" in seen["url"]
         assert "limit=7" in seen["url"]
+
+    async def test_asearch_zero_limit_returns_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([_itunes_result()]))
+
+        assert await _client(handler).asearch("whatsapp", limit=0) == []
+        assert calls == 0
+
+    async def test_asearch_rejects_negative_limit_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([]))
+
+        with pytest.raises(ValueError, match="limit"):
+            await _client(handler).asearch("whatsapp", limit=-1)
+        assert calls == 0
+
+    async def test_public_asearch_401_is_not_an_auth_error(self):
+        with pytest.raises(RequestError, match="401"):
+            await _client(lambda request: httpx.Response(401)).asearch("whatsapp")
 
     async def test_alookup_sends_the_identifier(self):
         seen = {}

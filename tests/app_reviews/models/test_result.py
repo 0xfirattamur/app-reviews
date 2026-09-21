@@ -118,6 +118,11 @@ def test_limit_larger_than_count_is_noop():
     assert len(result) == 3
 
 
+def test_negative_limit_is_rejected():
+    with pytest.raises(ValueError, match="limit"):
+        FetchResult(reviews=[]).limit(-1)
+
+
 def test_chain_filter_sort_limit():
     reviews = [
         make_review(id="1", rating=5, created_at=datetime(2025, 1, 1, tzinfo=UTC)),

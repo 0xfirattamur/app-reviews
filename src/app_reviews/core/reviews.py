@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Collection, Iterator
+from collections.abc import AsyncIterator, Callable, Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any
@@ -19,9 +19,11 @@ from app_reviews.core.paging import (
     StopPolicy,
     is_per_country,
     orders_newest_first,
+    prefer_stop_reason,
     with_stop_reason,
 )
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.validation import require_non_negative, require_positive
 from app_reviews.errors import AppReviewsError, AuthError
 from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country, normalise_country
@@ -79,13 +81,15 @@ class BaseReviews(PooledClient, abc.ABC):
     """Walked when a per-country source is given no countries."""
 
     MAX_PAGES = DEFAULT_MAX_PAGES
-    """Pages one country walk will request before reporting ``max_pages``.
+    """Default pages one country walk requests before reporting ``max_pages``.
 
-    A class attribute rather than a parameter on all four rungs: it is a floor
-    against a source that never ends, not a per-call knob. Raise it on a
-    subclass or instance if a storefront genuinely has more, and resume from the
-    final page's cursor either way.
+    This is the safety ceiling when a call omits ``max_pages``. Every paginated
+    public rung accepts a per-call override; use the final page's cursor to
+    resume a bounded walk.
     """
+
+    DEFAULT_CONCURRENCY = 8
+    """Default maximum number of simultaneous storefront walks."""
 
     def __init__(
         self,
@@ -152,7 +156,10 @@ class BaseReviews(PooledClient, abc.ABC):
         territory. Keyed off ``core.paging.is_per_country``, which is the
         only home for that fact.
         """
-        return self._country_list(self._ensure_provider(), countries)
+        selection = self._normalised_selection(countries)
+        if selection == []:
+            return []
+        return self._country_list(self._ensure_provider(), selection)
 
     # ---- rung 1: one request ------------------------------------------------
 
@@ -196,6 +203,7 @@ class BaseReviews(PooledClient, abc.ABC):
         cursor: str | None = None,
         since: date | datetime | None = None,
         limit: int | None = None,
+        max_pages: int | None = None,
     ) -> Iterator[PageResult]:
         """Walk one country's pages, yielding each.
 
@@ -213,7 +221,14 @@ class BaseReviews(PooledClient, abc.ABC):
         ``limit`` stops the walk once that many reviews have been yielded.
         ``stopped_because == "limit"`` means more data exists;
         ``"exhausted"`` means it does not.
+
+        ``max_pages`` is the maximum number of requests in this country walk.
+        Zero performs no I/O; omission uses the client's safety ceiling.
         """
+        require_non_negative(limit, "limit")
+        page_budget = self._page_budget(max_pages)
+        if limit == 0 or page_budget == 0:
+            return
         provider = self._ensure_provider()
         yield from self._walk(
             provider,
@@ -222,6 +237,7 @@ class BaseReviews(PooledClient, abc.ABC):
             cursor,
             since,
             limit,
+            page_budget,
         )
 
     async def aiter_pages(
@@ -232,8 +248,13 @@ class BaseReviews(PooledClient, abc.ABC):
         cursor: str | None = None,
         since: date | datetime | None = None,
         limit: int | None = None,
+        max_pages: int | None = None,
     ) -> AsyncIterator[PageResult]:
         """Async equivalent of ``iter_pages``, with identical semantics."""
+        require_non_negative(limit, "limit")
+        page_budget = self._page_budget(max_pages)
+        if limit == 0 or page_budget == 0:
+            return
         provider = await self._aensure_provider()
         async for page in self._awalk(
             provider,
@@ -242,6 +263,7 @@ class BaseReviews(PooledClient, abc.ABC):
             cursor,
             since,
             limit,
+            page_budget,
         ):
             yield page
 
@@ -253,6 +275,7 @@ class BaseReviews(PooledClient, abc.ABC):
         cursor: str | None,
         since: date | datetime | None,
         limit: int | None,
+        max_pages: int,
     ) -> Iterator[PageResult]:
         """The page walk. Takes an already-built provider so rung 3 can reuse it.
 
@@ -260,7 +283,7 @@ class BaseReviews(PooledClient, abc.ABC):
         holds one and delegates here too. Rebuilding it per country would
         re-sign credentials on every call.
         """
-        policy = StopPolicy(provider.source, since, limit, max_pages=self.MAX_PAGES)
+        policy = StopPolicy(provider.source, since, limit, max_pages=max_pages)
 
         while True:
             page = self._page(provider, app_id, country, cursor)
@@ -278,6 +301,7 @@ class BaseReviews(PooledClient, abc.ABC):
         cursor: str | None,
         since: date | datetime | None,
         limit: int | None,
+        max_pages: int,
     ) -> AsyncIterator[PageResult]:
         """Async equivalent of ``_walk``.
 
@@ -285,7 +309,7 @@ class BaseReviews(PooledClient, abc.ABC):
         one with a sync generator. The stop *policy* is not duplicated; both
         delegate to ``StopPolicy``.
         """
-        policy = StopPolicy(provider.source, since, limit, max_pages=self.MAX_PAGES)
+        policy = StopPolicy(provider.source, since, limit, max_pages=max_pages)
 
         while True:
             page = await self._apage(provider, app_id, country, cursor)
@@ -304,6 +328,7 @@ class BaseReviews(PooledClient, abc.ABC):
         countries: Collection[Country | str] | None = None,
         since: date | datetime | None = None,
         limit: int | None = None,
+        max_pages: int | None = None,
     ) -> Iterator[Review]:
         """Stream reviews across countries, one at a time, buffering nothing.
 
@@ -323,6 +348,8 @@ class BaseReviews(PooledClient, abc.ABC):
         ``limit`` here means "yield at most this many", counted across
         countries, not ``fetch``'s "the N best under ``sort``".
 
+        ``max_pages`` bounds each country walk, including filtered streams.
+
         Countries are walked in sequence, not concurrently: a concurrent fan-out
         would have to buffer to put results back in order, which is the cost
         this rung exists to avoid.
@@ -331,15 +358,22 @@ class BaseReviews(PooledClient, abc.ABC):
         nowhere to hand a ``FetchError`` back. Use ``fetch`` or ``iter_pages``
         when you need the failure as data.
         """
+        require_non_negative(limit, "limit")
+        page_budget = self._page_budget(max_pages)
+        selection = self._normalised_selection(countries)
+        if limit == 0 or page_budget == 0 or selection == []:
+            return
         provider = self._ensure_provider()
         boundary = self._since_boundary(since)
         yielded = 0
 
-        for country in self._country_list(provider, countries):
+        for country in self._country_list(provider, selection):
             if limit is not None and yielded >= limit:
                 return
             remaining = self._stream_walk_limit(provider, since, limit, yielded)
-            for page in self._walk(provider, app_id, country, None, since, remaining):
+            for page in self._walk(
+                provider, app_id, country, None, since, remaining, page_budget
+            ):
                 self._log_stream_error(page, country)
                 for review in page.reviews:
                     if boundary is not None and review.dated_at < boundary:
@@ -356,18 +390,24 @@ class BaseReviews(PooledClient, abc.ABC):
         countries: Collection[Country | str] | None = None,
         since: date | datetime | None = None,
         limit: int | None = None,
+        max_pages: int | None = None,
     ) -> AsyncIterator[Review]:
         """Async equivalent of ``iter_reviews``, with identical semantics."""
+        require_non_negative(limit, "limit")
+        page_budget = self._page_budget(max_pages)
+        selection = self._normalised_selection(countries)
+        if limit == 0 or page_budget == 0 or selection == []:
+            return
         provider = await self._aensure_provider()
         boundary = self._since_boundary(since)
         yielded = 0
 
-        for country in self._country_list(provider, countries):
+        for country in self._country_list(provider, selection):
             if limit is not None and yielded >= limit:
                 return
             remaining = self._stream_walk_limit(provider, since, limit, yielded)
             async for page in self._awalk(
-                provider, app_id, country, None, since, remaining
+                provider, app_id, country, None, since, remaining, page_budget
             ):
                 self._log_stream_error(page, country)
                 for review in page.reviews:
@@ -485,38 +525,70 @@ class BaseReviews(PooledClient, abc.ABC):
         sort: Sort = Sort.NEWEST,
         limit: int | None = None,
         concurrency: int | None = None,
+        max_pages: int | None = None,
     ) -> FetchResult:
         """Fetch reviews across countries, then filter and sort.
 
         ``limit`` means "the N best under ``sort``". With ``Sort.NEWEST`` on a
-        newest-first source, and with neither ``ratings`` nor ``until`` also
-        requested, it also bounds the walk, so fewer requests are made. In
-        every other case (``Sort.OLDEST``/``Sort.RATING``, a source without a
-        newest-first guarantee, or a ``ratings``/``until`` filter), the best N
-        are not the first N fetched, so the walk must be exhausted before
-        truncating. That is measurably more expensive and is logged.
+        newest-first source, the walk stops once N qualifying reviews have been
+        collected, including with ``ratings``/``until`` filters. Other sorts and
+        sources without that ordering guarantee remain exhaustive because later
+        pages can still displace an earlier result.
 
         ``concurrency`` bounds the cross-country fan-out. Pass 1 to make it
         sequential, for example when you are rate-limiting a source yourself.
+        Omission caps the fan-out at eight. ``max_pages`` bounds each country
+        walk so filtered requests have an explicit request budget.
         """
+        require_non_negative(limit, "limit")
+        require_positive(concurrency, "concurrency")
+        page_budget = self._page_budget(max_pages)
+        selection = self._normalised_selection(countries)
+        if limit == 0 or page_budget == 0 or selection == []:
+            return FetchResult()
         provider = self._ensure_provider()
-        resolved = self._country_list(provider, countries)
+        resolved = self._country_list(provider, selection)
         walk_limit = self._walk_limit(
             provider.source, sort, limit, ratings=ratings, until=until
+        )
+        qualifying = self._qualifying_filter(
+            provider.source,
+            sort,
+            limit,
+            ratings=ratings,
+            since=since,
+            until=until,
         )
         workers = self._workers(resolved, concurrency)
 
         collected: list[tuple[list[Review], CountryOutcome]]
         if workers == 1:
             collected = [
-                self._walk_country(provider, app_id, c, walk_limit, since)
+                self._walk_country(
+                    provider,
+                    app_id,
+                    c,
+                    walk_limit,
+                    since,
+                    page_budget,
+                    qualifying,
+                    limit,
+                )
                 for c in resolved
             ]
         else:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = [
                     pool.submit(
-                        self._walk_country, provider, app_id, c, walk_limit, since
+                        self._walk_country,
+                        provider,
+                        app_id,
+                        c,
+                        walk_limit,
+                        since,
+                        page_budget,
+                        qualifying,
+                        limit,
                     )
                     for c in resolved
                 ]
@@ -535,19 +607,41 @@ class BaseReviews(PooledClient, abc.ABC):
         sort: Sort = Sort.NEWEST,
         limit: int | None = None,
         concurrency: int | None = None,
+        max_pages: int | None = None,
     ) -> FetchResult:
         """Async equivalent of ``fetch``. Uses ``asyncio.gather``, not threads."""
+        require_non_negative(limit, "limit")
+        require_positive(concurrency, "concurrency")
+        page_budget = self._page_budget(max_pages)
+        selection = self._normalised_selection(countries)
+        if limit == 0 or page_budget == 0 or selection == []:
+            return FetchResult()
         provider = await self._aensure_provider()
-        resolved = self._country_list(provider, countries)
+        resolved = self._country_list(provider, selection)
         walk_limit = self._walk_limit(
             provider.source, sort, limit, ratings=ratings, until=until
+        )
+        qualifying = self._qualifying_filter(
+            provider.source,
+            sort,
+            limit,
+            ratings=ratings,
+            since=since,
+            until=until,
         )
         semaphore = asyncio.Semaphore(self._workers(resolved, concurrency))
 
         async def guarded(country: str) -> tuple[list[Review], CountryOutcome]:
             async with semaphore:
                 return await self._awalk_country(
-                    provider, app_id, country, walk_limit, since
+                    provider,
+                    app_id,
+                    country,
+                    walk_limit,
+                    since,
+                    page_budget,
+                    qualifying,
+                    limit,
                 )
 
         # return_exceptions so one country's failure does not cancel the others
@@ -581,24 +675,14 @@ class BaseReviews(PooledClient, abc.ABC):
         plain string is accepted everywhere else: compared with ``is``, ``"newest"``
         took the slow path and then died reading ``.value`` off a ``str``.
 
-        ``ratings``/``until`` are exactly such a filter: the walk cannot know
-        in advance how many of the first N reviews fetched will survive
-        filtering, so bounding at N risks returning fewer than N results (in
-        the worst case, zero) even though more matching reviews exist later
-        in the walk. ``since`` is exempt, because it already has its own early stop
-        above, and on a newest-first walk a review older than ``since`` can
-        never appear before that boundary, so it cannot be filtered away
-        mid-walk the way ``ratings``/``until`` can.
+        With ``ratings``/``until``, a raw-review limit would be unsound because
+        some fetched rows are later discarded. ``_qualifying_filter`` handles
+        that case by counting matches instead; this method therefore leaves the
+        raw walk unbounded by review count.
         """
         if limit is None:
             return None
         if ratings is not None or until is not None:
-            _LOG.info(
-                "limit=%d with ratings/until filtering requires exhausting "
-                "pagination; the walk cannot know how many reviews will "
-                "survive filtering until it has fetched them all",
-                limit,
-            )
             return None
         order = Sort(sort)
         if order is not Sort.NEWEST:
@@ -619,11 +703,43 @@ class BaseReviews(PooledClient, abc.ABC):
             return None
         return limit
 
+    def _qualifying_filter(
+        self,
+        source: Source,
+        sort: Sort,
+        limit: int | None,
+        *,
+        ratings: list[int] | None,
+        since: date | datetime | None,
+        until: date | datetime | None,
+    ) -> Callable[[Review], bool] | None:
+        """A filter that can safely stop a newest-first walk after N matches."""
+        if limit is None or (ratings is None and until is None):
+            return None
+        if Sort(sort) is not Sort.NEWEST or not orders_newest_first(source):
+            return None
+
+        rating_set = set(ratings) if ratings is not None else None
+        since_boundary = to_aware_datetime(since) if since is not None else None
+        until_boundary = (
+            to_aware_datetime(until, end_of_day=True) if until is not None else None
+        )
+
+        def qualifies(review: Review) -> bool:
+            return (
+                (rating_set is None or review.rating in rating_set)
+                and (since_boundary is None or review.dated_at >= since_boundary)
+                and (until_boundary is None or review.dated_at <= until_boundary)
+            )
+
+        return qualifies
+
     def _workers(self, resolved: list[str], concurrency: int | None) -> int:
-        """Resolve the fan-out width. None means one worker per country."""
+        """Resolve the fan-out width, conservatively bounded by default."""
+        require_positive(concurrency, "concurrency")
         if concurrency is not None:
             return max(1, min(concurrency, len(resolved)))
-        return len(resolved)
+        return min(self.DEFAULT_CONCURRENCY, len(resolved))
 
     def _walk_country(
         self,
@@ -632,6 +748,9 @@ class BaseReviews(PooledClient, abc.ABC):
         country: str,
         walk_limit: int | None,
         since: date | datetime | None,
+        max_pages: int,
+        qualifying: Callable[[Review], bool] | None,
+        limit: int | None,
     ) -> tuple[list[Review], CountryOutcome]:
         """Drive rung 2 for one country and summarise what it did.
 
@@ -640,8 +759,16 @@ class BaseReviews(PooledClient, abc.ABC):
         ``CountryCollector`` so the accounting does too.
         """
         collector = CountryCollector(self._outcome_country(provider, country))
-        for page in self._walk(provider, app_id, country, None, since, walk_limit):
+        qualified = 0
+        for page in self._walk(
+            provider, app_id, country, None, since, walk_limit, max_pages
+        ):
+            page, qualified = self._with_qualifying_stop(
+                page, qualifying, qualified, limit
+            )
             collector.add(page)
+            if page.stopped_because is not None:
+                break
         return collector.reviews, collector.outcome()
 
     async def _awalk_country(
@@ -651,14 +778,40 @@ class BaseReviews(PooledClient, abc.ABC):
         country: str,
         walk_limit: int | None,
         since: date | datetime | None,
+        max_pages: int,
+        qualifying: Callable[[Review], bool] | None,
+        limit: int | None,
     ) -> tuple[list[Review], CountryOutcome]:
         """Async equivalent of ``_walk_country``."""
         collector = CountryCollector(self._outcome_country(provider, country))
+        qualified = 0
         async for page in self._awalk(
-            provider, app_id, country, None, since, walk_limit
+            provider, app_id, country, None, since, walk_limit, max_pages
         ):
+            page, qualified = self._with_qualifying_stop(
+                page, qualifying, qualified, limit
+            )
             collector.add(page)
+            if page.stopped_because is not None:
+                break
         return collector.reviews, collector.outcome()
+
+    def _with_qualifying_stop(
+        self,
+        page: PageResult,
+        qualifying: Callable[[Review], bool] | None,
+        qualified: int,
+        limit: int | None,
+    ) -> tuple[PageResult, int]:
+        """Count filtered matches and stamp the page that satisfies the limit."""
+        if qualifying is None:
+            return page, qualified
+        qualified += sum(1 for review in page.reviews if qualifying(review))
+        if limit is not None and qualified >= limit:
+            page = with_stop_reason(
+                page, prefer_stop_reason(page.stopped_because, "limit")
+            )
+        return page, qualified
 
     def _outcome_country(self, provider: ReviewProvider, country: str) -> str | None:
         """None for global providers, which have no country to report.
@@ -718,7 +871,7 @@ class BaseReviews(PooledClient, abc.ABC):
         of its own and callers do read ``outcomes`` positionally.
         """
         if not is_per_country(provider.source):
-            if countries:
+            if countries is not None:
                 _LOG.warning(
                     "%s has no country dimension, so countries=%r is ignored; "
                     "one request already covers every territory",
@@ -726,7 +879,20 @@ class BaseReviews(PooledClient, abc.ABC):
                     list(countries),
                 )
             return [""]
-        resolved = (normalise_country(c) for c in countries or ())
-        # Blank entries normalise to None. If that empties the list the fan-out
-        # would be empty, which ``fetch`` no longer guards against.
-        return list(dict.fromkeys(c for c in resolved if c)) or [self.DEFAULT_COUNTRY]
+        if countries is None:
+            return [self.DEFAULT_COUNTRY]
+        return list(dict.fromkeys(countries))
+
+    def _normalised_selection(
+        self, countries: Collection[Country | str] | None
+    ) -> list[str] | None:
+        """Normalise an explicit selection while preserving omission vs empty."""
+        if countries is None:
+            return None
+        resolved = (normalise_country(country) for country in countries)
+        return list(dict.fromkeys(country for country in resolved if country))
+
+    def _page_budget(self, max_pages: int | None) -> int:
+        """Resolve and validate a per-country page request budget."""
+        require_non_negative(max_pages, "max_pages")
+        return self.MAX_PAGES if max_pages is None else max_pages

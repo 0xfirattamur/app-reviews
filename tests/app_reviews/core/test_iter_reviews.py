@@ -9,6 +9,8 @@ caller wrote the same nested loop. This is the rung in between.
 import logging
 from datetime import timedelta
 
+import pytest
+
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 
@@ -17,6 +19,25 @@ from .test_paging import NOW, FakeClient, FakeProvider, _page, _review
 
 
 class TestIterReviews:
+    def test_zero_limit_does_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        assert list(FakeClient(provider).iter_reviews("123", limit=0)) == []
+        assert provider.calls == []
+
+    def test_negative_limit_is_rejected_without_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        with pytest.raises(ValueError, match="limit"):
+            list(FakeClient(provider).iter_reviews("123", limit=-1))
+        assert provider.calls == []
+
+    def test_empty_countries_do_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        assert list(FakeClient(provider).iter_reviews("123", countries=[])) == []
+        assert provider.calls == []
+
     def test_yields_individual_reviews_across_pages(self):
         provider = FakeProvider(
             [
@@ -109,6 +130,22 @@ class TestIterReviews:
         list(FakeClient(provider).iter_reviews("123", countries=["us"], limit=1))
 
         assert len(provider.calls) == 1
+
+    def test_public_max_pages_bounds_the_stream(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "a")], "1"),
+                _page([_review(NOW, "b")], "2"),
+                _page([_review(NOW, "c")], None),
+            ]
+        )
+
+        reviews = list(
+            FakeClient(provider).iter_reviews("123", countries=["us"], max_pages=2)
+        )
+
+        assert [review.id for review in reviews] == ["a", "b"]
+        assert len(provider.calls) == 2
 
     def test_limit_spans_countries(self):
         provider = MultiCountryProvider(
@@ -211,3 +248,19 @@ class TestAsyncParity:
         stream = FakeClient(provider).aiter_reviews("123", countries=["us"], limit=1)
 
         assert [r.id async for r in stream] == ["a"]
+
+    async def test_aiter_reviews_honours_max_pages(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "a")], "1"),
+                _page([_review(NOW, "b")], "2"),
+                _page([_review(NOW, "c")], None),
+            ]
+        )
+
+        stream = FakeClient(provider).aiter_reviews(
+            "123", countries=["us"], max_pages=2
+        )
+
+        assert [r.id async for r in stream] == ["a", "b"]
+        assert len(provider.calls) == 2

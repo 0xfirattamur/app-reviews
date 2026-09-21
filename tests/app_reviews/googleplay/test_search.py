@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app_reviews.core.http import HttpClient
-from app_reviews.errors import HttpError, ParseError
+from app_reviews.errors import HttpError, ParseError, RequestError
 from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
@@ -279,6 +279,29 @@ class TestTheDetailVersionIsRead:
         page = _search_page(groups=[[_entry(), _entry(app_id="com.whatsapp.w4b")]])
         assert len(_serving(page).search("whatsapp", limit=1)) == 1
 
+    def test_zero_limit_returns_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page(groups=[[_entry()]]))
+
+        assert _client(handler).search("whatsapp", limit=0) == []
+        assert calls == 0
+
+    def test_negative_limit_is_rejected_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text="")
+
+        with pytest.raises(ValueError, match="limit"):
+            _client(handler).search("whatsapp", limit=-1)
+        assert calls == 0
+
     def test_skips_an_entry_with_no_app_id(self) -> None:
         page = _search_page(groups=[[_entry(app_id=""), _entry(app_id="com.ok")]])
         results = _serving(page).search("whatsapp")
@@ -287,6 +310,10 @@ class TestTheDetailVersionIsRead:
     def test_non_200_raises_http_error(self) -> None:
         with pytest.raises(HttpError, match="503"):
             _serving("", status=503).search("whatsapp")
+
+    def test_public_search_403_is_not_an_auth_error(self) -> None:
+        with pytest.raises(RequestError, match="403"):
+            _serving("", status=403).search("whatsapp")
 
     def test_transport_failure_raises_http_error(self) -> None:
         def handler(request):
@@ -443,6 +470,29 @@ class TestFieldsPlayDoesNotPublish:
 
 
 class TestAsyncParity:
+    async def test_asearch_zero_limit_returns_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page())
+
+        assert await _client(handler).asearch("whatsapp", limit=0) == []
+        assert calls == 0
+
+    async def test_asearch_rejects_negative_limit_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page())
+
+        with pytest.raises(ValueError, match="limit"):
+            await _client(handler).asearch("whatsapp", limit=-1)
+        assert calls == 0
+
     async def test_asearch_matches_search(self) -> None:
         page = _search_page()
         sync = _serving(page).search("whatsapp")
@@ -461,6 +511,10 @@ class TestAsyncParity:
     async def test_asearch_raises_on_error_status(self) -> None:
         with pytest.raises(HttpError, match="503"):
             await _serving("", status=503).asearch("whatsapp")
+
+    async def test_public_alookup_401_is_not_an_auth_error(self) -> None:
+        with pytest.raises(RequestError, match="401"):
+            await _serving("", status=401).alookup("com.whatsapp")
 
     async def test_alookup_raises_on_error_status(self) -> None:
         with pytest.raises(HttpError, match="500"):

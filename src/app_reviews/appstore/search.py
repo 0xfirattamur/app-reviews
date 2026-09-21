@@ -16,6 +16,7 @@ from app_reviews.core.search import (
     scraped_number,
     scraped_text,
 )
+from app_reviews.core.validation import require_non_negative
 from app_reviews.errors import ParseError
 from app_reviews.models.country import Country, normalise_country
 from app_reviews.models.metadata import AppMetadata
@@ -39,6 +40,9 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return get_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -53,6 +57,9 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return await aget_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -133,7 +140,7 @@ class AppStoreSearch(PooledClient):
         than return data, so reporting ``[]`` would be indistinguishable from an
         app that genuinely does not exist.
         """
-        raise_for_http_failure(response, api)
+        raise_for_http_failure(response, api, credentialed=False)
         try:
             results = json.loads(response.body).get("results", [])
         except (AttributeError, json.JSONDecodeError) as exc:

@@ -27,6 +27,10 @@ class NotFoundError(HttpError):
     """HTTP 404: the store has no such app."""
 
 
+class RequestError(HttpError):
+    """A completed request the store rejected permanently (HTTP 4xx)."""
+
+
 class ServerError(HttpError):
     """HTTP 5xx: the store failed on its own side."""
 

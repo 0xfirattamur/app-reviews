@@ -32,6 +32,7 @@ from app_reviews.errors import (
     NotFoundError,
     ParseError,
     RateLimitError,
+    RequestError,
     ServerError,
     TransportError,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "PageResult",
     "ParseError",
     "RateLimitError",
+    "RequestError",
     "RetryConfig",
     "Review",
     "ServerError",

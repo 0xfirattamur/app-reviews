@@ -158,13 +158,14 @@ class FetchResult:
     def limit(self, n: int | None) -> FetchResult:
         """Return a new FetchResult truncated to n reviews. No-op if n is None.
 
-        A non-positive ``n`` means none. Guarded explicitly because ``n >= len``
-        is never true for a negative number, so ``reviews[:n]`` used to slice
-        from the tail and quietly drop the newest instead.
+        Zero means none; a negative value is invalid rather than Python's
+        surprising slice-from-the-tail behavior.
         """
+        if n is not None and n < 0:
+            raise ValueError("limit must be >= 0")
         if n is None or n >= len(self.reviews):
             return self
-        if n <= 0:
+        if n == 0:
             return FetchResult(reviews=[], outcomes=self.outcomes)
         return FetchResult(reviews=self.reviews[:n], outcomes=self.outcomes)
 

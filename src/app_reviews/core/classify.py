@@ -15,6 +15,7 @@ from app_reviews.errors import (
     NotFoundError,
     ParseError,
     RateLimitError,
+    RequestError,
     ServerError,
     TransportError,
 )
@@ -35,6 +36,7 @@ _CLASS_FOR: dict[ErrorKind, type[AppReviewsError]] = {
     "rate_limited": RateLimitError,
     "auth": AuthError,
     "not_found": NotFoundError,
+    "request": RequestError,
     "server": ServerError,
     "transport": TransportError,
     "parse": ParseError,
@@ -43,7 +45,7 @@ _CLASS_FOR: dict[ErrorKind, type[AppReviewsError]] = {
 
 Written out rather than derived from the classes, because the classes carry no
 ``kind``: the type is the classification. ``tests/app_reviews/test_errors.py``
-pins these keys against ``get_args(ErrorKind)``, so a seventh kind cannot appear on
+pins these keys against ``get_args(ErrorKind)``, so a new kind cannot appear on
 the data path without also appearing here.
 """
 
@@ -57,24 +59,38 @@ Derived rather than written out, so the two directions cannot drift apart.
 """
 
 
-def classify(status: int, transport_error: str | None = None) -> ErrorKind:
+def classify(
+    status: int,
+    transport_error: str | None = None,
+    *,
+    credentialed: bool = True,
+) -> ErrorKind:
     """The kind of failure an HTTP outcome represents.
 
     ``status`` is 0 when the exchange never completed, in which case
     ``transport_error`` holds the exception text. A transport failure always wins
-    over the status, and an unmapped status below 500 is ``transport`` as well,
-    the exchange produced no usable response either way.
+    over the status. Completed unmapped 4xx responses are permanent ``request``
+    failures. A 401/403 is ``auth`` only for a credentialed endpoint.
     """
     if transport_error is not None or status == 0:
         return "transport"
+    if status in {401, 403} and not credentialed:
+        return "request"
     if kind := _STATUS_KINDS.get(status):
         return kind
     if status >= 500:
         return "server"
+    if 400 <= status < 500:
+        return "request"
     return "transport"
 
 
-def error_for(status: int, transport_error: str | None = None) -> type[AppReviewsError]:
+def error_for(
+    status: int,
+    transport_error: str | None = None,
+    *,
+    credentialed: bool = True,
+) -> type[AppReviewsError]:
     """The exception class for an HTTP outcome.
 
     The raising twin of ``classify``, which returns the same decision as a string.
@@ -82,7 +98,7 @@ def error_for(status: int, transport_error: str | None = None) -> type[AppReview
     ``FetchError(kind="rate_limited")`` on a walk raises ``RateLimitError`` on a
     single request.
     """
-    return _CLASS_FOR[classify(status, transport_error)]
+    return _CLASS_FOR[classify(status, transport_error, credentialed=credentialed)]
 
 
 def fetch_error_from_response(
@@ -91,6 +107,7 @@ def fetch_error_from_response(
     status: int,
     message: str,
     transport_error: str | None = None,
+    credentialed: bool = True,
 ) -> FetchError:
     """Build a classified FetchError from an HTTP outcome.
 
@@ -98,7 +115,7 @@ def fetch_error_from_response(
     failure, a status description otherwise. A transport failure has ``status=0``,
     so describing it by status alone would report a meaningless ``"HTTP 0"``.
     """
-    kind = classify(status, transport_error)
+    kind = classify(status, transport_error, credentialed=credentialed)
     return FetchError(
         country=country,
         message=message,
@@ -132,7 +149,9 @@ def fetch_error_from_exception(
     return FetchError(country=country, message=str(exc), kind=kind, status=exc.status)
 
 
-def raise_for_http_failure(response: HttpResponse, api: str) -> None:
+def raise_for_http_failure(
+    response: HttpResponse, api: str, *, credentialed: bool = True
+) -> None:
     """Raise a classified ``HttpError`` unless the response is usable.
 
     The single-request twin of ``fetch_error_from_response``: same ``classify``
@@ -141,11 +160,15 @@ def raise_for_http_failure(response: HttpResponse, api: str) -> None:
     byte-identical private copy of this before it moved here.
     """
     if response.transport_error is not None:
-        raise error_for(response.status, response.transport_error)(
+        raise error_for(
+            response.status,
+            response.transport_error,
+            credentialed=credentialed,
+        )(
             f"{api} request failed: {response.transport_error}",
             status=response.status or None,
         )
     if not response.ok:
-        raise error_for(response.status)(
+        raise error_for(response.status, credentialed=credentialed)(
             f"HTTP {response.status} from {api}", status=response.status
         )

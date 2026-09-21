@@ -266,7 +266,13 @@ class TestPagination:
 class TestErrorClassification:
     @pytest.mark.parametrize(
         ("status", "kind"),
-        [(429, "rate_limited"), (403, "auth"), (404, "not_found"), (503, "server")],
+        [
+            (429, "rate_limited"),
+            (401, "request"),
+            (403, "request"),
+            (404, "not_found"),
+            (503, "server"),
+        ],
     )
     def test_status_maps_to_kind(self, status, kind):
         page = _serving("", status=status).fetch_page("com.example.app", "us", None)

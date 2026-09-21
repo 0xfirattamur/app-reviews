@@ -11,7 +11,7 @@ class TestRetryConfigValidation:
         assert config.max_retries == 3
         assert config.backoff_factor == 0.5
         assert config.timeout == 30.0
-        assert config.retry_on == [500, 502, 503, 504, 429]
+        assert config.retry_on == (500, 502, 503, 504, 429)
 
     def test_max_retries_zero_is_valid(self):
         config = RetryConfig(max_retries=0)
@@ -35,4 +35,12 @@ class TestRetryConfigValidation:
 
     def test_custom_retry_on_list(self):
         config = RetryConfig(retry_on=[500, 429])
-        assert config.retry_on == [500, 429]
+        assert config.retry_on == (500, 429)
+
+    def test_retry_statuses_are_deeply_immutable(self):
+        supplied = [500, 429]
+        config = RetryConfig(retry_on=supplied)
+
+        supplied.append(503)
+
+        assert config.retry_on == (500, 429)

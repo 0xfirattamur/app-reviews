@@ -22,8 +22,9 @@ ErrorKind = Literal[
     "rate_limited",  # 429
     "auth",  # 401, 403
     "not_found",  # 404
+    "request",  # permanent 4xx request/client error
     "server",  # 5xx
-    "transport",  # connection failure, timeout, unmapped 4xx
+    "transport",  # connection failure or timeout
     "parse",  # malformed response body
 ]
 

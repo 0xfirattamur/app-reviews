@@ -1,6 +1,11 @@
 """Tests for the full fetch: rung 3 of the client ladder."""
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Event, Lock
+
+import pytest
 
 from app_reviews.models.country import Country
 from app_reviews.models.page import PageResult
@@ -40,6 +45,68 @@ class MultiCountryProvider:
         if index >= len(pages):
             return PageResult()
         return pages[index]
+
+
+class BlockingInFlightProvider:
+    """Hold sync requests open so a public fetch's real fan-out is observable."""
+
+    source = "appstore_scraper"
+
+    def __init__(self, expected: int):
+        self.expected = expected
+        self.active = 0
+        self.maximum = 0
+        self.lock = Lock()
+        self.reached = Event()
+        self.exceeded = Event()
+        self.release = Event()
+
+    def fetch_page(self, app_id, country, cursor):
+        with self.lock:
+            self.active += 1
+            self.maximum = max(self.maximum, self.active)
+            if self.active >= self.expected:
+                self.reached.set()
+            if self.active > self.expected:
+                self.exceeded.set()
+        if not self.release.wait(timeout=2):
+            raise AssertionError("fetch did not release blocked provider calls")
+        with self.lock:
+            self.active -= 1
+        return PageResult()
+
+    async def afetch_page(self, app_id, country, cursor):
+        raise AssertionError("sync concurrency test used the async provider path")
+
+
+class AsyncBlockingInFlightProvider:
+    """Async twin of BlockingInFlightProvider."""
+
+    source = "appstore_scraper"
+
+    def __init__(self, expected: int):
+        self.expected = expected
+        self.active = 0
+        self.maximum = 0
+        self.reached = asyncio.Event()
+        self.exceeded = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def fetch_page(self, app_id, country, cursor):
+        raise AssertionError("async concurrency test used the sync provider path")
+
+    async def afetch_page(self, app_id, country, cursor):
+        self.active += 1
+        self.maximum = max(self.maximum, self.active)
+        if self.active >= self.expected:
+            self.reached.set()
+        if self.active > self.expected:
+            self.exceeded.set()
+        try:
+            await asyncio.wait_for(self.release.wait(), timeout=2)
+        finally:
+            self.active -= 1
+        return PageResult()
 
 
 class TestSingleCountry:
@@ -308,10 +375,11 @@ class TestFilters:
 
 
 class TestLimitWithFilters:
-    """FIX: `limit` must not bound the walk when `ratings`/`until` are also
-    requested, because the walk cannot know in advance how many of the first
-    `limit` unfiltered reviews will survive filtering, so bounding at
-    `limit` can return fewer results than exist, including zero."""
+    """Filtered limits count qualifying reviews, never raw rows.
+
+    A newest-first walk may stop after N matches. It must keep paging while the
+    raw rows do not match, and unordered/other-sort walks remain exhaustive.
+    """
 
     def test_until_with_limit_does_not_return_empty_when_matches_exist_later(self):
         # Page 1 alone already has `limit` (4) reviews, none of which
@@ -405,23 +473,346 @@ class TestLimitWithFilters:
 
         assert len(provider.calls) == 1
 
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_ids", "expected_calls"),
+        [
+            ({"ratings": [1]}, ["new-low"], 1),
+            ({"until": NOW - timedelta(hours=12)}, ["new-high"], 1),
+            (
+                {"ratings": [5], "until": NOW - timedelta(hours=12)},
+                ["new-high"],
+                1,
+            ),
+            ({"ratings": [1], "sort": Sort.OLDEST}, ["old-low"], 2),
+            ({"sort": Sort.RATING}, ["new-high"], 2),
+        ],
+    )
+    def test_ordered_fetch_stops_only_when_the_requested_result_is_known(
+        self, kwargs, expected_ids, expected_calls
+    ):
+        provider = FakeProvider(
+            [
+                _page(
+                    [
+                        _review(NOW, "new-low", rating=1),
+                        _review(NOW - timedelta(days=1), "new-high", rating=5),
+                    ],
+                    "1",
+                ),
+                _page([_review(NOW - timedelta(days=2), "old-low", rating=1)], None),
+            ]
+        )
+
+        result = FakeClient(provider).fetch("123", countries=["us"], limit=1, **kwargs)
+
+        assert [review.id for review in result.reviews] == expected_ids
+        assert len(provider.calls) == expected_calls
+        if expected_calls == 1:
+            assert result.outcomes[0].stopped_because == "limit"
+
+    def test_unordered_source_remains_exhaustive_with_a_filter_and_limit(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW - timedelta(days=2), "old", rating=1)], "1"),
+                _page([_review(NOW, "new", rating=1)], None),
+            ],
+            source="googleplay_official",
+        )
+
+        result = FakeClient(provider).fetch("123", ratings=[1], limit=1)
+
+        assert [review.id for review in result.reviews] == ["new"]
+        assert len(provider.calls) == 2
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_ids", "expected_calls"),
+        [
+            ({"ratings": [1]}, ["new-low"], 1),
+            ({"until": NOW - timedelta(hours=12)}, ["new-high"], 1),
+            (
+                {"ratings": [5], "until": NOW - timedelta(hours=12)},
+                ["new-high"],
+                1,
+            ),
+            ({"ratings": [1], "sort": Sort.OLDEST}, ["old-low"], 2),
+            ({"sort": Sort.RATING}, ["new-high"], 2),
+        ],
+    )
+    async def test_async_ordered_fetch_has_the_same_filter_aware_stop(
+        self, kwargs, expected_ids, expected_calls
+    ):
+        provider = FakeProvider(
+            [
+                _page(
+                    [
+                        _review(NOW, "new-low", rating=1),
+                        _review(NOW - timedelta(days=1), "new-high", rating=5),
+                    ],
+                    "1",
+                ),
+                _page([_review(NOW - timedelta(days=2), "old-low", rating=1)], None),
+            ]
+        )
+
+        result = await FakeClient(provider).afetch(
+            "123", countries=["us"], limit=1, **kwargs
+        )
+
+        assert [review.id for review in result.reviews] == expected_ids
+        assert len(provider.calls) == expected_calls
+
+    async def test_async_unordered_source_remains_exhaustive(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW - timedelta(days=2), "old", rating=1)], "1"),
+                _page([_review(NOW, "new", rating=1)], None),
+            ],
+            source="googleplay_official",
+        )
+
+        result = await FakeClient(provider).afetch("123", ratings=[1], limit=1)
+
+        assert [review.id for review in result.reviews] == ["new"]
+        assert len(provider.calls) == 2
+
+    @pytest.mark.parametrize("collision", ["max_pages", "cycle"])
+    def test_satisfied_filtered_limit_outranks_safety_stop(self, collision):
+        if collision == "max_pages":
+            pages = [_page([_review(NOW, "match", rating=1)], "more")]
+            max_pages = 1
+        else:
+            pages = [
+                _page([_review(NOW, "skip", rating=5)], "1"),
+                _page([_review(NOW - timedelta(days=1), "match", rating=1)], "1"),
+            ]
+            max_pages = None
+        provider = FakeProvider(pages)
+
+        result = FakeClient(provider).fetch(
+            "123", ratings=[1], limit=1, max_pages=max_pages
+        )
+
+        assert [review.id for review in result.reviews] == ["match"]
+        assert result.outcomes[0].stopped_because == "limit"
+
+    @pytest.mark.parametrize("collision", ["max_pages", "cycle"])
+    async def test_async_satisfied_filtered_limit_outranks_safety_stop(self, collision):
+        if collision == "max_pages":
+            pages = [_page([_review(NOW, "match", rating=1)], "more")]
+            max_pages = 1
+        else:
+            pages = [
+                _page([_review(NOW, "skip", rating=5)], "1"),
+                _page([_review(NOW - timedelta(days=1), "match", rating=1)], "1"),
+            ]
+            max_pages = None
+        provider = FakeProvider(pages)
+
+        result = await FakeClient(provider).afetch(
+            "123", ratings=[1], limit=1, max_pages=max_pages
+        )
+
+        assert [review.id for review in result.reviews] == ["match"]
+        assert result.outcomes[0].stopped_because == "limit"
+
 
 class TestEmptyCountries:
-    """The resolved fan-out can no longer be empty.
+    """Omission and an explicit empty selection have different meanings.
 
-    It used to be reachable only via a provider whose ``countries()`` returned
-    ``[]``. With the fan-out derived from ``core.paging.is_per_country`` it is
-    either ``[""]`` or ``countries or ["us"]``, never empty, so the
-    ``if not resolved`` guard in ``fetch``/``afetch`` went with it.
+    Omitting ``countries`` selects the provider default. Passing an empty or
+    all-blank collection requests no storefronts and therefore performs no I/O;
+    it must never silently become a US request.
     """
 
-    def test_an_empty_countries_list_falls_back_to_the_default(self):
+    def test_an_empty_countries_list_does_no_io(self):
         provider = FakeProvider([_page([_review(NOW, "a")], None)])
 
         result = FakeClient(provider).fetch("123", countries=[])
 
-        assert [r.id for r in result.reviews] == ["a"]
-        assert [o.country for o in result.outcomes] == ["us"]
+        assert result.reviews == []
+        assert result.outcomes == []
+        assert provider.calls == []
+
+    def test_blank_countries_do_no_io(self):
+        provider = FakeProvider([_page([_review(NOW, "a")], None)])
+
+        result = FakeClient(provider).fetch("123", countries=["", "   "])
+
+        assert result.reviews == []
+        assert provider.calls == []
+
+
+class TestRequestBounds:
+    def test_default_concurrency_is_capped_at_eight(self):
+        client = FakeClient(FakeProvider([]))
+
+        assert client._workers([str(i) for i in range(155)], None) == 8
+
+    def test_explicit_concurrency_override_is_honoured(self):
+        client = FakeClient(FakeProvider([]))
+
+        assert client._workers([str(i) for i in range(20)], 12) == 12
+
+    @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
+    def test_fetch_enforces_real_cross_country_concurrency(self, concurrency, expected):
+        provider = BlockingInFlightProvider(expected)
+        client = FakeClient(provider)
+
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            future = caller.submit(
+                client.fetch,
+                "123",
+                countries=Country.ALL,
+                concurrency=concurrency,
+            )
+            try:
+                assert provider.reached.wait(timeout=2)
+                assert not provider.exceeded.wait(timeout=0.1)
+            finally:
+                provider.release.set()
+            result = future.result(timeout=2)
+
+        assert provider.maximum == expected
+        assert len(result.outcomes) == len(Country.ALL)
+
+    @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
+    async def test_afetch_enforces_real_cross_country_concurrency(
+        self, concurrency, expected
+    ):
+        provider = AsyncBlockingInFlightProvider(expected)
+        task = asyncio.create_task(
+            FakeClient(provider).afetch(
+                "123", countries=Country.ALL, concurrency=concurrency
+            )
+        )
+        try:
+            await asyncio.wait_for(provider.reached.wait(), timeout=2)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(provider.exceeded.wait(), timeout=0.1)
+        finally:
+            provider.release.set()
+        result = await asyncio.wait_for(task, timeout=2)
+
+        assert provider.maximum == expected
+        assert len(result.outcomes) == len(Country.ALL)
+
+    def test_filtered_fetch_stops_at_public_max_pages_budget(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "r5-a", rating=5)], "1"),
+                _page([_review(NOW, "r5-b", rating=5)], "2"),
+                _page([_review(NOW, "r1", rating=1)], None),
+            ]
+        )
+
+        result = FakeClient(provider).fetch(
+            "123", countries=["us"], ratings=[1], limit=1, max_pages=2
+        )
+
+        assert result.reviews == []
+        assert len(provider.calls) == 2
+        assert result.outcomes[0].stopped_because == "max_pages"
+
+    async def test_async_filtered_fetch_has_the_same_max_pages_budget(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "r5-a", rating=5)], "1"),
+                _page([_review(NOW, "r5-b", rating=5)], "2"),
+                _page([_review(NOW, "r1", rating=1)], None),
+            ]
+        )
+
+        result = await FakeClient(provider).afetch(
+            "123", countries=["us"], ratings=[1], limit=1, max_pages=2
+        )
+
+        assert result.reviews == []
+        assert len(provider.calls) == 2
+        assert result.outcomes[0].stopped_because == "max_pages"
+
+    def test_zero_limit_does_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        result = FakeClient(provider).fetch("123", limit=0)
+
+        assert result.reviews == []
+        assert result.outcomes == []
+        assert provider.calls == []
+
+    def test_negative_limit_is_rejected_before_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        import pytest
+
+        with pytest.raises(ValueError, match="limit"):
+            FakeClient(provider).fetch("123", limit=-1)
+        assert provider.calls == []
+
+    async def test_async_zero_limit_does_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        result = await FakeClient(provider).afetch("123", limit=0)
+
+        assert result.reviews == []
+        assert result.outcomes == []
+        assert provider.calls == []
+
+    async def test_async_empty_countries_do_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        result = await FakeClient(provider).afetch("123", countries=[])
+
+        assert result.reviews == []
+        assert result.outcomes == []
+        assert provider.calls == []
+
+    @pytest.mark.parametrize("concurrency", [0, -1])
+    def test_invalid_concurrency_is_rejected_before_provider_io(self, concurrency):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+        client = FakeClient(provider)
+        client._ensure_provider = pytest.fail
+
+        with pytest.raises(ValueError, match="concurrency"):
+            client.fetch("123", concurrency=concurrency)
+        assert provider.calls == []
+
+    @pytest.mark.parametrize("concurrency", [0, -1])
+    async def test_async_invalid_concurrency_is_rejected_before_provider_io(
+        self, concurrency
+    ):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+        client = FakeClient(provider)
+
+        async def fail_provider_build():
+            pytest.fail("invalid concurrency reached provider construction")
+
+        client._aensure_provider = fail_provider_build
+
+        with pytest.raises(ValueError, match="concurrency"):
+            await client.afetch("123", concurrency=concurrency)
+        assert provider.calls == []
+
+    def test_negative_max_pages_is_rejected_before_provider_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+        client = FakeClient(provider)
+        client._ensure_provider = pytest.fail
+
+        with pytest.raises(ValueError, match="max_pages"):
+            client.fetch("123", max_pages=-1)
+        assert provider.calls == []
+
+    async def test_async_negative_max_pages_is_rejected_before_provider_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+        client = FakeClient(provider)
+
+        async def fail_provider_build():
+            pytest.fail("invalid max_pages reached provider construction")
+
+        client._aensure_provider = fail_provider_build
+
+        with pytest.raises(ValueError, match="max_pages"):
+            await client.afetch("123", max_pages=-1)
+        assert provider.calls == []
 
 
 class TestCountryNormalisation:

@@ -148,6 +148,7 @@ class GooglePlayScraperProvider:
                     status=response.status,
                     message=response.transport_error,
                     transport_error=response.transport_error,
+                    credentialed=False,
                 )
             )
         if not response.ok:
@@ -156,6 +157,7 @@ class GooglePlayScraperProvider:
                     country=None,
                     status=response.status,
                     message=f"HTTP {response.status} from the Google Play web endpoint",
+                    credentialed=False,
                 )
             )
 

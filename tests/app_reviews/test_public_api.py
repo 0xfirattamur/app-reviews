@@ -22,6 +22,7 @@ EXPECTED = {
     "NotFoundError",
     "ParseError",
     "RateLimitError",
+    "RequestError",
     "PageResult",
     "RetryConfig",
     "Review",
