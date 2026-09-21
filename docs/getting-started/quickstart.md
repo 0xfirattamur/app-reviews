@@ -86,11 +86,11 @@ with AppStoreReviews(
 
 !!! note "`countries=` only applies to the public App Store RSS feed"
 
-    It is the one per-country source. App Store Connect and both Google Play
-    sources are global APIs (one request covers every territory), so a
-    non-empty country list there collapses to one global request. Reviews still
-    report their own `country` where the source knows it. An explicitly empty
-    country collection makes no request on any source.
+    It is the one per-country review source. App Store Connect is global and may
+    report a territory on each review. Google Play review clients reject
+    `country` and `countries` because neither Play source has a review-country
+    dimension. Google Play search and metadata still accept a storefront
+    `country` for presentation, availability, and price.
 
 ## Filter Results
 

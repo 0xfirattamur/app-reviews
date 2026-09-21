@@ -78,6 +78,10 @@ The Developer API may carry a legacy title inside review text and may report
 `reviewerLanguage`; language is not location. Storefront parameters can affect
 presentation and pricing but do not partition the review corpus.
 
+Google Play review clients reject `country` and `countries` before making a
+request. Google Play search and metadata still accept `country` to select the
+storefront used for presentation, availability, and price.
+
 ## How do I fetch many Apple storefronts without running out of memory?
 
 Use `iter_reviews()` to process reviews as pages arrive and set `max_pages`; the

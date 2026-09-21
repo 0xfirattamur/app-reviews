@@ -107,6 +107,51 @@ def test_v1_release_notes_and_changelog_exist() -> None:
     assert "ReviewProvider" in notes
 
 
+def test_public_docs_do_not_claim_custom_provider_client_integration() -> None:
+    public = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "CHANGELOG.md",
+            ROOT / ".github/release-notes/v1.0.0.md",
+        )
+    ).lower()
+    assert "provider-extension" not in public
+    assert "provider extensions" not in public
+    assert "custom providers must" not in public
+    assert "plug custom" not in public
+
+
+def test_google_play_review_docs_reject_country_but_search_keeps_storefront() -> None:
+    public = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [ROOT / "README.md", *(ROOT / "docs").rglob("*.md")]
+    )
+    assert "Google Play review clients reject `country` and `countries`" in public
+    assert "GooglePlayReviews().fetch" not in public
+    assert "GooglePlayReviews().afetch" not in public
+    assert "GooglePlayReviews().iter" not in public
+    assert "GooglePlayReviews().aiter" not in public
+    assert "GooglePlayReviews().fetch(app.app_id, countries=" not in public
+    assert "Google Play search and metadata" in public
+    assert "storefront" in public
+
+
+def test_timestamp_docs_match_preserved_aware_offsets() -> None:
+    public = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "CHANGELOG.md",
+            ROOT / ".github/release-notes/v1.0.0.md",
+            ROOT / "docs/reference/models.md",
+        )
+    )
+    assert "timestamps are normalized to timezone-aware UTC" not in public
+    assert "Naive timestamps get UTC attached" in public
+    assert "aware offsets are preserved" in public
+
+
 def test_every_public_docs_page_has_a_description() -> None:
     missing: list[str] = []
     for path in (ROOT / "docs").rglob("*.md"):

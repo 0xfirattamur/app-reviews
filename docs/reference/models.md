@@ -358,7 +358,8 @@ Returned by `search()` and `lookup()` on the search clients.
 ```python
 from app_reviews import AppStoreSearch
 
-metadata = AppStoreSearch().lookup("123456789")   # AppMetadata | None
+with AppStoreSearch() as client:
+    metadata = client.lookup("123456789")   # AppMetadata | None
 ```
 
 | Field | Type | Description |

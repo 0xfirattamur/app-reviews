@@ -71,8 +71,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install locked development dependencies
-        run: uv sync --locked --group dev
+      - name: Install locked release dependencies
+        run: uv sync --locked --group dev --group release
       - name: Lint
         run: make lint
       - name: Type check
@@ -80,102 +80,17 @@ jobs:
       - name: Build documentation
         run: make docs
       - name: Build distributions once
-        run: uv build --out-dir dist
+        run: uv build --no-build-isolation --out-dir dist
       - name: Check wheel structure
-        run: |
-          uvx --from check-wheel-contents==0.6.3 \
-            check-wheel-contents dist/*.whl
+        run: uv run --locked --group release check-wheel-contents dist/*.whl
+      - name: Rebuild wheel from sdist
+        run: uv run --locked --group release python scripts/rebuild_wheel_from_sdist.py --dist-dir dist --output-dir dist-from-sdist
       - name: Inspect distribution contents
-        run: |
-          python - <<'PY'
-          import tarfile
-          import tomllib
-          import zipfile
-          from email import policy
-          from email.parser import BytesParser
-          from pathlib import Path
-
-          wheels = list(Path("dist").glob("*.whl"))
-          sdists = list(Path("dist").glob("*.tar.gz"))
-          if len(wheels) != 1 or len(sdists) != 1:
-              raise SystemExit(f"Expected one wheel and one sdist: {wheels=}, {sdists=}")
-          with zipfile.ZipFile(wheels[0]) as archive:
-              wheel_names = archive.namelist()
-              metadata_names = [
-                  name for name in wheel_names if name.endswith(".dist-info/METADATA")
-              ]
-              if len(metadata_names) != 1:
-                  raise SystemExit(f"Expected one wheel METADATA file: {metadata_names}")
-              wheel_metadata = BytesParser(policy=policy.default).parsebytes(
-                  archive.read(metadata_names[0])
-              )
-          with tarfile.open(sdists[0], "r:gz") as archive:
-              sdist_names = archive.getnames()
-              pkg_info_names = [
-                  name for name in sdist_names if name.endswith("/PKG-INFO")
-              ]
-              if len(pkg_info_names) != 1:
-                  raise SystemExit(f"Expected one sdist PKG-INFO file: {pkg_info_names}")
-              pkg_info = archive.extractfile(pkg_info_names[0])
-              if pkg_info is None:
-                  raise SystemExit("Could not read sdist PKG-INFO")
-              sdist_metadata = BytesParser(policy=policy.default).parsebytes(
-                  pkg_info.read()
-              )
-          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
-          if wheel_metadata["Name"] != project["name"]:
-              raise SystemExit(f'Wheel name mismatch: {wheel_metadata["Name"]}')
-          if wheel_metadata["Version"] != project["version"]:
-              raise SystemExit(f'Wheel version mismatch: {wheel_metadata["Version"]}')
-          if wheel_metadata["Metadata-Version"] is None:
-              raise SystemExit("Wheel has no Core Metadata version")
-          if sdist_metadata["Name"] != project["name"]:
-              raise SystemExit(f'Sdist name mismatch: {sdist_metadata["Name"]}')
-          if sdist_metadata["Version"] != project["version"]:
-              raise SystemExit(f'Sdist version mismatch: {sdist_metadata["Version"]}')
-          if sdist_metadata["Metadata-Version"] is None:
-              raise SystemExit("Sdist has no Core Metadata version")
-          if not any(name.endswith("/app_reviews/__init__.py") for name in sdist_names):
-              raise SystemExit("sdist is missing app_reviews sources")
-          if "app_reviews/__init__.py" not in wheel_names:
-              raise SystemExit("wheel is missing app_reviews sources")
-          forbidden = ("/.git/", "/.venv/", "/site/", "/dist/", "/.coverage")
-          leaked = [name for name in sdist_names if any(part in f"/{name}" for part in forbidden)]
-          if leaked:
-              raise SystemExit(f"Generated workspace files leaked into sdist: {leaked[:10]}")
-          PY
-      - name: Create clean wheel smoke-test environment
+        run: uv run --locked --group release python scripts/verify_artifacts.py --dist-dir dist --project pyproject.toml --rebuilt-wheel-dir dist-from-sdist
+      - name: Smoke test installed wheel
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          uv venv --python 3.13 .release-venv
-          uv export --locked --no-dev --no-emit-project \
-            --output-file release-requirements.txt
-          uv pip install --python .release-venv/bin/python \
-            --requirement release-requirements.txt
-          uv pip install --python .release-venv/bin/python --no-deps dist/*.whl
-          .release-venv/bin/python - <<'PY'
-          import os
-          from datetime import UTC, datetime
-
-          import app_reviews
-          from app_reviews import Review
-
-          assert app_reviews.__version__ == os.environ["RELEASE_TAG"].removeprefix("v")
-          review = Review(
-              store="appstore",
-              app_id="offline-smoke",
-              country="us",
-              rating=5,
-              title="Installed wheel",
-              body="No network required",
-              author_name="release-workflow",
-              source="appstore_scraper",
-              id="offline-smoke-review",
-              created_at=datetime(2026, 1, 1, tzinfo=UTC),
-          )
-          assert review.to_dict()["store"] == "appstore"
-          PY
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: uv run --locked --group release python scripts/smoke_test_wheel.py --dist-dir dist --expected-version "$RELEASE_VERSION"
       - name: Stage verified release notes
         env:
           RELEASE_TAG: ${{ github.ref_name }}

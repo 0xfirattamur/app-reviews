@@ -111,31 +111,31 @@ auth = AppStoreAuth(
 
 ```python
 # No auth (public RSS feed)
-client = AppStoreReviews()
-result = client.fetch("123456789")
-
-# Multiple countries
 from app_reviews import Country
-result = client.fetch("123456789", countries=[Country.US, Country.GB, Country.DE])
+
+with AppStoreReviews() as client:
+    result = client.fetch("123456789")
+    multi_country = client.fetch(
+        "123456789", countries=[Country.US, Country.GB, Country.DE]
+    )
 
 # With auth
-client = AppStoreReviews(
+with AppStoreReviews(
     auth=AppStoreAuth(
         key_id="ABC123DEF4",
         issuer_id="12345678-1234-1234-1234-123456789012",
         key_path="/path/to/AuthKey.p8",
     )
-)
-result = client.fetch("123456789", countries=[Country.US, Country.GB])
-
-# Reuse client
-spotify = client.fetch("324684580", countries=[Country.US, Country.GB])
-instagram = client.fetch("389801252", countries=[Country.US])
-twitter = client.fetch("333903271", ratings=[1, 2])
+) as client:
+    # App Store Connect is global; reuse one client for account-owned apps.
+    spotify = client.fetch("324684580", limit=100)
+    instagram = client.fetch("389801252", limit=100)
+    twitter = client.fetch("333903271", ratings=[1, 2])
 
 # Filter by date and rating
 from datetime import date
-result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
+with AppStoreReviews() as client:
+    result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
 ```
 
 ---
@@ -161,7 +161,12 @@ Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play 
 
 ### fetch()
 
-Same parameters as `AppStoreReviews.fetch()`, except `app_id` is a package name (e.g. `"com.example.app"`).
+The filtering, sorting, limit, and request-budget parameters match
+`AppStoreReviews.fetch()`, and `app_id` is a package name (for example,
+`"com.example.app"`). Google Play review clients reject `country` and
+`countries` before network I/O: the public and official sources expose one
+global review corpus and no reviewer-country field. Google Play search and
+metadata continue to accept `country` as a storefront selector.
 
 ### GooglePlayAuth
 
@@ -175,15 +180,15 @@ auth = GooglePlayAuth(
 
 ```python
 # No auth
-client = GooglePlayReviews()
-result = client.fetch("com.example.app")
+with GooglePlayReviews() as client:
+    result = client.fetch("com.example.app")
 
 # With auth
 from app_reviews import Sort
-client = GooglePlayReviews(
+with GooglePlayReviews(
     auth=GooglePlayAuth(service_account_path="/path/to/service-account.json")
-)
-result = client.fetch("com.example.app", countries=[Country.US], sort=Sort.NEWEST, limit=100)
+) as client:
+    result = client.fetch("com.example.app", sort=Sort.NEWEST, limit=100)
 ```
 
 ---
@@ -352,14 +357,15 @@ from a `FetchError`:
 ```python
 from app_reviews import AppStoreSearch, AuthError, HttpError, RateLimitError
 
-try:
-    apps = AppStoreSearch().search("fitness tracker")
-except RateLimitError as err:
-    back_off(err.status)
-except AuthError:
-    alert_a_human()
-except HttpError as err:
-    log(type(err).__name__, err.status)
+with AppStoreSearch() as client:
+    try:
+        apps = client.search("fitness tracker")
+    except RateLimitError as err:
+        back_off(err.status)
+    except AuthError:
+        alert_a_human()
+    except HttpError as err:
+        log(type(err).__name__, err.status)
 ```
 
 The exception class carries the classification, so there is no `kind` attribute to
@@ -536,20 +542,24 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 from app_reviews import AppStoreSearch, GooglePlaySearch, Country
 
 # Search App Store
-results = AppStoreSearch().search("weather", country=Country.GB, limit=5)
-for app in results:
-    print(f"{app.name} by {app.developer} ({app.rating}*)")
+with AppStoreSearch() as client:
+    results = client.search("weather", country=Country.GB, limit=5)
+    for app in results:
+        print(f"{app.name} by {app.developer} ({app.rating}*)")
 
 # Search Google Play
-results = GooglePlaySearch().search("weather", country=Country.US, limit=5)
-for app in results:
-    print(f"{app.name}: {app.icon_url}")
+with GooglePlaySearch() as client:
+    results = client.search("weather", country=Country.US, limit=5)
+    for app in results:
+        print(f"{app.name}: {app.icon_url}")
 
 # Look up a specific app, then fetch its reviews
 from app_reviews import GooglePlayReviews
-app = GooglePlaySearch().lookup("com.whatsapp")
+with GooglePlaySearch() as search:
+    app = search.lookup("com.whatsapp")
 if app:
-    reviews = GooglePlayReviews().fetch(app.app_id, countries=[Country.US])
+    with GooglePlayReviews() as reviews_client:
+        reviews = reviews_client.fetch(app.app_id)
     print(f"{app.name}: {len(reviews)} reviews")
 ```
 
@@ -562,9 +572,10 @@ Use the search client for the store you are asking about:
 ```python
 from app_reviews import AppStoreSearch, GooglePlaySearch, Country
 
-meta = AppStoreSearch().lookup("324684580")                  # None if absent
-meta = GooglePlaySearch().lookup("com.whatsapp")
-meta = AppStoreSearch().lookup("324684580", country=Country.DE)
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    meta = apple.lookup("324684580")                         # None if absent
+    meta = play.lookup("com.whatsapp")
+    german_meta = apple.lookup("324684580", country=Country.DE)
 ```
 
 `lookup()` returns `AppMetadata | None`, and `alookup()` is the async twin.

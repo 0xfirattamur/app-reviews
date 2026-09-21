@@ -92,6 +92,10 @@ Google Play reviews form one global corpus. A review response does not include a
 reviewer country, so `Review.country` is `None`; a store presentation country is
 not a review filter.
 
+Google Play review clients reject `country` and `countries` before network I/O.
+Google Play search and metadata still accept `country` to select the storefront
+used for availability, presentation, and price.
+
 ```python
 from app_reviews import GooglePlayReviews
 

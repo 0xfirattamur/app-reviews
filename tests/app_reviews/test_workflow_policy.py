@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -171,15 +172,17 @@ def test_release_validation_and_verification_steps_are_ordered_structurally() ->
     ordered_names = [step.get("name") for step in steps]
 
     assert verify["permissions"] == {"contents": "read"}
-    assert named["Install locked development dependencies"]["run"] == (
-        "uv sync --locked --group dev"
+    assert named["Install locked release dependencies"]["run"] == (
+        "uv sync --locked --group dev --group release"
     )
     for command in ("make lint", "make typecheck", "make docs"):
         assert command in [step.get("run") for step in steps]
-    assert named["Build distributions once"]["run"] == "uv build --out-dir dist"
+    assert named["Build distributions once"]["run"] == (
+        "uv build --no-build-isolation --out-dir dist"
+    )
     build_index = ordered_names.index("Build distributions once")
     for prerequisite in (
-        "Install locked development dependencies",
+        "Install locked release dependencies",
         "Lint",
         "Type check",
         "Build documentation",
@@ -194,29 +197,18 @@ def test_release_checks_both_distribution_metadata_and_clean_install() -> None:
     release, _ = _workflow("release.yml")
     jobs = release["jobs"]
     verify_steps = _named_steps(jobs["verify"])
-    inspect = verify_steps["Inspect distribution contents"]["run"]
-    smoke = verify_steps["Create clean wheel smoke-test environment"]["run"]
-
-    assert (
-        "check-wheel-contents dist/*.whl"
-        in (verify_steps["Check wheel structure"]["run"])
+    assert verify_steps["Check wheel structure"]["run"] == (
+        "uv run --locked --group release check-wheel-contents dist/*.whl"
     )
-    for required in (
-        ".dist-info/METADATA",
-        "PKG-INFO",
-        'wheel_metadata["Name"]',
-        'wheel_metadata["Version"]',
-        'wheel_metadata["Metadata-Version"]',
-        'sdist_metadata["Name"]',
-        'sdist_metadata["Version"]',
-        'sdist_metadata["Metadata-Version"]',
-    ):
-        assert required in inspect
-    assert "--no-deps dist/*.whl" in smoke
-    version_check = (
-        'app_reviews.__version__ == os.environ["RELEASE_TAG"].removeprefix("v")'
+    assert verify_steps["Inspect distribution contents"]["run"] == (
+        "uv run --locked --group release python scripts/verify_artifacts.py "
+        "--dist-dir dist --project pyproject.toml "
+        "--rebuilt-wheel-dir dist-from-sdist"
     )
-    assert version_check in smoke
+    assert verify_steps["Smoke test installed wheel"]["run"] == (
+        "uv run --locked --group release python scripts/smoke_test_wheel.py "
+        '--dist-dir dist --expected-version "$RELEASE_VERSION"'
+    )
     build_count = sum(
         "uv build" in str(step.get("run", "")) for step in _steps(jobs["verify"])
     )
@@ -226,6 +218,42 @@ def test_release_checks_both_distribution_metadata_and_clean_install() -> None:
             "uv build" not in str(step.get("run", ""))
             for step in _steps(jobs[job_name])
         )
+
+
+def test_release_toolchain_is_exactly_locked() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    release = pyproject["dependency-groups"]["release"]
+
+    assert len(release) == 2
+    assert all(
+        re.fullmatch(r"[a-z0-9-]+==\d+(?:\.\d+)+(?:\.post\d+)?", item)
+        for item in release
+    )
+    assert any(item.startswith("hatchling==") for item in release)
+    assert any(item.startswith("check-wheel-contents==") for item in release)
+
+
+def test_release_workflow_rebuilds_wheel_from_sdist_without_isolation() -> None:
+    release, _ = _workflow("release.yml")
+    named = _named_steps(release["jobs"]["verify"])
+    rebuild = named["Rebuild wheel from sdist"]["run"]
+
+    assert "scripts/rebuild_wheel_from_sdist.py" in rebuild
+    assert "--no-build-isolation" not in rebuild  # enforced inside the tested script
+    assert "dist-from-sdist" in rebuild
+
+
+def test_release_scripts_are_checked_in_and_executable() -> None:
+    for relative in (
+        "scripts/verify_artifacts.py",
+        "scripts/rebuild_wheel_from_sdist.py",
+        "scripts/smoke_test_wheel.py",
+        "scripts/prepare_release.py",
+        "scripts/release.sh",
+    ):
+        path = ROOT / relative
+        assert path.is_file(), relative
+        assert path.stat().st_mode & 0o111, relative
 
 
 def test_release_publication_permissions_and_dependency_order_are_exact() -> None:

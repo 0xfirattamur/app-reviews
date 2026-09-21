@@ -217,8 +217,9 @@ The search clients fetch app info without fetching reviews.
 ```python
 from app_reviews import AppStoreSearch, GooglePlaySearch
 
-metadata = AppStoreSearch().lookup("123456789")
-metadata = GooglePlaySearch().lookup("com.example.app")
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    apple_metadata = apple.lookup("123456789")
+    play_metadata = play.lookup("com.example.app")
 ```
 
 - **Apple:** iTunes Lookup API (`https://itunes.apple.com/lookup?id={app_id}`),

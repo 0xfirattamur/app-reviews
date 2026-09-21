@@ -22,13 +22,14 @@ Which source you get is decided by whether you pass `auth=`:
 | `GooglePlayReviews()` | `googleplay_scraper` |
 | `GooglePlayReviews(auth=...)` | `googleplay_official` |
 
-`client.source` tells you at runtime, and `client.resolve_countries([...])`
-answers the country question directly: it returns `[""]` for a global source.
+`client.source` tells you at runtime. Country handling is part of each public
+method's contract: Apple RSS accepts storefronts, App Store Connect is global,
+and Google Play review clients reject country arguments.
 
 | | `appstore_scraper` | `appstore_official` | `googleplay_scraper` | `googleplay_official` |
 |---|---|---|---|---|
 | Credentials | none | Connect `.p8` | none | service account |
-| Countries | **per storefront** | global | global | global |
+| Countries | **per storefront** | global | unsupported (rejected) | unsupported (rejected) |
 | Page order | newest-first | newest-first | newest-first | **not guaranteed** |
 | History | unbounded | unbounded | unbounded | **last 7 days** |
 | Ceiling | **~500 per storefront** | unbounded | unbounded | unbounded |
@@ -46,9 +47,15 @@ Only `appstore_scraper` has a country dimension. Its feed URL is per storefront
 storefront's own reviews, and fetching `us` and `gb` gets you two different
 review sets.
 
-The other three are global APIs: one request covers every territory, so a
-country fan-out would repeat the same request N times for identical data.
-`countries=` is collapsed to a single call there, and logs a warning saying so.
+App Store Connect is global: one request covers every territory, and reviews
+may carry their own territory. Its high-level client resolves a requested
+storefront fan-out to one global walk.
+
+Google Play review clients reject `country` and `countries` before network I/O.
+Neither the public scraper nor the official Developer API exposes a review
+country dimension, so silently accepting a storefront would suggest a filter
+that does not exist. Google Play search and metadata still accept `country` to
+select the storefront used for presentation, availability, and price.
 
 `googleplay_scraper` looks like it should be per-country (the batchexecute
 request does take `gl` and `hl`), and it is easy to assume varying them

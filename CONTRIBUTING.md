@@ -40,6 +40,25 @@ large, open an issue first so the interface can be discussed. Small fixes can go
 straight to a PR. Never include store credentials or personal review data in a
 fixture or report.
 
+## Releases
+
+Releases are prepared on an exact `release/vX.Y.Z` branch and reviewed through
+a pull request to `main`:
+
+```bash
+git switch develop-or-another-reviewed-base
+./scripts/release.sh --create X.Y.Z
+# Finish release notes and changelog, then run:
+make all
+```
+
+The preparation script refuses to run on `main` or a dirty tree. It updates the
+project, lockfile, citation, release-note template, and changelog, but never
+commits, tags, pushes, merges, or publishes. Commit the prepared changes on the
+release branch and open a PR. Only after that PR is reviewed and merged to
+`main` should a maintainer create and push `vX.Y.Z`; the tag workflow verifies
+the version, ancestry, tests, archives, and wheel before publishing.
+
 ## Security
 
 Please don't file public issues for vulnerabilities. See the

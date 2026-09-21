@@ -14,14 +14,17 @@ The first stable API release.
   retryability, stop reasons, skipped-record counts, and optional raw payloads.
 - Explicit `max_pages` request budgets across buffered and streaming review
   fetches.
-- Context management and public provider-extension protocols for direct users.
+- Context management plus public protocol and transport types for typing,
+  lower-level use, and direct built-in provider integration. Custom providers
+  cannot be injected into the high-level clients or paging engine in v1.
 - Root exports for `HttpResponse`, `ReviewProvider`, `TokenSource`, and the new
   non-retryable `RequestError` classification.
 - Reviewer language and legacy-title mapping for Google Play's official API.
 
 ### Changed
 
-- Review IDs are required and timestamps are normalized to timezone-aware UTC.
+- Review IDs are required. Naive timestamps get UTC attached; already-aware
+  offsets are preserved.
 - Date-only `until` filters include the complete UTC day.
 - The default multi-storefront concurrency is capped at eight.
 - Negative limits raise; zero limits and explicit empty country selections make
