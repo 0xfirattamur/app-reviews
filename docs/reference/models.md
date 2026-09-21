@@ -298,7 +298,10 @@ from app_reviews import Country
 | `Country.MIDDLE_EAST` | Middle East and North Africa. |
 | `Country.ENGLISH_SPEAKING` | English-speaking countries. |
 
-Plain strings also work: `countries=["us", "gb"]`.
+Plain strings also work for Apple review storefronts:
+`countries=["us", "gb"]`. An explicit empty or all-blank `countries`
+collection makes no requests; Google Play review clients reject nonblank
+country selections because their review corpus is global.
 
 ---
 

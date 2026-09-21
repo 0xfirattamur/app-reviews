@@ -27,8 +27,10 @@ The first stable API release.
   offsets are preserved.
 - Date-only `until` filters include the complete UTC day.
 - The default multi-storefront concurrency is capped at eight.
-- Negative limits raise; zero limits and explicit empty country selections make
-  no requests.
+- Negative limits raise; zero limits and explicit empty or all-blank country
+  collections make no requests.
+- Google Play rejects any nonblank review-country selection before network I/O;
+  its search and metadata storefront selector remains supported.
 - Permanent HTTP client errors are non-retryable and RSS access blocks receive a
   source-appropriate classification.
 - Google Play prices retain the storefront's formatted currency.

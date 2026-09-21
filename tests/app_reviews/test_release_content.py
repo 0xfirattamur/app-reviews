@@ -127,7 +127,15 @@ def test_google_play_review_docs_reject_country_but_search_keeps_storefront() ->
         path.read_text(encoding="utf-8")
         for path in [ROOT / "README.md", *(ROOT / "docs").rglob("*.md")]
     )
-    assert "Google Play review clients reject `country` and `countries`" in public
+    normalized_public = " ".join(public.split())
+    assert (
+        "An explicit empty or all-blank `countries` collection is a no-op and "
+        "makes no requests" in normalized_public
+    )
+    assert (
+        "Google Play review clients reject any nonblank `country` or `countries` "
+        "selection before network I/O" in normalized_public
+    )
     assert "GooglePlayReviews().fetch" not in public
     assert "GooglePlayReviews().afetch" not in public
     assert "GooglePlayReviews().iter" not in public
@@ -135,6 +143,14 @@ def test_google_play_review_docs_reject_country_but_search_keeps_storefront() ->
     assert "GooglePlayReviews().fetch(app.app_id, countries=" not in public
     assert "Google Play search and metadata" in public
     assert "storefront" in public
+
+    for path in (
+        ROOT / "CHANGELOG.md",
+        ROOT / ".github/release-notes/v1.0.0.md",
+    ):
+        release_text = path.read_text(encoding="utf-8")
+        assert "empty or all-blank" in release_text
+        assert "nonblank" in release_text
 
 
 def test_timestamp_docs_match_preserved_aware_offsets() -> None:

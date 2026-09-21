@@ -51,11 +51,13 @@ App Store Connect is global: one request covers every territory, and reviews
 may carry their own territory. Its high-level client resolves a requested
 storefront fan-out to one global walk.
 
-Google Play review clients reject `country` and `countries` before network I/O.
-Neither the public scraper nor the official Developer API exposes a review
-country dimension, so silently accepting a storefront would suggest a filter
-that does not exist. Google Play search and metadata still accept `country` to
-select the storefront used for presentation, availability, and price.
+An explicit empty or all-blank `countries` collection is a no-op and makes no
+requests on every review client. Otherwise, Google Play review clients reject
+any nonblank `country` or `countries` selection before network I/O. Neither the
+public scraper nor the official Developer API exposes a review-country
+dimension, so silently accepting a storefront would suggest a filter that does
+not exist. Google Play search and metadata still accept `country` to select the
+storefront used for presentation, availability, and price.
 
 `googleplay_scraper` looks like it should be per-country (the batchexecute
 request does take `gl` and `hl`), and it is easy to assume varying them

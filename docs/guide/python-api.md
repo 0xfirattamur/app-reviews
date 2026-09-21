@@ -163,10 +163,12 @@ Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play 
 
 The filtering, sorting, limit, and request-budget parameters match
 `AppStoreReviews.fetch()`, and `app_id` is a package name (for example,
-`"com.example.app"`). Google Play review clients reject `country` and
-`countries` before network I/O: the public and official sources expose one
-global review corpus and no reviewer-country field. Google Play search and
-metadata continue to accept `country` as a storefront selector.
+`"com.example.app"`). An explicit empty or all-blank `countries` collection is
+a no-op and makes no requests on every review client. Otherwise, Google Play
+review clients reject any nonblank `country` or `countries` selection before
+network I/O: the public and official sources expose one global review corpus
+and no reviewer-country field. Google Play search and metadata continue to
+accept `country` as a storefront selector.
 
 ### GooglePlayAuth
 
@@ -219,7 +221,9 @@ Country.DE   # "de"
 Each group is a `frozenset[Country]` and can be passed straight to `countries=`,
 which takes any collection of `Country` or `str`. Plain strings work too:
 `countries=["us", "gb"]`. Entries are normalised and deduplicated, so `"US"`,
-`"us"` and `"USA"` name one storefront and are walked once.
+`"us"` and `"USA"` name one storefront and are walked once. These selections
+apply to Apple review storefronts; Google Play review clients reject nonblank
+country selections because their review corpus is global.
 
 ---
 
