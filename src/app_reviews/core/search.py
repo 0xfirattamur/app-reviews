@@ -147,7 +147,7 @@ def scraped_number(value: Any, default: float) -> float:
         return default
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return parsed if isfinite(parsed) else default
 

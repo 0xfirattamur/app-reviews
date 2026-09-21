@@ -161,3 +161,6 @@ class TestScrapedNumber:
     )
     def test_non_finite_values_fall_back_to_the_default(self, value):
         assert scraped_number(value, 0.0) == 0.0
+
+    def test_an_integer_too_large_for_a_float_falls_back_to_the_default(self):
+        assert scraped_number(10**400, 7.0) == 7.0

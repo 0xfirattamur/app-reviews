@@ -157,6 +157,18 @@ class TestSearch:
         assert apps[0].rating == 0.0
         assert apps[0].rating_count == 0
 
+    def test_huge_metadata_numbers_fall_back_without_aborting_search(self):
+        result = _itunes_result()
+        result["averageUserRating"] = 10**400
+        result["userRatingCount"] = 10**400
+
+        [app] = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
     @pytest.mark.parametrize(
         ("rating", "rating_count"),
         [(-0.1, 10), (5.1, 10), (True, 10), (4.5, -1), (4.5, 1.5), (4.5, True)],

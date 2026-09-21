@@ -156,13 +156,43 @@ class TestGooglePlayReviews:
             with pytest.raises(ValueError, match="no country dimension"):
                 list(client.iter_pages("com.example", country="tr"))
             with pytest.raises(ValueError, match="no country dimension"):
-                list(client.iter_reviews("com.example", countries=[]))
+                list(client.iter_reviews("com.example", countries=["tr"]))
             with pytest.raises(ValueError, match="no country dimension"):
-                client.fetch("com.example", countries=["tr"])
+                client.fetch("com.example", countries=["", "tr"])
             with pytest.raises(ValueError, match="no country dimension"):
-                client.resolve_countries([])
+                client.resolve_countries(["tr"])
 
         build.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "countries", [[], [""], ["  ", "\n"]], ids=["empty", "blank", "all-blank"]
+    )
+    @pytest.mark.parametrize(
+        "auth",
+        [None, GooglePlayAuth(service_account_path="must-not-be-read.json")],
+    )
+    def test_empty_country_selections_short_circuit_without_a_provider(
+        self, auth, countries
+    ):
+        client = GooglePlayReviews(auth=auth)
+        with patch.object(
+            client, "_build_provider", side_effect=AssertionError("provider built")
+        ) as build:
+            assert client.resolve_countries(countries) == []
+            assert list(client.iter_reviews("com.example", countries=countries)) == []
+            assert client.fetch("com.example", countries=countries).reviews == []
+
+        build.assert_not_called()
+
+    @pytest.mark.parametrize("country", ["", "  ", "\n"])
+    def test_blank_singular_country_is_the_same_as_omission(self, country):
+        provider = _mock_provider([PageResult()], source="googleplay_scraper")
+        client = GooglePlayReviews()
+
+        with patch.object(client, "_build_provider", return_value=provider):
+            client.fetch_page("com.example", country=country)
+
+        provider.fetch_page.assert_called_once_with("com.example", "", None)
 
     @pytest.mark.parametrize(
         "auth",
@@ -184,13 +214,47 @@ class TestGooglePlayReviews:
                 _ = [
                     review
                     async for review in client.aiter_reviews(
-                        "com.example", countries=[]
+                        "com.example", countries=["tr"]
                     )
                 ]
             with pytest.raises(ValueError, match="no country dimension"):
                 await client.afetch("com.example", countries=["tr"])
 
         build.assert_not_called()
+
+    @pytest.mark.parametrize("countries", [[], [""], ["  ", "\n"]])
+    @pytest.mark.parametrize(
+        "auth",
+        [None, GooglePlayAuth(service_account_path="must-not-be-read.json")],
+    )
+    async def test_async_empty_country_selections_do_not_build_a_provider(
+        self, auth, countries
+    ):
+        client = GooglePlayReviews(auth=auth)
+        with patch.object(
+            client, "_abuild_provider", side_effect=AssertionError("provider built")
+        ) as build:
+            assert [
+                review
+                async for review in client.aiter_reviews(
+                    "com.example", countries=countries
+                )
+            ] == []
+            result = await client.afetch("com.example", countries=countries)
+            assert result.reviews == []
+
+        build.assert_not_called()
+
+    @pytest.mark.parametrize("country", ["", "  ", "\n"])
+    async def test_async_blank_singular_country_is_omission(self, country):
+        provider = _mock_provider([], source="googleplay_scraper")
+        provider.afetch_page = AsyncMock(return_value=PageResult())
+        client = GooglePlayReviews()
+
+        with patch.object(client, "_abuild_provider", return_value=provider):
+            await client.afetch_page("com.example", country=country)
+
+        provider.afetch_page.assert_awaited_once_with("com.example", "", None)
 
 
 class _SyncTrapGoogleAuth:
