@@ -5,26 +5,235 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  publish:
+  validate-release:
     runs-on: ubuntu-latest
-    environment: pypi
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: "latest"
-      - uses: actions/setup-python@v7
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - run: uv build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Validate release identity and ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python scripts/verify_release.py --tag "$RELEASE_TAG" --ref "$GITHUB_REF" --sha "$GITHUB_SHA" --default-branch "$GITHUB_DEFAULT_BRANCH"
+
+  test-matrix:
+    needs: validate-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.9.15"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --group dev
+      - run: uv run pytest
+
+  verify:
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.9.15"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked development dependencies
+        run: uv sync --locked --group dev
+      - name: Lint
+        run: make lint
+      - name: Type check
+        run: make typecheck
+      - name: Build documentation
+        run: make docs
+      - name: Build distributions once
+        run: uv build --out-dir dist
+      - name: Check wheel structure
+        run: |
+          uvx --from check-wheel-contents==0.6.3 \
+            check-wheel-contents dist/*.whl
+      - name: Inspect distribution contents
+        run: |
+          python - <<'PY'
+          import tarfile
+          import tomllib
+          import zipfile
+          from email import policy
+          from email.parser import BytesParser
+          from pathlib import Path
+
+          wheels = list(Path("dist").glob("*.whl"))
+          sdists = list(Path("dist").glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(f"Expected one wheel and one sdist: {wheels=}, {sdists=}")
+          with zipfile.ZipFile(wheels[0]) as archive:
+              wheel_names = archive.namelist()
+              metadata_names = [
+                  name for name in wheel_names if name.endswith(".dist-info/METADATA")
+              ]
+              if len(metadata_names) != 1:
+                  raise SystemExit(f"Expected one wheel METADATA file: {metadata_names}")
+              wheel_metadata = BytesParser(policy=policy.default).parsebytes(
+                  archive.read(metadata_names[0])
+              )
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              sdist_names = archive.getnames()
+              pkg_info_names = [
+                  name for name in sdist_names if name.endswith("/PKG-INFO")
+              ]
+              if len(pkg_info_names) != 1:
+                  raise SystemExit(f"Expected one sdist PKG-INFO file: {pkg_info_names}")
+              pkg_info = archive.extractfile(pkg_info_names[0])
+              if pkg_info is None:
+                  raise SystemExit("Could not read sdist PKG-INFO")
+              sdist_metadata = BytesParser(policy=policy.default).parsebytes(
+                  pkg_info.read()
+              )
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+          if wheel_metadata["Name"] != project["name"]:
+              raise SystemExit(f'Wheel name mismatch: {wheel_metadata["Name"]}')
+          if wheel_metadata["Version"] != project["version"]:
+              raise SystemExit(f'Wheel version mismatch: {wheel_metadata["Version"]}')
+          if wheel_metadata["Metadata-Version"] is None:
+              raise SystemExit("Wheel has no Core Metadata version")
+          if sdist_metadata["Name"] != project["name"]:
+              raise SystemExit(f'Sdist name mismatch: {sdist_metadata["Name"]}')
+          if sdist_metadata["Version"] != project["version"]:
+              raise SystemExit(f'Sdist version mismatch: {sdist_metadata["Version"]}')
+          if sdist_metadata["Metadata-Version"] is None:
+              raise SystemExit("Sdist has no Core Metadata version")
+          if not any(name.endswith("/app_reviews/__init__.py") for name in sdist_names):
+              raise SystemExit("sdist is missing app_reviews sources")
+          if "app_reviews/__init__.py" not in wheel_names:
+              raise SystemExit("wheel is missing app_reviews sources")
+          forbidden = ("/.git/", "/.venv/", "/site/", "/dist/", "/.coverage")
+          leaked = [name for name in sdist_names if any(part in f"/{name}" for part in forbidden)]
+          if leaked:
+              raise SystemExit(f"Generated workspace files leaked into sdist: {leaked[:10]}")
+          PY
+      - name: Create clean wheel smoke-test environment
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv venv --python 3.13 .release-venv
+          uv export --locked --no-dev --no-emit-project \
+            --output-file release-requirements.txt
+          uv pip install --python .release-venv/bin/python \
+            --requirement release-requirements.txt
+          uv pip install --python .release-venv/bin/python --no-deps dist/*.whl
+          .release-venv/bin/python - <<'PY'
+          import os
+          from datetime import UTC, datetime
+
+          import app_reviews
+          from app_reviews import Review
+
+          assert app_reviews.__version__ == os.environ["RELEASE_TAG"].removeprefix("v")
+          review = Review(
+              store="appstore",
+              app_id="offline-smoke",
+              country="us",
+              rating=5,
+              title="Installed wheel",
+              body="No network required",
+              author_name="release-workflow",
+              source="appstore_scraper",
+              id="offline-smoke-review",
+              created_at=datetime(2026, 1, 1, tzinfo=UTC),
+          )
+          assert review.to_dict()["store"] == "appstore"
+          PY
+      - name: Stage verified release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir release
+          cp ".github/release-notes/${RELEASE_TAG}.md" release/release-notes.md
+      - name: Upload immutable distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-distributions-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload verified release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes-${{ github.sha }}
+          path: release/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-pypi:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-distributions-${{ github.sha }}
+          path: dist
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
           attestations: true
-      - uses: softprops/action-gh-release@v3
+
+  publish-github:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          body_path: .github/release-notes/${{ github.ref_name }}.md
-          generate_release_notes: true
+          name: release-distributions-${{ github.sha }}
+          path: dist
+      - name: Download verified release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes-${{ github.sha }}
+          path: release
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          body_path: release/release-notes.md
+          files: dist/*
+          generate_release_notes: false
