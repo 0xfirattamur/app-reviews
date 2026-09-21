@@ -505,6 +505,7 @@ class TestFieldLevelResilience:
 
         assert page.reviews == []
         assert page.error is None  # the page survives; only the entry is lost
+        assert page.skipped_reviews == 1
 
     def test_a_dropped_review_does_not_cost_its_neighbours(self):
         broken = _rss_entry("broken")
@@ -518,6 +519,7 @@ class TestFieldLevelResilience:
         page = _provider(handler).fetch_page("12345", "us", None)
 
         assert [r.id for r in page.reviews] == ["a", "b"]
+        assert page.skipped_reviews == 1
         assert page.next_cursor == "2"
 
 

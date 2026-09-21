@@ -1074,6 +1074,22 @@ class TestResumingFromAPersistedCursor:
         assert pages[-1].next_cursor == "1"
         assert pages[-1].stopped_because == "limit"
 
+    def test_a_yielded_page_keeps_its_skipped_review_count(self):
+        provider = FakeProvider(
+            [
+                PageResult(
+                    reviews=[_review(NOW, "p1")],
+                    next_cursor="1",
+                    skipped_reviews=2,
+                )
+            ]
+        )
+
+        [page] = list(FakeClient(provider).iter_pages("123", limit=1))
+
+        assert page.stopped_because == "limit"
+        assert page.skipped_reviews == 2
+
     def test_a_walk_resumes_where_the_cursor_left_off(self):
         provider = FakeProvider(self._pages())
         client = FakeClient(provider)

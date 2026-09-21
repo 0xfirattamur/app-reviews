@@ -287,6 +287,7 @@ class TestEntryResilience:
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1", "good-2"]
+        assert page.skipped_reviews == 1
 
     def test_bad_entry_preserves_the_cursor(self):
         entries = [{"reviewId": "broken"}, _dev_entry("good-1")]

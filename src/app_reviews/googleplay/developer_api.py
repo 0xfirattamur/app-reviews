@@ -138,7 +138,11 @@ class GooglePlayOfficialProvider:
         # A malformed envelope is a page-level error; a single bad entry is not.
         mapped = (self._review(entry, app_id) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _cursor(self, data: dict[str, Any]) -> str | None:
         """The next page token, or None on the last page.

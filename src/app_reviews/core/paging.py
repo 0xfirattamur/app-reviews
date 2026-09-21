@@ -71,6 +71,7 @@ def with_stop_reason(page: PageResult, reason: StopReason | None) -> PageResult:
         next_cursor=page.next_cursor,
         error=page.error,
         stopped_because=reason,
+        skipped_reviews=page.skipped_reviews,
     )
 
 
@@ -87,11 +88,13 @@ class CountryCollector:
         self._pages = 0
         self._reason: StopReason = "exhausted"
         self._error: FetchError | None = None
+        self._skipped_reviews = 0
 
     def add(self, page: PageResult) -> None:
         """Fold one page in. Only a page carrying a stop reason sets one."""
         self._pages += 1
         self.reviews.extend(page.reviews)
+        self._skipped_reviews += page.skipped_reviews
         if page.stopped_because is not None:
             self._reason = page.stopped_because
             self._error = page.error
@@ -105,6 +108,7 @@ class CountryCollector:
             stopped_because=self._reason,
             error=self._error,
             elapsed=time.monotonic() - self._started,
+            skipped_reviews=self._skipped_reviews,
         )
 
 

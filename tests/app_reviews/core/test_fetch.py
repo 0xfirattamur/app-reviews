@@ -77,6 +77,28 @@ class TestSingleCountry:
 
         assert result.outcomes[0].pages == 3
 
+    def test_actual_walk_aggregates_skipped_reviews_into_the_result_envelope(self):
+        provider = FakeProvider(
+            [
+                PageResult(
+                    reviews=[_review(NOW, "a")],
+                    next_cursor="1",
+                    skipped_reviews=2,
+                ),
+                PageResult(
+                    reviews=[_review(NOW, "b")],
+                    skipped_reviews=1,
+                ),
+            ]
+        )
+
+        result = FakeClient(provider).fetch("123", countries=["us"])
+
+        assert result.skipped_reviews == 3
+        assert result.outcomes[0].skipped_reviews == 3
+        assert result.to_dict()["skipped_reviews"] == 3
+        assert result.to_dict()["outcomes"][0]["skipped_reviews"] == 3
+
 
 class TestStopReasons:
     def test_limit_is_reported_as_the_stop_reason(self):

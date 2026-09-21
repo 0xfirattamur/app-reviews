@@ -59,6 +59,17 @@ def test_filter_by_until():
     assert next(iter(result)).id == "1"
 
 
+def test_filter_by_date_until_includes_the_entire_day():
+    during_day = make_review(
+        id="1", created_at=datetime(2025, 1, 1, 23, 59, 59, 999999, tzinfo=UTC)
+    )
+    next_day = make_review(id="2", created_at=datetime(2025, 1, 2, tzinfo=UTC))
+
+    result = FetchResult(reviews=[during_day, next_day]).filter(until=date(2025, 1, 1))
+
+    assert [review.id for review in result] == ["1"]
+
+
 def test_filter_is_non_destructive():
     r1 = make_review(id="1", rating=5)
     r2 = make_review(id="2", rating=2)
@@ -166,6 +177,39 @@ class TestCountryOutcome:
     def test_elapsed_is_whatever_the_walk_measured(self):
         assert _outcome().elapsed == 0.5
 
+    @pytest.mark.parametrize(
+        "elapsed", [float("nan"), float("inf"), float("-inf"), -0.001]
+    )
+    def test_elapsed_must_be_finite_and_non_negative(self, elapsed):
+        with pytest.raises(ValueError, match="elapsed must be finite and non-negative"):
+            CountryOutcome(
+                country="us",
+                pages=1,
+                reviews_fetched=1,
+                stopped_because="exhausted",
+                elapsed=elapsed,
+            )
+
+    def test_skipped_reviews_defaults_to_zero(self):
+        assert _outcome().skipped_reviews == 0
+
+    @pytest.mark.parametrize(
+        "invalid_count",
+        [float("nan"), float("inf"), float("-inf"), 1.5, "1", True, -1],
+    )
+    def test_skipped_reviews_must_be_a_non_negative_integer(self, invalid_count):
+        with pytest.raises(
+            ValueError, match="skipped_reviews must be a non-negative integer"
+        ):
+            CountryOutcome(
+                country="us",
+                pages=1,
+                reviews_fetched=1,
+                stopped_because="exhausted",
+                elapsed=0.1,
+                skipped_reviews=invalid_count,
+            )
+
     def test_carries_error_for_failed_country(self):
         error = FetchError(country="de", message="denied", kind="auth", status=401)
         outcome = CountryOutcome(
@@ -177,6 +221,107 @@ class TestCountryOutcome:
             error=error,
         )
         assert outcome.error.kind == "auth"
+
+
+class TestStructuredSerialization:
+    def test_fetch_error_includes_retryability(self):
+        error = FetchError(
+            country="gb", message="try later", kind="rate_limited", status=429
+        )
+
+        assert error.to_dict() == {
+            "country": "gb",
+            "message": "try later",
+            "kind": "rate_limited",
+            "status": 429,
+            "retryable": True,
+        }
+
+    def test_country_outcome_includes_counts_timing_stop_reason_and_error(self):
+        error = FetchError(country="gb", message="broken", kind="server", status=503)
+        outcome = CountryOutcome(
+            country="gb",
+            pages=2,
+            reviews_fetched=37,
+            stopped_because="error",
+            elapsed=0.75,
+            skipped_reviews=3,
+            error=error,
+        )
+
+        assert outcome.to_dict() == {
+            "country": "gb",
+            "pages": 2,
+            "reviews_fetched": 37,
+            "skipped_reviews": 3,
+            "stopped_because": "error",
+            "elapsed": 0.75,
+            "error": error.to_dict(),
+        }
+
+    def test_fetch_result_is_a_complete_json_safe_envelope(self):
+        error = FetchError(country="gb", message="broken", kind="server", status=503)
+        outcome = CountryOutcome(
+            country="gb",
+            pages=2,
+            reviews_fetched=37,
+            stopped_because="error",
+            elapsed=0.75,
+            skipped_reviews=3,
+            error=error,
+        )
+        result = FetchResult(
+            reviews=[make_review(raw={"provider": "payload"})], outcomes=[outcome]
+        )
+
+        serialised = result.to_dict()
+
+        assert serialised == {
+            "reviews": [make_review().to_dict()],
+            "outcomes": [outcome.to_dict()],
+            "errors": [error.to_dict()],
+            "skipped_reviews": 3,
+        }
+        json.dumps(serialised, allow_nan=False)
+
+    def test_fetch_result_aggregates_skips_while_preserving_outcomes(self):
+        outcomes = [
+            CountryOutcome(
+                country="us",
+                pages=1,
+                reviews_fetched=10,
+                stopped_because="exhausted",
+                elapsed=0.1,
+                skipped_reviews=2,
+            ),
+            CountryOutcome(
+                country="gb",
+                pages=1,
+                reviews_fetched=8,
+                stopped_because="exhausted",
+                elapsed=0.2,
+                skipped_reviews=1,
+            ),
+        ]
+        result = FetchResult(outcomes=outcomes)
+
+        assert result.skipped_reviews == 3
+        assert result.to_dict()["skipped_reviews"] == 3
+        assert result.to_dict()["outcomes"] == [
+            outcome.to_dict() for outcome in outcomes
+        ]
+
+    def test_fetch_result_can_include_raw_review_payloads(self):
+        result = FetchResult(reviews=[make_review(raw={"provider": "payload"})])
+
+        assert result.to_dict(include_raw=True)["reviews"][0]["raw"] == {
+            "provider": "payload"
+        }
+
+    def test_to_dicts_remains_review_row_compatibility(self):
+        result = FetchResult(reviews=[make_review()], outcomes=[_outcome()])
+
+        assert result.to_dicts() == result.to_dict()["reviews"]
 
 
 class TestFetchResultOutcomes:

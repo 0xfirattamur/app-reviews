@@ -17,10 +17,46 @@ def test_europe_group():
 
 
 def test_americas_group():
-    assert Country.US in Country.AMERICAS
-    assert Country.CA in Country.AMERICAS
-    assert Country.BR in Country.AMERICAS
-    assert Country.DE not in Country.AMERICAS
+    assert {country.value for country in Country.AMERICAS} == {
+        "ag",
+        "ai",
+        "ar",
+        "bb",
+        "bm",
+        "bo",
+        "br",
+        "bs",
+        "bz",
+        "ca",
+        "cl",
+        "co",
+        "cr",
+        "dm",
+        "do",
+        "ec",
+        "gd",
+        "gt",
+        "gy",
+        "hn",
+        "jm",
+        "kn",
+        "ky",
+        "lc",
+        "mx",
+        "ni",
+        "pa",
+        "pe",
+        "py",
+        "sr",
+        "sv",
+        "tc",
+        "tt",
+        "us",
+        "uy",
+        "vc",
+        "ve",
+        "vg",
+    }
 
 
 def test_asia_pacific_group():

@@ -407,6 +407,15 @@ class TestUnusableScrapedValues:
         assert app is not None
         assert app.rating_count == 0
 
+    def test_non_finite_numbers_fall_back_without_aborting_lookup(self) -> None:
+        app = _serving(_detail_page(rating="NaN", rating_count="Infinity")).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
     def test_non_numeric_price_is_unknown(self) -> None:
         app = _serving(_detail_page(price_micros="free-ish")).lookup("com.whatsapp")
         assert app is not None

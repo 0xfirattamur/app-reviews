@@ -134,7 +134,11 @@ class AppStoreScraperProvider:
         # entries all fail still means Apple has more, and reporting no cursor
         # here would end the walk as "exhausted", meaning no more data.
         next_cursor = str(page + 1) if entries and page < self.MAX_PAGES else None
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _entries(self, body: Any) -> list[Any]:
         """The feed's entries, always as a list.

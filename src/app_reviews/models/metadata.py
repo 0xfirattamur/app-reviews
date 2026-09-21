@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
+from math import isfinite
+from typing import Any
 
 from app_reviews.models.types import Store
 
@@ -57,3 +59,19 @@ class AppMetadata:
     Same precision caveat as ``current_version_release_date``. Doubles as the floor
     on a review history: no review of this app predates it.
     """
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.rating):
+            raise ValueError("rating must be finite")
+        if not isfinite(self.rating_count):
+            raise ValueError("rating_count must be finite")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return every metadata field as a JSON-safe plain dictionary."""
+        values: dict[str, Any] = {}
+        for model_field in fields(self):
+            value = getattr(self, model_field.name)
+            values[model_field.name] = (
+                value.isoformat() if isinstance(value, datetime) else value
+            )
+        return values

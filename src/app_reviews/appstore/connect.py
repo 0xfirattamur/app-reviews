@@ -164,7 +164,11 @@ class AppStoreOfficialProvider:
 
         mapped = (self._review(entry, app_id) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _next_cursor(self, data: dict[str, Any]) -> str | None:
         """The ``links.next`` URL, or None on the last page.

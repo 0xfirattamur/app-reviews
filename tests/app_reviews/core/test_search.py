@@ -16,6 +16,7 @@ from app_reviews.core.search import (
     SearchClient,
     aget_and_parse,
     get_and_parse,
+    scraped_number,
 )
 from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import RetryConfig
@@ -138,3 +139,11 @@ class TestGetAndParse:
 
         with pytest.raises(RuntimeError, match="parse said no"):
             get_and_parse(_pool(handler), "https://example.test/x", {}, parse)
+
+
+class TestScrapedNumber:
+    @pytest.mark.parametrize(
+        "value", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"]
+    )
+    def test_non_finite_values_fall_back_to_the_default(self, value):
+        assert scraped_number(value, 0.0) == 0.0

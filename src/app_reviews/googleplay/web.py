@@ -173,7 +173,11 @@ class GooglePlayScraperProvider:
 
         mapped = (self._review(entry, app_id) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _envelope(self, raw: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token in one batchexecute body.

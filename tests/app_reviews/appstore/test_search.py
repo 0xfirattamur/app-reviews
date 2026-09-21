@@ -122,6 +122,18 @@ class TestSearch:
 
         assert _client(handler).search("xyznonexistent") == []
 
+    def test_non_finite_metadata_numbers_fall_back_without_aborting_search(self):
+        result = _itunes_result()
+        result["averageUserRating"] = "NaN"
+        result["userRatingCount"] = "Infinity"
+
+        apps = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert apps[0].rating == 0.0
+        assert apps[0].rating_count == 0
+
     def test_non_200_raises_http_error(self):
         def handler(request):
             return httpx.Response(503, text="")

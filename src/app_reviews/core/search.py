@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from app_reviews.models.country import Country
@@ -145,6 +146,7 @@ def scraped_number(value: Any, default: float) -> float:
     if value is None or isinstance(value, bool):
         return default
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
+    return parsed if isfinite(parsed) else default

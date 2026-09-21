@@ -200,6 +200,7 @@ class TestFieldMapping:
 
         assert len(page.reviews) == 1
         assert page.error is None
+        assert page.skipped_reviews == 1
 
 
 class TestUnusableTimestamps:
