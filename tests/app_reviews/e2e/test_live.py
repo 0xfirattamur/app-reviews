@@ -1,258 +1,126 @@
-"""Live E2E tests that hit real store endpoints.
+"""Live provider-boundary tests that hit real store endpoints.
 
-These tests are NOT run in normal CI. They are only run by the
-scheduled GitHub Action (scheduled_e2e_test.yml) to verify that
-the scrapers still work against live APIs.
+These tests are NOT run in normal CI. The scheduled workflow runs them to
+detect upstream response changes and parsing regressions. Deterministic
+filtering, sorting, limiting, and export behavior belongs in the unit suite.
 
 Run manually with: pytest tests/app_reviews/e2e/test_live.py -m live -v
 """
 
 from __future__ import annotations
 
-import csv
-import io
-import json
-from datetime import UTC, datetime, timedelta
-
 import pytest
 
-from app_reviews import (
-    AppStoreReviews,
-    Country,
-    GooglePlayReviews,
-    Review,
-    Sort,
+from app_reviews import Review
+from tests.app_reviews.e2e.probes import (
+    ProbeObservation,
+    first_non_empty,
+    format_observations,
 )
-
-# Well-known, popular apps unlikely to be removed.
-APPLE_APP_ID = "389801252"  # Instagram
-GOOGLE_APP_ID = "com.google.android.apps.maps"  # Google Maps
-
-_LIMIT = 20
 
 pytestmark = pytest.mark.live
 
 
-# ===================================================================
-# App Store
-# ===================================================================
+def _healthy_app_store_probe(
+    observations: tuple[ProbeObservation, ...],
+) -> ProbeObservation:
+    observation = first_non_empty(observations)
+    assert observation is not None, (
+        "App Store RSS could not be verified: all probes returned zero reviews.\n"
+        f"{format_observations(observations)}"
+    )
+    return observation
+
+
+def _healthy_google_play_probe(
+    observations: tuple[ProbeObservation, ...],
+) -> ProbeObservation:
+    observation = first_non_empty(observations)
+    assert observation is not None, (
+        "Google Play could not be verified: all probes returned zero reviews.\n"
+        f"{format_observations(observations)}"
+    )
+    return observation
 
 
 class TestLiveAppStore:
-    """Smoke tests for the App Store RSS scraper."""
+    """The RSS provider remains reachable, parseable, and able to map reviews."""
 
-    def test_fetch_returns_reviews(self) -> None:
-        result = AppStoreReviews().fetch(
-            APPLE_APP_ID, countries=[Country.US], limit=_LIMIT
+    def test_probes_complete_without_provider_errors(
+        self, app_store_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        failed = [item for item in app_store_observations if item.result.errors]
+        assert failed == [], (
+            "App Store RSS probes returned provider errors.\n"
+            f"{format_observations(app_store_observations)}"
         )
-        assert len(result.reviews) > 0
-        assert len(result.errors) == 0
 
-        review = result.reviews[0]
+    def test_at_least_one_independent_probe_returns_reviews(
+        self, app_store_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        _healthy_app_store_probe(app_store_observations)
+
+    def test_maps_core_review_fields(
+        self, app_store_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        observation = _healthy_app_store_probe(app_store_observations)
+        review = observation.result.reviews[0]
+
         assert isinstance(review, Review)
         assert review.store == "appstore"
-        assert review.app_id == APPLE_APP_ID
-        assert review.country == "us"
+        assert review.app_id == observation.probe.app_id
+        assert review.country == observation.probe.country.value
+        assert review.source == "appstore_scraper"
+        assert review.id
         assert 1 <= review.rating <= 5
         assert review.body
         assert review.author_name
-        assert review.dated_at is not None  # created_at is None on RSS
-
-    def test_multi_country(self) -> None:
-        result = AppStoreReviews().fetch(
-            APPLE_APP_ID,
-            countries=[Country.US, Country.GB],
-            limit=_LIMIT,
-        )
-        assert len(result.reviews) > 0
-
-    def test_filter_by_rating(self) -> None:
-        result = AppStoreReviews().fetch(
-            APPLE_APP_ID,
-            countries=[Country.US],
-            ratings=[4, 5],
-            limit=_LIMIT,
-        )
-        if result.reviews:
-            assert all(r.rating >= 4 for r in result.reviews)
-
-    def test_sort_newest(self) -> None:
-        result = AppStoreReviews().fetch(
-            APPLE_APP_ID,
-            countries=[Country.US],
-            sort=Sort.NEWEST,
-            limit=_LIMIT,
-        )
-        if len(result.reviews) >= 2:
-            dates = [r.dated_at for r in result.reviews]
-            assert dates == sorted(dates, reverse=True)
-
-    def test_limit(self) -> None:
-        result = AppStoreReviews().fetch(APPLE_APP_ID, countries=[Country.US], limit=3)
-        assert len(result.reviews) <= 3
-
-
-# ===================================================================
-# Google Play
-# ===================================================================
+        assert review.dated_at is not None
 
 
 class TestLiveGooglePlay:
-    """Smoke tests for the Google Play batchexecute scraper."""
+    """The batchexecute provider remains reachable and parseable."""
 
-    def test_fetch_returns_reviews(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=_LIMIT
+    def test_probes_complete_without_provider_errors(
+        self, google_play_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        failed = [item for item in google_play_observations if item.result.errors]
+        assert failed == [], (
+            "Google Play probes returned provider errors.\n"
+            f"{format_observations(google_play_observations)}"
         )
-        assert len(result.reviews) > 0
-        assert len(result.errors) == 0
 
-        review = result.reviews[0]
+    def test_at_least_one_independent_probe_returns_reviews(
+        self, google_play_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        _healthy_google_play_probe(google_play_observations)
+
+    def test_maps_core_review_fields(
+        self, google_play_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        observation = _healthy_google_play_probe(google_play_observations)
+        review = observation.result.reviews[0]
+
         assert isinstance(review, Review)
         assert review.store == "googleplay"
-        assert review.app_id == GOOGLE_APP_ID
+        assert review.app_id == observation.probe.app_id
+        assert review.source == "googleplay_scraper"
+        assert review.id
         assert 1 <= review.rating <= 5
         assert review.body is not None
         assert review.author_name
-        assert review.dated_at is not None  # created_at is None on RSS
-
-    def test_multi_country(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID,
-            countries=[Country.US, Country.GB],
-            limit=_LIMIT,
-        )
-        assert len(result.reviews) > 0
-
-    def test_filter_by_rating(self) -> None:
-        """Bounded with ``since``, not ``limit``.
-
-        ``ratings`` deliberately disables the limit-based early stop, because the walk
-        cannot know how many of the first N will survive filtering, so on an app
-        with millions of reviews ``limit`` alone walks to exhaustion. ``since``
-        does stop this source early, because it is newest-first.
-        """
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID,
-            countries=[Country.US],
-            ratings=[1, 2],
-            since=datetime.now(tz=UTC) - timedelta(days=2),
-        )
-        if result.reviews:
-            assert all(r.rating <= 2 for r in result.reviews)
-
-    def test_sort_newest(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID,
-            countries=[Country.US],
-            sort=Sort.NEWEST,
-            limit=_LIMIT,
-        )
-        if len(result.reviews) >= 2:
-            dates = [r.dated_at for r in result.reviews]
-            assert dates == sorted(dates, reverse=True)
-
-    def test_limit(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=3
-        )
-        assert len(result.reviews) <= 3
-
-
-# ===================================================================
-# Exports: verify all formats work with real data
-# ===================================================================
-
-
-class TestLiveExport:
-    """Export real reviews to JSON, JSONL, and CSV."""
-
-    def test_all_formats(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=5
-        )
-        assert result.reviews, "Need reviews to test exports"
-        reviews = result.reviews
-
-        rows = result.to_dicts()
-
-        # JSON round-trips straight out of to_dicts
-        parsed = json.loads(json.dumps(rows))
-        assert len(parsed) == len(reviews)
-        assert parsed[0]["store"] == "googleplay"
-        assert "raw" not in parsed[0]
-
-        # JSONL
-        lines = [json.dumps(d) for d in rows]
-        assert len(lines) == len(reviews)
-
-        # CSV via the stdlib recipe the docs show
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-        assert len(list(csv.DictReader(io.StringIO(buf.getvalue())))) == len(reviews)
-
-
-# ===================================================================
-# FetchResult operations
-# ===================================================================
-
-
-class TestLiveFetchResult:
-    """FetchResult iteration, chaining, and immutability."""
-
-    def test_filter_sort_limit_chain(self) -> None:
-        result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=_LIMIT
-        )
-        original_count = len(result)
-
-        refined = result.filter(ratings=[3, 4, 5]).sort(Sort.NEWEST).limit(5)
-
-        # Original unchanged
-        assert len(result) == original_count
-        # Chain applied
-        assert len(refined) <= 5
-        if refined.reviews:
-            assert all(r.rating >= 3 for r in refined.reviews)
-
-
-# ===================================================================
-# Cross-store consistency
-# ===================================================================
+        assert review.dated_at is not None
 
 
 class TestLiveCrossStore:
-    """Both stores produce structurally consistent output."""
+    """Both live providers still expose the same public Review shape."""
 
-    def test_same_json_keys(self) -> None:
-        as_result = AppStoreReviews().fetch(
-            APPLE_APP_ID, countries=[Country.US], limit=1
-        )
-        gp_result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=1
-        )
-        if as_result.reviews and gp_result.reviews:
-            as_keys = set(as_result.to_dicts()[0])
-            gp_keys = set(gp_result.to_dicts()[0])
-            assert as_keys == gp_keys
+    def test_same_json_keys(
+        self,
+        app_store_observations: tuple[ProbeObservation, ...],
+        google_play_observations: tuple[ProbeObservation, ...],
+    ) -> None:
+        app_store = _healthy_app_store_probe(app_store_observations).result
+        google_play = _healthy_google_play_probe(google_play_observations).result
 
-    def test_core_fields_populated(self) -> None:
-        as_result = AppStoreReviews().fetch(
-            APPLE_APP_ID, countries=[Country.US], limit=1
-        )
-        gp_result = GooglePlayReviews().fetch(
-            GOOGLE_APP_ID, countries=[Country.US], limit=1
-        )
-        for label, result, store in [
-            ("App Store", as_result, "appstore"),
-            ("Google Play", gp_result, "googleplay"),
-        ]:
-            assert result.reviews, f"{label} returned no reviews"
-            r = result.reviews[0]
-            assert r.store == store
-            assert r.app_id
-            assert 1 <= r.rating <= 5
-            assert r.author_name
-            assert r.dated_at is not None
+        assert set(app_store.to_dicts()[0]) == set(google_play.to_dicts()[0])

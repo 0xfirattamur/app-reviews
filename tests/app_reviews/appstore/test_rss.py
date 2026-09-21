@@ -102,6 +102,7 @@ class TestFetchPage:
         page = _provider(handler).fetch_page("12345", "us", None)
 
         assert page.reviews == []
+        assert page.error is None
         assert page.next_cursor is None
 
     def test_stops_past_max_pages_without_a_request(self):

@@ -34,17 +34,49 @@ jobs:
         id: e2e_reviews
         continue-on-error: true
         run: |
+          mkdir -p reports
           set +e
-          uv run python -m pytest tests/app_reviews/e2e/test_live.py -m live -v -s --tb=long 2>&1 | tee e2e_reviews_output.txt
+          uv run python -m pytest tests/app_reviews/e2e/test_live.py -m live -v -s --tb=long \
+            --junitxml=reports/e2e_reviews.xml 2>&1 | tee reports/e2e_reviews_output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Run search E2E tests
         id: e2e_search
         continue-on-error: true
         run: |
+          mkdir -p reports
           set +e
-          uv run python -m pytest tests/app_reviews/e2e/test_search_live.py -m live -v -s --tb=long 2>&1 | tee e2e_search_output.txt
+          uv run python -m pytest tests/app_reviews/e2e/test_search_live.py -m live -v -s --tb=long \
+            --junitxml=reports/e2e_search.xml 2>&1 | tee reports/e2e_search_output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-diagnostics
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize E2E results
+        if: always()
+        env:
+          REVIEWS_EXIT: ${{ steps.e2e_reviews.outputs.exit_code }}
+          SEARCH_EXIT: ${{ steps.e2e_search.outputs.exit_code }}
+        run: |
+          reviews_status="${REVIEWS_EXIT:-not run}"
+          search_status="${SEARCH_EXIT:-not run}"
+          {
+            echo "## Scheduled E2E results"
+            echo
+            echo "| Suite | Exit code |"
+            echo "|-------|-----------|"
+            echo "| Reviews | ${reviews_status} |"
+            echo "| Search | ${search_status} |"
+            echo
+            echo "Complete text logs and JUnit reports are stored in the e2e-diagnostics artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report failure
         if: steps.e2e_reviews.outputs.exit_code != '0' || steps.e2e_search.outputs.exit_code != '0'
@@ -65,8 +97,8 @@ jobs:
           [ "$SEARCH_EXIT" = "0" ] || SEARCH_STATUS="failed"
 
           # Defensive: if a suite died before tee created its log, still report.
-          REVIEWS_OUTPUT=$(tail -40 e2e_reviews_output.txt 2>/dev/null || echo "(no output captured)")
-          SEARCH_OUTPUT=$(tail -40 e2e_search_output.txt 2>/dev/null || echo "(no output captured)")
+          REVIEWS_OUTPUT=$(tail -80 reports/e2e_reviews_output.txt 2>/dev/null || echo "(no output captured)")
+          SEARCH_OUTPUT=$(tail -80 reports/e2e_search_output.txt 2>/dev/null || echo "(no output captured)")
 
           cat > issue_body.md << ENDOFBODY
           ## Scheduled E2E Test Failed
@@ -92,6 +124,9 @@ jobs:
           \`\`\`
           ${SEARCH_OUTPUT}
           \`\`\`
+
+          Complete text logs and JUnit XML reports are available in the
+          \`e2e-diagnostics\` artifact on the run page.
 
           > Auto-reported by the [Scheduled E2E Test](${WORKFLOW_URL}) workflow.
           ENDOFBODY
