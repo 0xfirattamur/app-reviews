@@ -1,8 +1,8 @@
 from app_reviews import Country
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
 from tests.app_reviews.e2e.probes import (
-    AppStoreProbe,
     ProbeObservation,
+    ReviewProbe,
     first_non_empty,
     format_observations,
 )
@@ -22,7 +22,7 @@ def _outcome(*, error: FetchError | None = None) -> CountryOutcome:
 
 def _observation(result: FetchResult) -> ProbeObservation:
     return ProbeObservation(
-        probe=AppStoreProbe("Example", "12345", Country.US),
+        probe=ReviewProbe("Example", "12345", Country.US),
         result=result,
     )
 
@@ -32,6 +32,18 @@ def test_formats_a_successful_empty_probe() -> None:
 
     assert observation.describe() == (
         "Example (12345, us): 0 reviews, pages=1, stop=exhausted, error=none"
+    )
+
+
+def test_formats_a_global_probe_without_inventing_a_country() -> None:
+    observation = ProbeObservation(
+        probe=ReviewProbe("Example", "com.example.app"),
+        result=FetchResult(outcomes=[_outcome()]),
+    )
+
+    assert observation.describe() == (
+        "Example (com.example.app, global): 0 reviews, pages=1, "
+        "stop=exhausted, error=none"
     )
 
 

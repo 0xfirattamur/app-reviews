@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app_reviews import FetchResult, Review
+from app_reviews import Review
 from tests.app_reviews.e2e.probes import (
     ProbeObservation,
     first_non_empty,
@@ -27,6 +27,17 @@ def _healthy_app_store_probe(
     observation = first_non_empty(observations)
     assert observation is not None, (
         "App Store RSS could not be verified: all probes returned zero reviews.\n"
+        f"{format_observations(observations)}"
+    )
+    return observation
+
+
+def _healthy_google_play_probe(
+    observations: tuple[ProbeObservation, ...],
+) -> ProbeObservation:
+    observation = first_non_empty(observations)
+    assert observation is not None, (
+        "Google Play could not be verified: all probes returned zero reviews.\n"
         f"{format_observations(observations)}"
     )
     return observation
@@ -70,15 +81,29 @@ class TestLiveAppStore:
 class TestLiveGooglePlay:
     """The batchexecute provider remains reachable and parseable."""
 
-    def test_fetch_maps_core_review_fields(
-        self, google_play_result: FetchResult
+    def test_probes_complete_without_provider_errors(
+        self, google_play_observations: tuple[ProbeObservation, ...]
     ) -> None:
-        assert google_play_result.errors == []
-        assert google_play_result.reviews, "Google Play returned no reviews"
+        failed = [item for item in google_play_observations if item.result.errors]
+        assert failed == [], (
+            "Google Play probes returned provider errors.\n"
+            f"{format_observations(google_play_observations)}"
+        )
 
-        review = google_play_result.reviews[0]
+    def test_at_least_one_independent_probe_returns_reviews(
+        self, google_play_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        _healthy_google_play_probe(google_play_observations)
+
+    def test_maps_core_review_fields(
+        self, google_play_observations: tuple[ProbeObservation, ...]
+    ) -> None:
+        observation = _healthy_google_play_probe(google_play_observations)
+        review = observation.result.reviews[0]
+
         assert isinstance(review, Review)
         assert review.store == "googleplay"
+        assert review.app_id == observation.probe.app_id
         assert review.source == "googleplay_scraper"
         assert review.id
         assert 1 <= review.rating <= 5
@@ -93,9 +118,9 @@ class TestLiveCrossStore:
     def test_same_json_keys(
         self,
         app_store_observations: tuple[ProbeObservation, ...],
-        google_play_result: FetchResult,
+        google_play_observations: tuple[ProbeObservation, ...],
     ) -> None:
         app_store = _healthy_app_store_probe(app_store_observations).result
-        assert google_play_result.reviews, "Google Play returned no reviews"
+        google_play = _healthy_google_play_probe(google_play_observations).result
 
-        assert set(app_store.to_dicts()[0]) == set(google_play_result.to_dicts()[0])
+        assert set(app_store.to_dicts()[0]) == set(google_play.to_dicts()[0])

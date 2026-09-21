@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-from app_reviews import AppStoreReviews, Country, FetchResult, GooglePlayReviews
-from tests.app_reviews.e2e.probes import AppStoreProbe, ProbeObservation
+from app_reviews import AppStoreReviews, Country, GooglePlayReviews
+from tests.app_reviews.e2e.probes import ProbeObservation, ReviewProbe
 
 _LIMIT = 20
-_GOOGLE_PLAY_APP_ID = "com.google.android.apps.maps"
-
 _APP_STORE_PROBES = (
-    AppStoreProbe("Google Maps", "585027354", Country.US),
-    AppStoreProbe("Instagram", "389801252", Country.GB),
-    AppStoreProbe("Among Us", "1351168404", Country.US),
+    ReviewProbe("Google Maps", "585027354", Country.US),
+    ReviewProbe("Instagram", "389801252", Country.GB),
+    ReviewProbe("Among Us", "1351168404", Country.US),
+)
+
+_GOOGLE_PLAY_PROBES = (
+    ReviewProbe("Google Maps", "com.google.android.apps.maps"),
+    ReviewProbe("Instagram", "com.instagram.android"),
+    ReviewProbe("Spotify", "com.spotify.music"),
 )
 
 
@@ -35,6 +39,13 @@ def app_store_observations() -> tuple[ProbeObservation, ...]:
 
 
 @pytest.fixture(scope="session")
-def google_play_result() -> FetchResult:
-    """Fetch one global, high-volume Play corpus once for the live suite."""
-    return GooglePlayReviews().fetch(_GOOGLE_PLAY_APP_ID, limit=_LIMIT)
+def google_play_observations() -> tuple[ProbeObservation, ...]:
+    """Fetch independent global Play probes once for the live suite."""
+    client = GooglePlayReviews()
+    return tuple(
+        ProbeObservation(
+            probe=probe,
+            result=client.fetch(probe.app_id, limit=_LIMIT),
+        )
+        for probe in _GOOGLE_PLAY_PROBES
+    )

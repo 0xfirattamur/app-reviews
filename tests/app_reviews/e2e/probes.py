@@ -10,19 +10,19 @@ from app_reviews.models.result import FetchResult
 
 
 @dataclass(frozen=True, slots=True)
-class AppStoreProbe:
-    """One independently useful app/storefront pair."""
+class ReviewProbe:
+    """One independently useful app, optionally scoped to a storefront."""
 
     name: str
     app_id: str
-    country: Country
+    country: Country | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeObservation:
     """The result and human-readable evidence from one live probe."""
 
-    probe: AppStoreProbe
+    probe: ReviewProbe
     result: FetchResult
 
     def describe(self) -> str:
@@ -35,8 +35,9 @@ class ProbeObservation:
         else:
             status = f" (HTTP {error.status})" if error.status is not None else ""
             error_text = f"{error.kind}{status}: {error.message}"
+        scope = self.probe.country.value if self.probe.country else "global"
         return (
-            f"{self.probe.name} ({self.probe.app_id}, {self.probe.country.value}): "
+            f"{self.probe.name} ({self.probe.app_id}, {scope}): "
             f"{len(self.result.reviews)} reviews, pages={pages}, stop={stopped}, "
             f"error={error_text}"
         )
