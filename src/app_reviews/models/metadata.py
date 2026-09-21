@@ -29,7 +29,8 @@ class AppMetadata:
 
     See the coverage table in ``docs/reference/models.md``.
 
-    ``price`` is formatted with ``$`` regardless of storefront currency.
+    ``price`` is the storefront's display value where the store publishes one;
+    otherwise it uses an ISO currency code and amount, or ``"Unknown"``.
     """
 
     app_id: str

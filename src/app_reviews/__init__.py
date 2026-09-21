@@ -24,7 +24,9 @@ import logging
 from importlib.metadata import version
 
 from app_reviews.appstore import AppStoreReviews, AppStoreSearch
-from app_reviews.core.http import HttpClient
+from app_reviews.core.auth import TokenSource
+from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.provider import ReviewProvider
 from app_reviews.errors import (
     AppReviewsError,
     AuthError,
@@ -37,7 +39,12 @@ from app_reviews.errors import (
     TransportError,
 )
 from app_reviews.googleplay import GooglePlayReviews, GooglePlaySearch
-from app_reviews.models.config import AppStoreAuth, GooglePlayAuth, RetryConfig
+from app_reviews.models.config import (
+    AppStoreAuth,
+    ConnectCredentials,
+    GooglePlayAuth,
+    RetryConfig,
+)
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata
 from app_reviews.models.page import PageResult
@@ -56,6 +63,7 @@ __all__ = [
     "AppStoreReviews",
     "AppStoreSearch",
     "AuthError",
+    "ConnectCredentials",
     "Country",
     "CountryOutcome",
     "ErrorKind",
@@ -66,6 +74,7 @@ __all__ = [
     "GooglePlaySearch",
     "HttpClient",
     "HttpError",
+    "HttpResponse",
     "NotFoundError",
     "PageResult",
     "ParseError",
@@ -73,11 +82,13 @@ __all__ = [
     "RequestError",
     "RetryConfig",
     "Review",
+    "ReviewProvider",
     "ServerError",
     "Sort",
     "Source",
     "StopReason",
     "Store",
+    "TokenSource",
     "TransportError",
     "__version__",
 ]

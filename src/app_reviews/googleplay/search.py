@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -96,7 +97,7 @@ class GooglePlaySearch(PooledClient):
     _STORE_URL = (41, 0, 2)
     _RATING = (51, 0, 1)
     _RATING_COUNT = (51, 2, 1)
-    _PRICE_MICROS = (57, 0, 0, 0, 0, 1, 0, 0)
+    _PRICE = (57, 0, 0, 0, 0, 1, 0)
     _DEVELOPER = (68, 0)
     _CATEGORY = (79, 0, 0, 0)
     _ICON = (95, 0, 3, 2)
@@ -120,7 +121,7 @@ class GooglePlaySearch(PooledClient):
     _ENTRY_NAME = (3,)
     _ENTRY_RATING = (4, 1)
     _ENTRY_CATEGORY = (5,)
-    _ENTRY_PRICE_MICROS = (8, 1, 0, 0)
+    _ENTRY_PRICE = (8, 1, 1)
     _ENTRY_DEVELOPER = (14,)
 
     def search(
@@ -371,7 +372,7 @@ class GooglePlaySearch(PooledClient):
             name=name,
             developer=scraped_text(self._at(block, self._DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._PRICE_MICROS)),
+            price=self._price(self._at(block, self._PRICE)),
             version=scraped_text(self._at(block, self._DETAIL_VERSION)) or self.VERSION,
             rating=scraped_number(self._at(block, self._RATING), 0.0),
             rating_count=int(scraped_number(self._at(block, self._RATING_COUNT), 0)),
@@ -414,7 +415,7 @@ class GooglePlaySearch(PooledClient):
             name=scraped_text(self._at(block, self._ENTRY_NAME)) or "Unknown",
             developer=scraped_text(self._at(block, self._ENTRY_DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._ENTRY_PRICE_MICROS)),
+            price=self._price(self._at(block, self._ENTRY_PRICE)),
             version=self.VERSION,
             rating=scraped_number(self._at(block, self._ENTRY_RATING), 0.0),
             # This layout carries no count anywhere; only a detail block does.
@@ -447,15 +448,26 @@ class GooglePlaySearch(PooledClient):
         ids = parse_qs(urlsplit(url).query).get("id", [])
         return ids[0] if ids and ids[0] else None
 
-    def _price(self, micros: Any) -> str:
-        """A price, from an amount in millionths of the storefront's currency.
-
-        The currency is the storefront's own, so the ``$`` is only right for
-        storefronts that bill in dollars.
-        """
-        if micros is None or micros == 0:
+    def _price(self, price: Any) -> str:
+        """The storefront's display price, with an ISO-currency fallback."""
+        if price is None:
             return "Free"
+        if not isinstance(price, list) or len(price) < 2:
+            return "Unknown"
         try:
-            return f"${float(micros) / 1_000_000:.2f}"
+            micros = price[0]
+            if isinstance(micros, bool):
+                return "Unknown"
+            amount = float(micros)
+            if not math.isfinite(amount):
+                return "Unknown"
+            if amount == 0:
+                return "Free"
+            if len(price) > 2 and isinstance(price[2], str) and price[2].strip():
+                return price[2]
+            currency = price[1]
+            if not isinstance(currency, str) or not currency.strip():
+                return "Unknown"
+            return f"{currency.strip().upper()} {amount / 1_000_000:.2f}"
         except (TypeError, ValueError):
             return "Unknown"

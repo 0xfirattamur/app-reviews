@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
@@ -19,7 +20,7 @@ from app_reviews.models.types import Source
 _LOG = logging.getLogger(__name__)
 
 
-class AppStoreScraperProvider:
+class AppStoreScraperProvider(PooledClient):
     """Fetches one page of App Store RSS reviews per call.
 
     Public JSON feed, no credentials, one request per country.
@@ -35,7 +36,7 @@ class AppStoreScraperProvider:
     )
 
     def __init__(self, *, http: HttpClient | None = None) -> None:
-        self._http = http or HttpClient()
+        super().__init__(http=http)
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one RSS page. ``cursor`` is the page number, None meaning page 1."""

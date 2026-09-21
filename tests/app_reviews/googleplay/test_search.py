@@ -35,6 +35,8 @@ def _detail_block(
     rating: Any = 4.7,
     rating_count: Any = 232000,
     price_micros: Any = 0,
+    currency: Any = "USD",
+    formatted_price: Any = None,
     version: Any = None,
     released_on: Any = None,
     updated_on: Any = None,
@@ -60,7 +62,10 @@ def _detail_block(
         [None, None, f"https://play.google.com/store/apps/details?id={app_id}"]
     ]
     block[51] = [[None, rating], None, [None, rating_count]]
-    block[57] = [[[[[None, [[price_micros, "USD"]]]]]]]
+    price = [price_micros, currency]
+    if formatted_price is not None:
+        price.append(formatted_price)
+    block[57] = [[[[[None, [price]]]]]]
     block[68] = ["WhatsApp LLC"]
     block[79] = [[["Communication", None, "COMMUNICATION"]]]
     block[95] = [[None, None, None, [None, None, _ICON]]]
@@ -77,6 +82,8 @@ def _entry(
     name: Any = "WhatsApp Messenger",
     rating: Any = 4.7,
     price_micros: Any = 0,
+    currency: Any = "USD",
+    formatted_price: Any = None,
 ) -> list[Any]:
     """A compact regular search entry: its own numbering, fewer fields."""
     app: list[Any] = [None] * 15
@@ -85,7 +92,10 @@ def _entry(
     app[3] = name
     app[4] = [None, rating]
     app[5] = "Communication"
-    app[8] = [None, [None, [price_micros, "USD"]]]
+    price = [price_micros, currency]
+    if formatted_price is not None:
+        price.append(formatted_price)
+    app[8] = [None, [None, price]]
     app[14] = "WhatsApp LLC"
     return [app]
 
@@ -383,9 +393,37 @@ class TestLookup:
         assert app.icon_url == _ICON
 
     def test_paid_price_is_formatted_from_micros(self) -> None:
-        app = _serving(_detail_page(price_micros=1_990_000)).lookup("com.whatsapp")
+        app = _serving(
+            _detail_page(
+                price_micros=1_990_000,
+                formatted_price="$1.99",
+            )
+        ).lookup("com.whatsapp")
         assert app is not None
         assert app.price == "$1.99"
+
+    def test_paid_price_preserves_the_storefront_currency(self) -> None:
+        display = "TRY\N{NO-BREAK SPACE}109.00"
+        app = _serving(
+            _detail_page(
+                price_micros=109_000_000,
+                currency="TRY",
+                formatted_price=display,
+            )
+        ).lookup("com.minecraft")
+
+        assert app is not None
+        assert app.price == display
+
+    def test_search_result_preserves_the_storefront_currency(self) -> None:
+        entry = _entry(
+            price_micros=1_300_000_000,
+            currency="JPY",
+            formatted_price="¥1,300",
+        )
+        page = _search_page(groups=[[entry]])
+
+        assert _serving(page).search("minecraft")[0].price == "¥1,300"
 
     def test_not_found_returns_none(self) -> None:
         assert _serving("Not Found", status=404).lookup("com.nope") is None
@@ -447,6 +485,45 @@ class TestUnusableScrapedValues:
         app = _serving(_detail_page(price_micros="free-ish")).lookup("com.whatsapp")
         assert app is not None
         assert app.price == "Unknown"
+
+    @pytest.mark.parametrize(
+        "price",
+        [
+            {},
+            {0: 1_000_000, 1: "USD"},
+            [],
+            [1_000_000],
+            [float("nan"), "USD", "$1.00"],
+            [float("inf"), "USD", "$1.00"],
+        ],
+    )
+    def test_lookup_malformed_price_container_is_unknown(self, price: Any) -> None:
+        block = _detail_block()
+        block[57] = [[[[[None, [price]]]]]]
+        page = _page("ds:5", [None, [None, None, block]])
+
+        app = _serving(page).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
+    @pytest.mark.parametrize(
+        "price",
+        [
+            {},
+            {0: 1_000_000, 1: "USD"},
+            [],
+            [1_000_000],
+            [float("nan"), "USD", "$1.00"],
+            [float("-inf"), "USD", "$1.00"],
+        ],
+    )
+    def test_search_malformed_price_container_is_unknown(self, price: Any) -> None:
+        entry = _entry()
+        entry[0][8] = [None, [None, price]]
+        page = _search_page(groups=[[entry]])
+
+        assert _serving(page).search("whatsapp")[0].price == "Unknown"
 
     def test_a_non_string_name_falls_back(self) -> None:
         page = _search_page(groups=[[_entry(name=["WhatsApp"])]])

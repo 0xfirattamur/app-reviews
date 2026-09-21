@@ -54,6 +54,7 @@ class PooledClient:
                     f"you pass in instead."
                 )
         self._retry = retry or RetryConfig()
+        self._owns_http = http is None
         self._http = http or HttpClient(
             timeout=self._retry.timeout, proxy=proxy, retry=self._retry
         )
@@ -66,11 +67,13 @@ class PooledClient:
         the garbage collector. The client stays usable: the next request
         reopens the pool.
         """
-        self._http.close()
+        if self._owns_http:
+            self._http.close()
 
     async def aclose(self) -> None:
         """Async twin of ``close``, for connections the async ladder opened."""
-        await self._http.aclose()
+        if self._owns_http:
+            await self._http.aclose()
 
     def __enter__(self) -> Self:
         return self

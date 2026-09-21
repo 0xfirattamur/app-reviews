@@ -262,6 +262,24 @@ class TestPagination:
 
         assert page.next_cursor is None
 
+    @pytest.mark.parametrize("container", ["reviews", {"review": []}, 42])
+    def test_present_non_list_reviews_container_is_a_parse_error(self, container):
+        inner = json.dumps([container, None, [None]])
+        raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
+
+        page = _serving(raw).fetch_page("com.example.app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    @pytest.mark.parametrize("pagination", ["next", {"token": "x"}, [None, 42]])
+    def test_present_malformed_pagination_is_a_parse_error(self, pagination):
+        inner = json.dumps([[], pagination, [None]])
+        raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
+
+        page = _serving(raw).fetch_page("com.example.app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
 
 class TestErrorClassification:
     @pytest.mark.parametrize(

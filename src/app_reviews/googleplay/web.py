@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
@@ -41,7 +42,7 @@ raises them for a seconds value outside the platform's range, and neither is a
 """
 
 
-class GooglePlayScraperProvider:
+class GooglePlayScraperProvider(PooledClient):
     """Fetches one page of Google Play reviews per call, via the batchexecute RPC.
 
     Public web endpoint, no credentials. Play reviews are a single global corpus,
@@ -98,7 +99,7 @@ class GooglePlayScraperProvider:
     _APP_VERSION = 10
 
     def __init__(self, *, http: HttpClient | None = None) -> None:
-        self._http = http or HttpClient()
+        super().__init__(http=http)
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. ``cursor`` is the page token from the previous page."""
@@ -212,19 +213,37 @@ class GooglePlayScraperProvider:
         raise _ParseFailed(f"no {self.RPC_ID} envelope in response")
 
     def _entries(self, payload: list[Any]) -> list[Any]:
-        """The review entries, or none of them if this page carries no array."""
+        """The review entries; absent/null is empty, wrong present types fail."""
         entries = payload[self._REVIEWS] if payload else None
-        return entries if isinstance(entries, list) else []
+        if entries is None:
+            return []
+        if not isinstance(entries, list):
+            raise _ParseFailed(
+                f"reviews container is {type(entries).__name__}, expected an array"
+            )
+        return entries
 
     def _token(self, payload: list[Any]) -> str | None:
         """The next page token, or None on the last page."""
         if len(payload) <= self._PAGINATION:
             return None
         pagination = payload[self._PAGINATION]
-        if not isinstance(pagination, list) or len(pagination) <= self._PAGE_TOKEN:
+        if pagination is None:
             return None
+        if not isinstance(pagination, list):
+            raise _ParseFailed(
+                f"pagination is {type(pagination).__name__}, expected an array"
+            )
+        if len(pagination) <= self._PAGE_TOKEN:
+            raise _ParseFailed("pagination is missing its page-token slot")
         token = pagination[self._PAGE_TOKEN]
-        return token if isinstance(token, str) else None
+        if token is None:
+            return None
+        if not isinstance(token, str):
+            raise _ParseFailed(
+                f"page token is {type(token).__name__}, expected a string"
+            )
+        return token
 
     def _review(self, entry: Any, app_id: str) -> Review | None:
         """Parse one entry, or None if a field that cannot be invented is unusable.

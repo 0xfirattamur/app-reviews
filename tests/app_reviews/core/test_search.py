@@ -7,6 +7,8 @@ instantiate, so what matters instead is that the two real clients satisfy it and
 that the step they share behaves.
 """
 
+from unittest.mock import AsyncMock, Mock
+
 import httpx
 import pytest
 
@@ -74,6 +76,18 @@ class TestPoolOwnership:
 
         with AppStoreSearch(http=_pool(handler)) as client:
             assert client.search("notes") == []
+
+    async def test_injected_pool_remains_caller_owned(self):
+        pool = _pool(lambda _request: httpx.Response(200, text=""))
+        pool.close = Mock()
+        pool.aclose = AsyncMock()
+        client = AppStoreSearch(http=pool)
+
+        client.close()
+        await client.aclose()
+
+        pool.close.assert_not_called()
+        pool.aclose.assert_not_awaited()
 
 
 class TestGetAndParse:

@@ -17,13 +17,14 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from app_reviews.core.classify import error_for
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
 from app_reviews.errors import AuthError, ParseError
 from app_reviews.models.config import ServiceAccountCredentials
 
 
-class GoogleAuth:
+class GoogleAuth(PooledClient):
     """Exchanges a service-account key for Google OAuth bearer tokens.
 
     Satisfies ``core.auth.TokenSource``, so a provider can ask per request, and
@@ -62,10 +63,24 @@ class GoogleAuth:
         http: HttpClient | None = None,
     ) -> None:
         self._credentials = self._load(service_account_path)
-        self._http = http or HttpClient()
+        super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
         self._header: str | None = None
         self._expires_at = 0.0
+
+    def close(self) -> None:
+        """Clear cached credentials and close only a pool created here."""
+        self._key = None
+        self._header = None
+        self._expires_at = 0.0
+        super().close()
+
+    async def aclose(self) -> None:
+        """Async equivalent of :meth:`close`."""
+        self._key = None
+        self._header = None
+        self._expires_at = 0.0
+        await super().aclose()
 
     def authorization_header(self) -> str:
         """A ``Bearer`` value, re-exchanged once the held token nears its expiry.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, Self
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -103,3 +103,25 @@ class ConnectAuth:
     async def aauthorization_header(self) -> str:
         """Signing is local CPU work with nothing to await, so it runs off the loop."""
         return await asyncio.to_thread(self.authorization_header)
+
+    def close(self) -> None:
+        """Discard cached signing material and bearer-token state."""
+        self._key = None
+        self._token = None
+        self._expires_at = 0.0
+
+    async def aclose(self) -> None:
+        """Async lifecycle twin; cleanup itself performs no I/O."""
+        self.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
