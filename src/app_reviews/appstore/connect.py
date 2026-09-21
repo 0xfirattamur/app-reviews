@@ -212,8 +212,6 @@ class AppStoreOfficialProvider(PooledClient):
             attrs = entry["attributes"]
             if not review_id:
                 raise ValueError("no id, which deduplication keys on")
-            if attrs.get("rating") is None:
-                raise ValueError("no rating")
             if not attrs.get("createdDate"):
                 raise ValueError("no createdDate")
 
@@ -221,7 +219,7 @@ class AppStoreOfficialProvider(PooledClient):
                 store="appstore",
                 app_id=app_id,
                 country=normalise_country(attrs.get("territory")),
-                rating=int(attrs["rating"]),
+                rating=self._rating(attrs["rating"]),
                 title=self._text(attrs.get("title")),
                 body=self._text(attrs.get("body")) or "",
                 author_name=self._text(attrs.get("reviewerNickname")) or "",
@@ -239,6 +237,14 @@ class AppStoreOfficialProvider(PooledClient):
                 "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
             )
             return None
+
+    def _rating(self, value: Any) -> int:
+        """Accept only the integer 1..5 domain documented by Connect."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("rating must be an integer")
+        if not 1 <= value <= 5:
+            raise ValueError(f"rating must be 1-5, got {value}")
+        return value
 
     def _id(self, entry: Any) -> Any:
         """This entry's review id, for a warning that names it and nothing else."""

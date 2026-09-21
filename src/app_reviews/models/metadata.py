@@ -62,10 +62,22 @@ class AppMetadata:
     """
 
     def __post_init__(self) -> None:
-        if not isfinite(self.rating):
+        if isinstance(self.rating, float) and not isfinite(self.rating):
             raise ValueError("rating must be finite")
-        if not isfinite(self.rating_count):
+        if (
+            isinstance(self.rating, bool)
+            or not isinstance(self.rating, (int, float))
+            or not 0 <= self.rating <= 5
+        ):
+            raise ValueError("rating must be a finite number from 0 to 5")
+        if isinstance(self.rating_count, float) and not isfinite(self.rating_count):
             raise ValueError("rating_count must be finite")
+        if (
+            isinstance(self.rating_count, bool)
+            or not isinstance(self.rating_count, int)
+            or self.rating_count < 0
+        ):
+            raise ValueError("rating_count must be a non-negative integer")
 
     def to_dict(self) -> dict[str, Any]:
         """Return every metadata field as a JSON-safe plain dictionary."""

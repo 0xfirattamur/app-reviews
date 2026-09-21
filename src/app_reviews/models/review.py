@@ -52,6 +52,8 @@ class Review:
     def __post_init__(self) -> None:
         if not self.id.strip():
             raise ValueError("id must not be empty")
+        if isinstance(self.rating, bool) or not isinstance(self.rating, int):
+            raise ValueError("rating must be an integer")
         if not 1 <= self.rating <= 5:
             raise ValueError(f"rating must be 1-5, got {self.rating}")
         if (self.created_at is None) == (self.updated_at is None):

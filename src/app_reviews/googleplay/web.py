@@ -256,10 +256,10 @@ class GooglePlayScraperProvider(PooledClient):
                 store="googleplay",
                 app_id=app_id,
                 country=None,
-                rating=int(entry[self._RATING]),
+                rating=self._rating(entry[self._RATING]),
                 title=None,  # Play reviews have no title
-                body=entry[self._BODY] or "",
-                author_name=entry[self._AUTHOR][self._AUTHOR_NAME],
+                body=self._body(entry[self._BODY]),
+                author_name=self._author_name(entry[self._AUTHOR]),
                 app_version=self._app_version(entry),
                 # Play's web feed reports creation only. The wire carries nanoseconds;
                 # a datetime holds microseconds, so the last three digits are dropped.
@@ -267,13 +267,35 @@ class GooglePlayScraperProvider(PooledClient):
                 source="googleplay_scraper",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=entry[self._ID],
+                id=self._string(entry[self._ID], "review id"),
             )
         except _UNUSABLE as exc:
             _LOG.warning(
                 "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
             )
             return None
+
+    def _rating(self, value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("rating must be an integer")
+        return value
+
+    def _string(self, value: Any, field: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} is {type(value).__name__}, expected a string")
+        return value
+
+    def _body(self, value: Any) -> str:
+        if value is None:
+            return ""
+        return self._string(value, "review body")
+
+    def _author_name(self, value: Any) -> str:
+        if not isinstance(value, list):
+            raise TypeError(
+                f"author container is {type(value).__name__}, expected an array"
+            )
+        return self._string(value[self._AUTHOR_NAME], "author name")
 
     def _id(self, entry: Any) -> Any:
         """This entry's review id, so a warning can name it and nothing else.
@@ -293,6 +315,6 @@ class GooglePlayScraperProvider(PooledClient):
 
     def _app_version(self, entry: list[Any]) -> str | None:
         """The version the reviewer was running, where the entry reports one."""
-        if len(entry) <= self._APP_VERSION or not entry[self._APP_VERSION]:
+        if len(entry) <= self._APP_VERSION or entry[self._APP_VERSION] in (None, ""):
             return None
-        return str(entry[self._APP_VERSION])
+        return self._string(entry[self._APP_VERSION], "app version")

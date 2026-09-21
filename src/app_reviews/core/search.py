@@ -150,3 +150,15 @@ def scraped_number(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if isfinite(parsed) else default
+
+
+def scraped_rating(value: Any) -> float:
+    """A store rating in its valid 0..5 domain, otherwise the safe fallback."""
+    parsed = scraped_number(value, -1.0)
+    return parsed if 0 <= parsed <= 5 else 0.0
+
+
+def scraped_rating_count(value: Any) -> int:
+    """A whole, non-negative rating count, otherwise the safe fallback."""
+    parsed = scraped_number(value, -1.0)
+    return int(parsed) if parsed >= 0 and parsed.is_integer() else 0

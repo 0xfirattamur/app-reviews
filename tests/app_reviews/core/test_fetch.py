@@ -9,7 +9,7 @@ import pytest
 
 from app_reviews.models.country import Country
 from app_reviews.models.page import PageResult
-from app_reviews.models.result import FetchError
+from app_reviews.models.result import FetchError, FetchResult
 from app_reviews.models.types import Sort
 
 from .test_paging import NOW, FakeClient, FakeProvider, _page, _review
@@ -341,6 +341,21 @@ class TestSortAndLimit:
 
 
 class TestFilters:
+    def test_fetch_filters_each_page_instead_of_retaining_then_refiltering(
+        self, monkeypatch
+    ):
+        def late_filter(*args, **kwargs):
+            raise AssertionError("fetch retained raw reviews until final assembly")
+
+        monkeypatch.setattr(FetchResult, "filter", late_filter)
+        provider = FakeProvider(
+            [_page([_review(NOW, "keep", rating=1), _review(NOW, "drop")], None)]
+        )
+
+        result = FakeClient(provider).fetch("123", ratings=[1])
+
+        assert [review.id for review in result.reviews] == ["keep"]
+
     def test_until_filters_the_returned_set(self):
         provider = FakeProvider(
             [
@@ -372,6 +387,71 @@ class TestFilters:
         result = FakeClient(provider).fetch("123", countries=["us"], ratings=[1])
 
         assert [r.id for r in result.reviews] == ["low"]
+
+    def test_outcome_counts_wire_rows_while_only_matches_are_retained(self):
+        provider = FakeProvider(
+            [
+                _page(
+                    [
+                        _review(NOW, "keep", rating=1),
+                        _review(NOW, "drop-rating", rating=5),
+                        _review(NOW - timedelta(days=20), "drop-date", rating=1),
+                    ],
+                    None,
+                )
+            ]
+        )
+
+        result = FakeClient(provider).fetch(
+            "123", ratings=[1], since=NOW - timedelta(days=2)
+        )
+
+        assert [review.id for review in result.reviews] == ["keep"]
+        assert result.outcomes[0].reviews_fetched == 3
+
+    async def test_async_outcome_counts_wire_rows_without_retaining_rejections(self):
+        provider = FakeProvider(
+            [
+                _page(
+                    [
+                        _review(NOW, "keep", rating=1),
+                        _review(NOW, "drop", rating=5),
+                    ],
+                    None,
+                )
+            ]
+        )
+
+        result = await FakeClient(provider).afetch("123", ratings=[1])
+
+        assert [review.id for review in result.reviews] == ["keep"]
+        assert result.outcomes[0].reviews_fetched == 2
+
+    def test_each_country_counts_its_wire_rows_before_filtering(self):
+        provider = MultiCountryProvider(
+            {
+                "us": [
+                    _page(
+                        [_review(NOW, "us-keep", 1), _review(NOW, "us-drop", 5)],
+                        None,
+                    )
+                ],
+                "gb": [_page([_review(NOW, "gb-drop", 5)], None)],
+            }
+        )
+
+        result = FakeClient(provider).fetch(
+            "123", countries=["us", "gb"], ratings=[1], concurrency=1
+        )
+
+        assert [review.id for review in result.reviews] == ["us-keep"]
+        accounting = [
+            (outcome.country, outcome.reviews_fetched) for outcome in result.outcomes
+        ]
+        assert accounting == [
+            ("us", 2),
+            ("gb", 1),
+        ]
 
 
 class TestLimitWithFilters:

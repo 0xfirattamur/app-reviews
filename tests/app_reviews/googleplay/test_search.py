@@ -425,6 +425,23 @@ class TestLookup:
 
         assert _serving(page).search("minecraft")[0].price == "¥1,300"
 
+    @pytest.mark.parametrize(
+        ("micros", "formatted"),
+        [
+            (-1, None),
+            (-1_000_000, "$1.00"),
+            (1_000_000, "-$1.00"),
+            (1_000_000, "($1.00)"),
+        ],
+    )
+    def test_negative_price_values_are_unknown(self, micros, formatted) -> None:
+        app = _serving(
+            _detail_page(price_micros=micros, formatted_price=formatted)
+        ).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
     def test_not_found_returns_none(self) -> None:
         assert _serving("Not Found", status=404).lookup("com.nope") is None
 
@@ -474,6 +491,30 @@ class TestUnusableScrapedValues:
 
     def test_non_finite_numbers_fall_back_without_aborting_lookup(self) -> None:
         app = _serving(_detail_page(rating="NaN", rating_count="Infinity")).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
+    @pytest.mark.parametrize(
+        ("rating", "rating_count"),
+        [(-0.1, 10), (5.1, 10), (True, 10), (4.5, -1), (4.5, 1.5), (4.5, True)],
+    )
+    def test_out_of_domain_numbers_fall_back_without_aborting_lookup(
+        self, rating, rating_count
+    ) -> None:
+        app = _serving(_detail_page(rating=rating, rating_count=rating_count)).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == (rating if rating == 4.5 else 0.0)
+        assert app.rating_count == (rating_count if rating_count == 10 else 0)
+
+    async def test_async_lookup_uses_the_same_domain_fallbacks(self) -> None:
+        app = await _serving(_detail_page(rating=6, rating_count=-1)).alookup(
             "com.whatsapp"
         )
 

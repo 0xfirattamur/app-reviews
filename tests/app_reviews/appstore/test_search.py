@@ -157,6 +157,22 @@ class TestSearch:
         assert apps[0].rating == 0.0
         assert apps[0].rating_count == 0
 
+    @pytest.mark.parametrize(
+        ("rating", "rating_count"),
+        [(-0.1, 10), (5.1, 10), (True, 10), (4.5, -1), (4.5, 1.5), (4.5, True)],
+    )
+    def test_out_of_domain_metadata_numbers_fall_back(self, rating, rating_count):
+        result = _itunes_result()
+        result["averageUserRating"] = rating
+        result["userRatingCount"] = rating_count
+
+        [app] = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert app.rating == (rating if rating == 4.5 else 0.0)
+        assert app.rating_count == (rating_count if rating_count == 10 else 0)
+
     def test_non_200_raises_http_error(self):
         def handler(request):
             return httpx.Response(503, text="")
@@ -271,6 +287,19 @@ class TestAsyncParity:
         async_result = await _client(handler).alookup("310633997")
 
         assert sync_result == async_result
+
+    async def test_alookup_falls_back_for_invalid_metadata_domains(self):
+        result = _itunes_result()
+        result["averageUserRating"] = 6
+        result["userRatingCount"] = -1
+
+        app = await _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).alookup("310633997")
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
 
     async def test_alookup_returns_none_when_absent(self):
         def handler(request):

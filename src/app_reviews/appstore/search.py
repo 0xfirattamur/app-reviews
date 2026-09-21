@@ -13,7 +13,8 @@ from app_reviews.core.search import (
     aget_and_parse,
     get_and_parse,
     scraped_datetime,
-    scraped_number,
+    scraped_rating,
+    scraped_rating_count,
     scraped_text,
 )
 from app_reviews.core.validation import require_non_negative
@@ -189,8 +190,8 @@ class AppStoreSearch(PooledClient):
             category=scraped_text(result.get("primaryGenreName")) or "Unknown",
             price=scraped_text(result.get("formattedPrice")) or "Unknown",
             version=scraped_text(result.get("version")) or "Unknown",
-            rating=scraped_number(result.get("averageUserRating"), 0.0),
-            rating_count=int(scraped_number(result.get("userRatingCount"), 0)),
+            rating=scraped_rating(result.get("averageUserRating")),
+            rating_count=scraped_rating_count(result.get("userRatingCount")),
             url=scraped_text(result.get("trackViewUrl"))
             or f"https://apps.apple.com/app/id{app_id}",
             icon_url=scraped_text(result.get("artworkUrl512")),

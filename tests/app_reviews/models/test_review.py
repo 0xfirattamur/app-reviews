@@ -44,6 +44,11 @@ class TestReviewRatingValidation:
         with pytest.raises(ValueError, match="rating must be 1-5"):
             _make_review(rating=-1)
 
+    @pytest.mark.parametrize("rating", [True, False, 1.5, "5"])
+    def test_rating_must_be_a_real_integer(self, rating):
+        with pytest.raises(ValueError, match="rating must be an integer"):
+            _make_review(rating=rating)
+
 
 class TestReviewIdentityAndTimestampValidation:
     def test_id_is_required(self):

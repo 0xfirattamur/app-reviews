@@ -575,6 +575,30 @@ class TestARepeatingCursorEndsTheWalk:
         assert provider.calls == 2
         assert pages[-1].stopped_because == "cycle"
 
+    def test_a_resumed_walk_does_not_request_its_initial_cursor_twice(self):
+        provider = FakeProvider(
+            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+        )
+
+        pages = list(FakeClient(provider).iter_pages("123", cursor="1"))
+
+        assert provider.calls == [("us", "1")]
+        assert [review.id for review in pages[0].reviews] == ["resumed"]
+        assert pages[0].stopped_because == "cycle"
+
+    async def test_an_async_resumed_walk_does_not_request_initial_cursor_twice(self):
+        provider = FakeProvider(
+            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+        )
+
+        pages = [
+            page async for page in FakeClient(provider).aiter_pages("123", cursor="1")
+        ]
+
+        assert provider.calls == [("us", "1")]
+        assert [review.id for review in pages[0].reviews] == ["resumed"]
+        assert pages[0].stopped_because == "cycle"
+
     def test_iter_reviews_does_not_spin_either(self):
         provider = _CyclingProvider()
 

@@ -574,6 +574,20 @@ class TestConnectFieldResilience:
         assert len(page.reviews) == 1
         assert page.reviews[0].author_name == ""
 
+    @pytest.mark.parametrize("rating", [True, 4.5, "5"])
+    def test_a_coercible_non_integer_rating_is_skipped(self, rating):
+        page = self._one(lambda e: e["attributes"].update(rating=rating))
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
+
+    @pytest.mark.parametrize("rating", [1, 3, 5])
+    def test_a_real_integer_rating_is_kept(self, rating):
+        page = self._one(lambda e: e["attributes"].update(rating=rating))
+
+        assert [review.rating for review in page.reviews] == [rating]
+        assert page.skipped_reviews == 0
+
     @pytest.mark.parametrize(
         "mutate",
         [

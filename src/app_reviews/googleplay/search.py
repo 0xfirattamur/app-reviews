@@ -16,7 +16,8 @@ from app_reviews.core.http import HttpResponse
 from app_reviews.core.search import (
     aget_and_parse,
     get_and_parse,
-    scraped_number,
+    scraped_rating,
+    scraped_rating_count,
     scraped_text,
 )
 from app_reviews.core.validation import require_non_negative
@@ -374,8 +375,8 @@ class GooglePlaySearch(PooledClient):
             category=scraped_text(self._at(block, self._CATEGORY)) or "Unknown",
             price=self._price(self._at(block, self._PRICE)),
             version=scraped_text(self._at(block, self._DETAIL_VERSION)) or self.VERSION,
-            rating=scraped_number(self._at(block, self._RATING), 0.0),
-            rating_count=int(scraped_number(self._at(block, self._RATING_COUNT), 0)),
+            rating=scraped_rating(self._at(block, self._RATING)),
+            rating_count=scraped_rating_count(self._at(block, self._RATING_COUNT)),
             url=self._url(app_id),
             icon_url=scraped_text(self._at(block, self._ICON)),
             current_version_release_date=self._display_date(
@@ -417,7 +418,7 @@ class GooglePlaySearch(PooledClient):
             category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or "Unknown",
             price=self._price(self._at(block, self._ENTRY_PRICE)),
             version=self.VERSION,
-            rating=scraped_number(self._at(block, self._ENTRY_RATING), 0.0),
+            rating=scraped_rating(self._at(block, self._ENTRY_RATING)),
             # This layout carries no count anywhere; only a detail block does.
             rating_count=0,
             url=self._url(app_id),
@@ -461,10 +462,19 @@ class GooglePlaySearch(PooledClient):
             amount = float(micros)
             if not math.isfinite(amount):
                 return "Unknown"
+            if amount < 0:
+                return "Unknown"
             if amount == 0:
                 return "Free"
             if len(price) > 2 and isinstance(price[2], str) and price[2].strip():
-                return price[2]
+                formatted = price[2].strip()
+                if (
+                    "-" in formatted
+                    or "\u2212" in formatted
+                    or (formatted.startswith("(") and formatted.endswith(")"))
+                ):
+                    return "Unknown"
+                return formatted
             currency = price[1]
             if not isinstance(currency, str) or not currency.strip():
                 return "Unknown"

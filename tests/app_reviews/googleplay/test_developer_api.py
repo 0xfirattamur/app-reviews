@@ -161,6 +161,30 @@ class TestFetchPage:
 
         assert page.reviews[0].updated_at.microsecond == 839_000
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("reviewId", 123),
+            ("authorName", ["Dave"]),
+            ("text", {"body": "fine"}),
+            ("appVersionName", 501),
+            ("reviewerLanguage", ["tr"]),
+            ("starRating", 4.5),
+            ("starRating", True),
+        ],
+    )
+    def test_wrong_typed_present_scalar_skips_the_review(self, field, value):
+        entry = _dev_entry(reviewer_language="en")
+        if field in {"reviewId", "authorName"}:
+            entry[field] = value
+        else:
+            entry["comments"][0]["userComment"][field] = value
+
+        page = _serving(_payload([entry])).fetch_page("com.example.app", "", None)
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
+
 
 class TestAppIdIsNotAPathInjection:
     """``app_id`` lands in the URL path of a request carrying a bearer token.

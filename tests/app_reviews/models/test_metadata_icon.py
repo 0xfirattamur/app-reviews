@@ -95,3 +95,17 @@ class TestAppMetadataToDict:
     def test_non_finite_rating_counts_are_rejected(self, rating_count):
         with pytest.raises(ValueError, match="rating_count must be finite"):
             _metadata(rating_count=rating_count)
+
+    @pytest.mark.parametrize("rating", [True, False, "4.5", -0.1, 5.1])
+    def test_rating_must_be_a_non_boolean_number_in_store_range(self, rating):
+        with pytest.raises(
+            ValueError, match="rating must be a finite number from 0 to 5"
+        ):
+            _metadata(rating=rating)
+
+    @pytest.mark.parametrize("rating_count", [True, False, 1.5, "10", -1])
+    def test_rating_count_must_be_a_non_negative_integer(self, rating_count):
+        with pytest.raises(
+            ValueError, match="rating_count must be a non-negative integer"
+        ):
+            _metadata(rating_count=rating_count)

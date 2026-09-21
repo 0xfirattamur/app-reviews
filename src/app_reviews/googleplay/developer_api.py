@@ -189,24 +189,44 @@ class GooglePlayOfficialProvider(PooledClient):
                 country=None,
                 # No default for starRating: 0 fails Review's 1-5 invariant, so a
                 # default could only ever turn a missing field into a raised error.
-                rating=int(comment["starRating"]),
+                rating=self._rating(comment["starRating"]),
                 title=title,
                 body=body,
-                author_name=entry.get("authorName", ""),
-                app_version=comment.get("appVersionName"),
-                language=comment.get("reviewerLanguage"),
+                author_name=self._string(entry.get("authorName", ""), "authorName"),
+                app_version=self._optional_string(
+                    comment.get("appVersionName"), "appVersionName"
+                ),
+                language=self._optional_string(
+                    comment.get("reviewerLanguage"), "reviewerLanguage"
+                ),
                 # The API reports lastModified only; there is no creation date.
                 updated_at=self._timestamp(comment["lastModified"]),
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=entry["reviewId"],
+                id=self._string(entry["reviewId"], "reviewId"),
             )
         except _UNUSABLE as exc:
             _LOG.warning(
                 "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
             )
             return None
+
+    def _rating(self, value: Any) -> int:
+        """A wire star rating is an integer; coercion would truncate corruption."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("starRating must be an integer")
+        return value
+
+    def _string(self, value: Any, field: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} is {type(value).__name__}, expected a string")
+        return value
+
+    def _optional_string(self, value: Any, field: str) -> str | None:
+        if value is None:
+            return None
+        return self._string(value, field)
 
     def _text(self, value: Any) -> tuple[str | None, str]:
         """Map Play's text, including its documented legacy title separator."""

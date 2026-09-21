@@ -202,6 +202,28 @@ class TestFieldMapping:
         assert page.error is None
         assert page.skipped_reviews == 1
 
+    @pytest.mark.parametrize(
+        ("slot", "value"),
+        [
+            (0, 123),
+            (1, "Carol"),
+            (1, [["Carol"]]),
+            (2, 4.5),
+            (2, True),
+            (4, {"body": "fine"}),
+            (10, 210),
+            (10, False),
+        ],
+    )
+    def test_wrong_typed_present_scalar_skips_the_review(self, slot, value):
+        entry = _gp_entry()
+        entry[slot] = value
+
+        page = _serving(_gp_body([entry])).fetch_page("com.example.app", "us", None)
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
+
 
 class TestUnusableTimestamps:
     """``fetch_page`` never raises; ``iter_pages`` is documented on that."""

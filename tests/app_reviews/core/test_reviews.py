@@ -5,6 +5,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from app_reviews import AppStoreReviews, GooglePlayReviews
 from app_reviews.core.http import HttpClient
@@ -140,6 +141,56 @@ class TestGooglePlayReviews:
         )
         result = GooglePlayReviews().fetch("com.example.app")
         assert len(result) == 1
+
+    @pytest.mark.parametrize(
+        "auth",
+        [None, GooglePlayAuth(service_account_path="must-not-be-read.json")],
+    )
+    def test_country_arguments_fail_before_building_either_play_provider(self, auth):
+        client = GooglePlayReviews(auth=auth)
+        with patch.object(
+            client, "_build_provider", side_effect=AssertionError("provider built")
+        ) as build:
+            with pytest.raises(ValueError, match="no country dimension"):
+                client.fetch_page("com.example", country="tr")
+            with pytest.raises(ValueError, match="no country dimension"):
+                list(client.iter_pages("com.example", country="tr"))
+            with pytest.raises(ValueError, match="no country dimension"):
+                list(client.iter_reviews("com.example", countries=[]))
+            with pytest.raises(ValueError, match="no country dimension"):
+                client.fetch("com.example", countries=["tr"])
+            with pytest.raises(ValueError, match="no country dimension"):
+                client.resolve_countries([])
+
+        build.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "auth",
+        [None, GooglePlayAuth(service_account_path="must-not-be-read.json")],
+    )
+    async def test_async_country_arguments_fail_before_provider_or_io(self, auth):
+        client = GooglePlayReviews(auth=auth)
+        with patch.object(
+            client, "_abuild_provider", side_effect=AssertionError("provider built")
+        ) as build:
+            with pytest.raises(ValueError, match="no country dimension"):
+                await client.afetch_page("com.example", country="tr")
+            with pytest.raises(ValueError, match="no country dimension"):
+                _ = [
+                    page
+                    async for page in client.aiter_pages("com.example", country="tr")
+                ]
+            with pytest.raises(ValueError, match="no country dimension"):
+                _ = [
+                    review
+                    async for review in client.aiter_reviews(
+                        "com.example", countries=[]
+                    )
+                ]
+            with pytest.raises(ValueError, match="no country dimension"):
+                await client.afetch("com.example", countries=["tr"])
+
+        build.assert_not_called()
 
 
 class _SyncTrapGoogleAuth:
