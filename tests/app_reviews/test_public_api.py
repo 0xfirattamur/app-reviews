@@ -11,6 +11,7 @@ EXPECTED = {
     "AuthError",
     "Country",
     "CountryOutcome",
+    "ConnectCredentials",
     "ErrorKind",
     "FetchError",
     "FetchResult",
@@ -18,18 +19,22 @@ EXPECTED = {
     "GooglePlayReviews",
     "GooglePlaySearch",
     "HttpClient",
+    "HttpResponse",
     "HttpError",
     "NotFoundError",
     "ParseError",
     "RateLimitError",
+    "RequestError",
     "PageResult",
     "RetryConfig",
     "Review",
+    "ReviewProvider",
     "ServerError",
     "Sort",
     "Source",
     "StopReason",
     "Store",
+    "TokenSource",
     "TransportError",
     "__version__",
 }
@@ -110,6 +115,12 @@ class TestStoreModulesExposeTheirProviders:
 
         assert googleplay.GooglePlayScraperProvider.source == "googleplay_scraper"
         assert googleplay.GooglePlayOfficialProvider.source == "googleplay_official"
+
+    def test_provider_extension_contracts_are_public(self):
+        assert app_reviews.ReviewProvider is not None
+        assert app_reviews.TokenSource is not None
+        assert app_reviews.HttpResponse(status=200, body="").ok
+        assert app_reviews.ConnectCredentials is not None
 
     def test_core_is_not_advertised(self):
         """``core`` is the engine, not API; it exports nothing by name."""

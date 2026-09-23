@@ -5,8 +5,9 @@ This module is the API. Every name below is importable straight from
 
     from app_reviews import AppStoreReviews, Country, Sort
 
-Reviews come back as ``Review`` objects; ``FetchResult.to_dicts()`` gives you
-JSON-serialisable plain dicts when you want to hand them to ``json`` or ``csv``.
+Reviews come back as ``Review`` objects. ``FetchResult.to_dict()`` gives an
+automation boundary the complete JSON-safe result, while ``to_dicts()`` keeps
+the review-row compatibility shape used for JSONL or CSV.
 
 Nothing else needs importing from a submodule path, which is deliberate: it is
 what lets the package's internal shape change without breaking callers. Two
@@ -24,7 +25,9 @@ import logging
 from importlib.metadata import version
 
 from app_reviews.appstore import AppStoreReviews, AppStoreSearch
-from app_reviews.core.http import HttpClient
+from app_reviews.core.auth import TokenSource
+from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.provider import ReviewProvider
 from app_reviews.errors import (
     AppReviewsError,
     AuthError,
@@ -32,11 +35,17 @@ from app_reviews.errors import (
     NotFoundError,
     ParseError,
     RateLimitError,
+    RequestError,
     ServerError,
     TransportError,
 )
 from app_reviews.googleplay import GooglePlayReviews, GooglePlaySearch
-from app_reviews.models.config import AppStoreAuth, GooglePlayAuth, RetryConfig
+from app_reviews.models.config import (
+    AppStoreAuth,
+    ConnectCredentials,
+    GooglePlayAuth,
+    RetryConfig,
+)
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata
 from app_reviews.models.page import PageResult
@@ -55,6 +64,7 @@ __all__ = [
     "AppStoreReviews",
     "AppStoreSearch",
     "AuthError",
+    "ConnectCredentials",
     "Country",
     "CountryOutcome",
     "ErrorKind",
@@ -65,17 +75,21 @@ __all__ = [
     "GooglePlaySearch",
     "HttpClient",
     "HttpError",
+    "HttpResponse",
     "NotFoundError",
     "PageResult",
     "ParseError",
     "RateLimitError",
+    "RequestError",
     "RetryConfig",
     "Review",
+    "ReviewProvider",
     "ServerError",
     "Sort",
     "Source",
     "StopReason",
     "Store",
+    "TokenSource",
     "TransportError",
     "__version__",
 ]

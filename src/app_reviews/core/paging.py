@@ -71,6 +71,7 @@ def with_stop_reason(page: PageResult, reason: StopReason | None) -> PageResult:
         next_cursor=page.next_cursor,
         error=page.error,
         stopped_because=reason,
+        skipped_reviews=page.skipped_reviews,
     )
 
 
@@ -87,11 +88,22 @@ class CountryCollector:
         self._pages = 0
         self._reason: StopReason = "exhausted"
         self._error: FetchError | None = None
+        self._skipped_reviews = 0
+        self._reviews_fetched = 0
 
-    def add(self, page: PageResult) -> None:
-        """Fold one page in. Only a page carrying a stop reason sets one."""
+    def add(self, page: PageResult, *, reviews_fetched: int | None = None) -> None:
+        """Fold one page in, retaining wire-row accounting after filtering.
+
+        ``reviews_fetched`` defaults to the page length for callers that retain
+        every row. ``fetch`` supplies the original page length after replacing
+        ``page.reviews`` with only the rows that qualify for its filters.
+        """
         self._pages += 1
         self.reviews.extend(page.reviews)
+        self._reviews_fetched += (
+            len(page.reviews) if reviews_fetched is None else reviews_fetched
+        )
+        self._skipped_reviews += page.skipped_reviews
         if page.stopped_because is not None:
             self._reason = page.stopped_because
             self._error = page.error
@@ -101,10 +113,11 @@ class CountryCollector:
         return CountryOutcome(
             country=self._country,
             pages=self._pages,
-            reviews_fetched=len(self.reviews),
+            reviews_fetched=self._reviews_fetched,
             stopped_because=self._reason,
             error=self._error,
             elapsed=time.monotonic() - self._started,
+            skipped_reviews=self._skipped_reviews,
         )
 
 
@@ -129,6 +142,28 @@ page, because one empty page followed by more data is normal (a Play page whose
 rows all failed to parse, a filtered Connect page).
 """
 
+_STOP_REASON_PRIORITY: dict[StopReason, int] = {
+    "error": 0,
+    "exhausted": 1,
+    "since": 2,
+    "limit": 3,
+    "cycle": 4,
+    "stalled": 5,
+    "max_pages": 6,
+}
+"""Which truthful stop reason wins when two conditions land on one page."""
+
+
+def prefer_stop_reason(
+    current: StopReason | None, candidate: StopReason | None
+) -> StopReason | None:
+    """Return the higher-priority reason under ``StopPolicy`` precedence."""
+    if current is None:
+        return candidate
+    if candidate is None:
+        return current
+    return min((current, candidate), key=_STOP_REASON_PRIORITY.__getitem__)
+
 
 class StopPolicy:
     """Decides when a walk ends. One instance per country walk, since it keeps count."""
@@ -140,6 +175,7 @@ class StopPolicy:
         limit: int | None = None,
         max_pages: int = DEFAULT_MAX_PAGES,
         max_empty_pages: int = DEFAULT_MAX_EMPTY_PAGES,
+        initial_cursor: str | None = None,
     ) -> None:
         self._since = to_aware_datetime(since) if since is not None else None
         self._trust_order = orders_newest_first(source)
@@ -149,7 +185,10 @@ class StopPolicy:
         self._seen = 0
         self._pages = 0
         self._empty_streak = 0
-        self._cursors: set[str] = set()
+        # A resumed walk has already consumed ``initial_cursor`` by the time its
+        # first response is evaluated. If that response points back to the same
+        # cursor, following it would request and duplicate the page again.
+        self._cursors: set[str] = {initial_cursor} if initial_cursor else set()
 
     def evaluate(self, page: PageResult) -> tuple[StopReason | None, str | None]:
         """Decide whether the walk ends on this page.

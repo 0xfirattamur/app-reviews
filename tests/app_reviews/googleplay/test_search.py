@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app_reviews.core.http import HttpClient
-from app_reviews.errors import HttpError, ParseError
+from app_reviews.errors import HttpError, ParseError, RequestError
 from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
@@ -35,6 +35,8 @@ def _detail_block(
     rating: Any = 4.7,
     rating_count: Any = 232000,
     price_micros: Any = 0,
+    currency: Any = "USD",
+    formatted_price: Any = None,
     version: Any = None,
     released_on: Any = None,
     updated_on: Any = None,
@@ -60,7 +62,10 @@ def _detail_block(
         [None, None, f"https://play.google.com/store/apps/details?id={app_id}"]
     ]
     block[51] = [[None, rating], None, [None, rating_count]]
-    block[57] = [[[[[None, [[price_micros, "USD"]]]]]]]
+    price = [price_micros, currency]
+    if formatted_price is not None:
+        price.append(formatted_price)
+    block[57] = [[[[[None, [price]]]]]]
     block[68] = ["WhatsApp LLC"]
     block[79] = [[["Communication", None, "COMMUNICATION"]]]
     block[95] = [[None, None, None, [None, None, _ICON]]]
@@ -77,6 +82,8 @@ def _entry(
     name: Any = "WhatsApp Messenger",
     rating: Any = 4.7,
     price_micros: Any = 0,
+    currency: Any = "USD",
+    formatted_price: Any = None,
 ) -> list[Any]:
     """A compact regular search entry: its own numbering, fewer fields."""
     app: list[Any] = [None] * 15
@@ -85,7 +92,10 @@ def _entry(
     app[3] = name
     app[4] = [None, rating]
     app[5] = "Communication"
-    app[8] = [None, [None, [price_micros, "USD"]]]
+    price = [price_micros, currency]
+    if formatted_price is not None:
+        price.append(formatted_price)
+    app[8] = [None, [None, price]]
     app[14] = "WhatsApp LLC"
     return [app]
 
@@ -279,6 +289,29 @@ class TestTheDetailVersionIsRead:
         page = _search_page(groups=[[_entry(), _entry(app_id="com.whatsapp.w4b")]])
         assert len(_serving(page).search("whatsapp", limit=1)) == 1
 
+    def test_zero_limit_returns_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page(groups=[[_entry()]]))
+
+        assert _client(handler).search("whatsapp", limit=0) == []
+        assert calls == 0
+
+    def test_negative_limit_is_rejected_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text="")
+
+        with pytest.raises(ValueError, match="limit"):
+            _client(handler).search("whatsapp", limit=-1)
+        assert calls == 0
+
     def test_skips_an_entry_with_no_app_id(self) -> None:
         page = _search_page(groups=[[_entry(app_id=""), _entry(app_id="com.ok")]])
         results = _serving(page).search("whatsapp")
@@ -287,6 +320,10 @@ class TestTheDetailVersionIsRead:
     def test_non_200_raises_http_error(self) -> None:
         with pytest.raises(HttpError, match="503"):
             _serving("", status=503).search("whatsapp")
+
+    def test_public_search_403_is_not_an_auth_error(self) -> None:
+        with pytest.raises(RequestError, match="403"):
+            _serving("", status=403).search("whatsapp")
 
     def test_transport_failure_raises_http_error(self) -> None:
         def handler(request):
@@ -356,9 +393,54 @@ class TestLookup:
         assert app.icon_url == _ICON
 
     def test_paid_price_is_formatted_from_micros(self) -> None:
-        app = _serving(_detail_page(price_micros=1_990_000)).lookup("com.whatsapp")
+        app = _serving(
+            _detail_page(
+                price_micros=1_990_000,
+                formatted_price="$1.99",
+            )
+        ).lookup("com.whatsapp")
         assert app is not None
         assert app.price == "$1.99"
+
+    def test_paid_price_preserves_the_storefront_currency(self) -> None:
+        display = "TRY\N{NO-BREAK SPACE}109.00"
+        app = _serving(
+            _detail_page(
+                price_micros=109_000_000,
+                currency="TRY",
+                formatted_price=display,
+            )
+        ).lookup("com.minecraft")
+
+        assert app is not None
+        assert app.price == display
+
+    def test_search_result_preserves_the_storefront_currency(self) -> None:
+        entry = _entry(
+            price_micros=1_300_000_000,
+            currency="JPY",
+            formatted_price="¥1,300",
+        )
+        page = _search_page(groups=[[entry]])
+
+        assert _serving(page).search("minecraft")[0].price == "¥1,300"
+
+    @pytest.mark.parametrize(
+        ("micros", "formatted"),
+        [
+            (-1, None),
+            (-1_000_000, "$1.00"),
+            (1_000_000, "-$1.00"),
+            (1_000_000, "($1.00)"),
+        ],
+    )
+    def test_negative_price_values_are_unknown(self, micros, formatted) -> None:
+        app = _serving(
+            _detail_page(price_micros=micros, formatted_price=formatted)
+        ).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
 
     def test_not_found_returns_none(self) -> None:
         assert _serving("Not Found", status=404).lookup("com.nope") is None
@@ -407,10 +489,91 @@ class TestUnusableScrapedValues:
         assert app is not None
         assert app.rating_count == 0
 
+    def test_non_finite_numbers_fall_back_without_aborting_lookup(self) -> None:
+        app = _serving(_detail_page(rating="NaN", rating_count="Infinity")).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
+    def test_huge_numbers_fall_back_without_aborting_lookup(self) -> None:
+        app = _serving(_detail_page(rating=10**400, rating_count=10**400)).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
+    @pytest.mark.parametrize(
+        ("rating", "rating_count"),
+        [(-0.1, 10), (5.1, 10), (True, 10), (4.5, -1), (4.5, 1.5), (4.5, True)],
+    )
+    def test_out_of_domain_numbers_fall_back_without_aborting_lookup(
+        self, rating, rating_count
+    ) -> None:
+        app = _serving(_detail_page(rating=rating, rating_count=rating_count)).lookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == (rating if rating == 4.5 else 0.0)
+        assert app.rating_count == (rating_count if rating_count == 10 else 0)
+
+    async def test_async_lookup_uses_the_same_domain_fallbacks(self) -> None:
+        app = await _serving(_detail_page(rating=6, rating_count=-1)).alookup(
+            "com.whatsapp"
+        )
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
     def test_non_numeric_price_is_unknown(self) -> None:
         app = _serving(_detail_page(price_micros="free-ish")).lookup("com.whatsapp")
         assert app is not None
         assert app.price == "Unknown"
+
+    @pytest.mark.parametrize(
+        "price",
+        [
+            {},
+            {0: 1_000_000, 1: "USD"},
+            [],
+            [1_000_000],
+            [float("nan"), "USD", "$1.00"],
+            [float("inf"), "USD", "$1.00"],
+        ],
+    )
+    def test_lookup_malformed_price_container_is_unknown(self, price: Any) -> None:
+        block = _detail_block()
+        block[57] = [[[[[None, [price]]]]]]
+        page = _page("ds:5", [None, [None, None, block]])
+
+        app = _serving(page).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
+    @pytest.mark.parametrize(
+        "price",
+        [
+            {},
+            {0: 1_000_000, 1: "USD"},
+            [],
+            [1_000_000],
+            [float("nan"), "USD", "$1.00"],
+            [float("-inf"), "USD", "$1.00"],
+        ],
+    )
+    def test_search_malformed_price_container_is_unknown(self, price: Any) -> None:
+        entry = _entry()
+        entry[0][8] = [None, [None, price]]
+        page = _search_page(groups=[[entry]])
+
+        assert _serving(page).search("whatsapp")[0].price == "Unknown"
 
     def test_a_non_string_name_falls_back(self) -> None:
         page = _search_page(groups=[[_entry(name=["WhatsApp"])]])
@@ -434,6 +597,29 @@ class TestFieldsPlayDoesNotPublish:
 
 
 class TestAsyncParity:
+    async def test_asearch_zero_limit_returns_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page())
+
+        assert await _client(handler).asearch("whatsapp", limit=0) == []
+        assert calls == 0
+
+    async def test_asearch_rejects_negative_limit_without_io(self) -> None:
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_search_page())
+
+        with pytest.raises(ValueError, match="limit"):
+            await _client(handler).asearch("whatsapp", limit=-1)
+        assert calls == 0
+
     async def test_asearch_matches_search(self) -> None:
         page = _search_page()
         sync = _serving(page).search("whatsapp")
@@ -452,6 +638,10 @@ class TestAsyncParity:
     async def test_asearch_raises_on_error_status(self) -> None:
         with pytest.raises(HttpError, match="503"):
             await _serving("", status=503).asearch("whatsapp")
+
+    async def test_public_alookup_401_is_not_an_auth_error(self) -> None:
+        with pytest.raises(RequestError, match="401"):
+            await _serving("", status=401).alookup("com.whatsapp")
 
     async def test_alookup_raises_on_error_status(self) -> None:
         with pytest.raises(HttpError, match="500"):

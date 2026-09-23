@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
@@ -19,7 +20,7 @@ from app_reviews.models.types import Source
 _LOG = logging.getLogger(__name__)
 
 
-class AppStoreScraperProvider:
+class AppStoreScraperProvider(PooledClient):
     """Fetches one page of App Store RSS reviews per call.
 
     Public JSON feed, no credentials, one request per country.
@@ -35,7 +36,7 @@ class AppStoreScraperProvider:
     )
 
     def __init__(self, *, http: HttpClient | None = None) -> None:
-        self._http = http or HttpClient()
+        super().__init__(http=http)
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one RSS page. ``cursor`` is the page number, None meaning page 1."""
@@ -105,14 +106,19 @@ class AppStoreScraperProvider:
                     status=response.status,
                     message=response.transport_error,
                     transport_error=response.transport_error,
+                    credentialed=False,
                 )
             )
         if not response.ok:
+            message = f"HTTP {response.status} from the App Store RSS feed"
+            if response.status == 403:
+                message += "; access may be blocked or throttled"
             return PageResult(
                 error=fetch_error_from_response(
                     country=country,
                     status=response.status,
-                    message=f"HTTP {response.status} from the App Store RSS feed",
+                    message=message,
+                    credentialed=False,
                 )
             )
 
@@ -134,7 +140,11 @@ class AppStoreScraperProvider:
         # entries all fail still means Apple has more, and reporting no cursor
         # here would end the walk as "exhausted", meaning no more data.
         next_cursor = str(page + 1) if entries and page < self.MAX_PAGES else None
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _entries(self, body: Any) -> list[Any]:
         """The feed's entries, always as a list.

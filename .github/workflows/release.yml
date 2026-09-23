@@ -5,26 +5,150 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  publish:
+  validate-release:
     runs-on: ubuntu-latest
-    environment: pypi
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: "latest"
-      - uses: actions/setup-python@v7
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - run: uv build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Validate release identity and ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python scripts/verify_release.py --tag "$RELEASE_TAG" --ref "$GITHUB_REF" --sha "$GITHUB_SHA" --default-branch "$GITHUB_DEFAULT_BRANCH"
+
+  test-matrix:
+    needs: validate-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.9.15"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --group dev
+      - run: uv run pytest
+
+  verify:
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.9.15"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked release dependencies
+        run: uv sync --locked --group dev --group release
+      - name: Lint
+        run: make lint
+      - name: Type check
+        run: make typecheck
+      - name: Build documentation
+        run: make docs
+      - name: Build distributions once
+        run: uv build --no-build-isolation --out-dir dist
+      - name: Check wheel structure
+        run: uv run --locked --group release check-wheel-contents dist/*.whl
+      - name: Rebuild wheel from sdist
+        run: uv run --locked --group release python scripts/rebuild_wheel_from_sdist.py --dist-dir dist --output-dir dist-from-sdist
+      - name: Inspect distribution contents
+        run: uv run --locked --group release python scripts/verify_artifacts.py --dist-dir dist --project pyproject.toml --rebuilt-wheel-dir dist-from-sdist
+      - name: Smoke test installed wheel
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: uv run --locked --group release python scripts/smoke_test_wheel.py --dist-dir dist --expected-version "$RELEASE_VERSION"
+      - name: Stage verified release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir release
+          cp ".github/release-notes/${RELEASE_TAG}.md" release/release-notes.md
+      - name: Upload immutable distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-distributions-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload verified release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes-${{ github.sha }}
+          path: release/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-pypi:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-distributions-${{ github.sha }}
+          path: dist
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
           attestations: true
-      - uses: softprops/action-gh-release@v3
+
+  publish-github:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          body_path: .github/release-notes/${{ github.ref_name }}.md
-          generate_release_notes: true
+          name: release-distributions-${{ github.sha }}
+          path: dist
+      - name: Download verified release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes-${{ github.sha }}
+          path: release
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          body_path: release/release-notes.md
+          files: dist/*
+          generate_release_notes: false

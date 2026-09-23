@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 
 from app_reviews.core.http import HttpClient
 from app_reviews.core.provider import ReviewProvider
@@ -11,6 +12,7 @@ from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
 from app_reviews.googleplay.web import GooglePlayScraperProvider
 from app_reviews.models.config import GooglePlayAuth, RetryConfig
+from app_reviews.models.country import Country, normalise_country
 
 
 class GooglePlayReviews(BaseReviews):
@@ -58,3 +60,20 @@ class GooglePlayReviews(BaseReviews):
         retry policy as the review requests, and lets it reuse the connection.
         """
         return GoogleAuth(auth.service_account_path, http=self._http)
+
+    def _validate_country_argument(self, country: Country | str | None) -> None:
+        if normalise_country(country, warn_unknown=False) is not None:
+            raise ValueError(
+                "Google Play reviews have no country dimension; omit country"
+            )
+
+    def _validate_countries_argument(
+        self, countries: Collection[Country | str] | None
+    ) -> None:
+        if countries is not None and any(
+            normalise_country(country, warn_unknown=False) is not None
+            for country in countries
+        ):
+            raise ValueError(
+                "Google Play reviews have no country dimension; omit countries"
+            )

@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
@@ -36,7 +37,7 @@ raises them for a seconds value outside the platform's range, and neither is a
 """
 
 
-class GooglePlayOfficialProvider:
+class GooglePlayOfficialProvider(PooledClient):
     """Fetches one page from the Google Play Developer API v3.
 
     Global API: one request, no country dimension, and the API reports no
@@ -54,8 +55,8 @@ class GooglePlayOfficialProvider:
     )
 
     def __init__(self, auth: TokenSource, *, http: HttpClient | None = None) -> None:
+        super().__init__(http=http)
         self._auth = auth
-        self._http = http or HttpClient()
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. ``cursor`` is the nextPageToken from the last response."""
@@ -89,7 +90,10 @@ class GooglePlayOfficialProvider:
         value, which the client encodes.
         """
         url = self.URL_TEMPLATE.format(app_id=quote(app_id, safe=""))
-        return url, {"token": cursor} if cursor else {}
+        params = {"maxResults": "100"}
+        if cursor:
+            params["token"] = cursor
+        return url, params
 
     def _to_page(self, response: HttpResponse, app_id: str) -> PageResult:
         """Turn one HTTP outcome into a ``PageResult``.
@@ -138,7 +142,11 @@ class GooglePlayOfficialProvider:
         # A malformed envelope is a page-level error; a single bad entry is not.
         mapped = (self._review(entry, app_id) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _cursor(self, data: dict[str, Any]) -> str | None:
         """The next page token, or None on the last page.
@@ -173,6 +181,7 @@ class GooglePlayOfficialProvider:
         """
         try:
             comment = self._user_comment(entry)
+            title, body = self._text(comment.get("text", ""))
             return Review(
                 store="googleplay",
                 app_id=app_id,
@@ -180,23 +189,53 @@ class GooglePlayOfficialProvider:
                 country=None,
                 # No default for starRating: 0 fails Review's 1-5 invariant, so a
                 # default could only ever turn a missing field into a raised error.
-                rating=int(comment["starRating"]),
-                title=None,  # Play reviews have no title
-                body=comment.get("text", ""),
-                author_name=entry.get("authorName", ""),
-                app_version=comment.get("appVersionName"),
+                rating=self._rating(comment["starRating"]),
+                title=title,
+                body=body,
+                author_name=self._string(entry.get("authorName", ""), "authorName"),
+                app_version=self._optional_string(
+                    comment.get("appVersionName"), "appVersionName"
+                ),
+                language=self._optional_string(
+                    comment.get("reviewerLanguage"), "reviewerLanguage"
+                ),
                 # The API reports lastModified only; there is no creation date.
                 updated_at=self._timestamp(comment["lastModified"]),
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=entry["reviewId"],
+                id=self._string(entry["reviewId"], "reviewId"),
             )
         except _UNUSABLE as exc:
             _LOG.warning(
                 "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
             )
             return None
+
+    def _rating(self, value: Any) -> int:
+        """A wire star rating is an integer; coercion would truncate corruption."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("starRating must be an integer")
+        return value
+
+    def _string(self, value: Any, field: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} is {type(value).__name__}, expected a string")
+        return value
+
+    def _optional_string(self, value: Any, field: str) -> str | None:
+        if value is None:
+            return None
+        return self._string(value, field)
+
+    def _text(self, value: Any) -> tuple[str | None, str]:
+        """Map Play's text, including its documented legacy title separator."""
+        if not isinstance(value, str):
+            raise TypeError(f"review text is {type(value).__name__}, expected a string")
+        if "\t" not in value:
+            return None, value
+        title, body = value.split("\t", 1)
+        return title or None, body
 
     def _user_comment(self, entry: Any) -> Any:
         """The reviewer's own comment out of the ``comments`` list.

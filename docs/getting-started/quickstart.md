@@ -1,3 +1,7 @@
+---
+description: Fetch bounded Apple App Store and Google Play reviews with context-managed Python clients.
+---
+
 # Quick Start
 
 Fetching reviews from both stores, with no credentials.
@@ -9,8 +13,8 @@ Fetching reviews from both stores, with no credentials.
 ```python
 from app_reviews import AppStoreReviews
 
-client = AppStoreReviews()
-result = client.fetch("123456789")
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=20, max_pages=2)
 
 for review in result:
     print(f"{review.rating}* {review.title}")
@@ -18,7 +22,8 @@ for review in result:
     print(f"  by {review.author_name}, {review.country}")
 ```
 
-Replace `"123456789"` with a real App Store ID (the number after `/id` in the app's URL).
+Replace `"324684580"` with a numeric App Store ID (the number after `/id` in
+the app's URL).
 
 ---
 
@@ -27,15 +32,17 @@ Replace `"123456789"` with a real App Store ID (the number after `/id` in the ap
 ```python
 from app_reviews import GooglePlayReviews
 
-client = GooglePlayReviews()
-result = client.fetch("com.example.app")
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=20, max_pages=2)
 
 for review in result:
     print(f"{review.rating}* {review.body[:100]}")
-    print(f"  by {review.author_name}, {review.country}")
+    print(f"  by {review.author_name}")
 ```
 
-Replace `"com.example.app"` with a real package name (the `id` parameter in the Google Play URL).
+Replace `"com.spotify.music"` with a package name (the `id` parameter in the
+Google Play URL). Google Play review responses do not include reviewer country,
+so `review.country` is `None`.
 
 ---
 
@@ -44,11 +51,12 @@ Replace `"com.example.app"` with a real package name (the `id` parameter in the 
 ```python
 from app_reviews import AppStoreReviews, Country
 
-client = AppStoreReviews()
-result = client.fetch(
-    "123456789",
-    countries=[Country.US, Country.GB, Country.DE, Country.FR, Country.JP],
-)
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US, Country.GB, Country.DE, Country.FR, Country.JP],
+        max_pages=5,
+    )
 
 print(f"Fetched {len(result)} reviews")
 ```
@@ -62,34 +70,42 @@ The client holds connection config (auth, proxy, retry). Reuse it for multiple a
 ```python
 from app_reviews import AppStoreReviews, AppStoreAuth, Country
 
-client = AppStoreReviews(
+with AppStoreReviews(
     auth=AppStoreAuth(
         key_id="ABC123DEF4",
         issuer_id="12345678-1234-1234-1234-123456789012",
         key_path="/path/to/AuthKey.p8",
     )
-)
-
-spotify = client.fetch("324684580", countries=[Country.US, Country.GB])
-instagram = client.fetch("389801252", countries=[Country.US])
-twitter = client.fetch("333903271", ratings=[1, 2])
+) as client:
+    # Connect is global: do not pass storefront countries here.
+    spotify = client.fetch("324684580", limit=100, max_pages=3)
+    instagram = client.fetch("389801252", limit=100, max_pages=3)
 ```
 
 ---
 
 !!! note "`countries=` only applies to the public App Store RSS feed"
 
-    It is the one per-country source. App Store Connect and both Google Play
-    sources are global APIs (one request covers every territory), so a
-    country list there is ignored, and logs a warning saying so. Reviews still
-    report their own `country` where the source knows it.
+    It is the one per-country review source. An explicit empty or all-blank
+    `countries` collection is a no-op and makes no requests on every review
+    client. App Store Connect is global and may report a territory on each
+    review. Google Play review clients reject any nonblank `country` or
+    `countries` selection before network I/O because neither Play source has a
+    review-country dimension. Google Play search and metadata still accept a
+    storefront `country` for presentation, availability, and price.
 
 ## Filter Results
 
 ```python
 from datetime import date
+from app_reviews import AppStoreReviews, Country
 
-result = client.fetch("123456789", countries=[Country.US, Country.GB, Country.DE])
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US, Country.GB, Country.DE],
+        max_pages=5,
+    )
 
 bad_recent = result.filter(ratings=[1, 2], since=date(2025, 1, 1))
 
@@ -113,10 +129,14 @@ Every `client.fetch()` call returns a `FetchResult`. It is iterable and supports
 | `result.filter(...)` | Returns a new filtered `FetchResult`. |
 | `result.sort(...)` | Returns a new sorted `FetchResult`. |
 | `result.limit(n)` | Returns a new `FetchResult` truncated to `n` reviews. |
-| `result.to_dicts()` | JSON-serialisable plain dicts, ready for `json` or `csv`. |
+| `result.to_dict()` | Complete JSON-safe envelope with reviews and diagnostics. |
+| `result.to_dicts()` | Review rows only, ready for JSONL or guarded CSV export. |
 
 ```python
-result = client.fetch("123456789")
+from app_reviews import AppStoreReviews
+
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=20, max_pages=2)
 
 print(f"Reviews: {len(result)}")
 

@@ -177,7 +177,7 @@ class TestErrorClassification:
         ("status", "kind", "retryable"),
         [
             (429, "rate_limited", True),
-            (403, "auth", False),
+            (403, "request", False),
             (404, "not_found", False),
             (503, "server", True),
         ],
@@ -204,6 +204,15 @@ class TestErrorClassification:
         assert page.error.kind == "transport"
         assert "connection refused" in page.error.message
         assert "HTTP 0" not in page.error.message
+
+    def test_public_feed_403_explains_access_blocking_not_credentials(self):
+        page = _provider(lambda request: httpx.Response(403, text="")).fetch_page(
+            "12345", "us", None
+        )
+
+        assert page.error is not None
+        assert page.error.kind == "request"
+        assert "access may be blocked or throttled" in page.error.message
 
     def test_malformed_json_is_a_parse_error(self):
         def handler(request):
@@ -505,6 +514,7 @@ class TestFieldLevelResilience:
 
         assert page.reviews == []
         assert page.error is None  # the page survives; only the entry is lost
+        assert page.skipped_reviews == 1
 
     def test_a_dropped_review_does_not_cost_its_neighbours(self):
         broken = _rss_entry("broken")
@@ -518,6 +528,7 @@ class TestFieldLevelResilience:
         page = _provider(handler).fetch_page("12345", "us", None)
 
         assert [r.id for r in page.reviews] == ["a", "b"]
+        assert page.skipped_reviews == 1
         assert page.next_cursor == "2"
 
 

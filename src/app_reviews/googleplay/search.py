@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -15,9 +16,11 @@ from app_reviews.core.http import HttpResponse
 from app_reviews.core.search import (
     aget_and_parse,
     get_and_parse,
-    scraped_number,
+    scraped_rating,
+    scraped_rating_count,
     scraped_text,
 )
+from app_reviews.core.validation import require_non_negative
 from app_reviews.errors import ParseError
 from app_reviews.models.country import Country, normalise_country
 from app_reviews.models.metadata import AppMetadata
@@ -95,7 +98,7 @@ class GooglePlaySearch(PooledClient):
     _STORE_URL = (41, 0, 2)
     _RATING = (51, 0, 1)
     _RATING_COUNT = (51, 2, 1)
-    _PRICE_MICROS = (57, 0, 0, 0, 0, 1, 0, 0)
+    _PRICE = (57, 0, 0, 0, 0, 1, 0)
     _DEVELOPER = (68, 0)
     _CATEGORY = (79, 0, 0, 0)
     _ICON = (95, 0, 3, 2)
@@ -119,7 +122,7 @@ class GooglePlaySearch(PooledClient):
     _ENTRY_NAME = (3,)
     _ENTRY_RATING = (4, 1)
     _ENTRY_CATEGORY = (5,)
-    _ENTRY_PRICE_MICROS = (8, 1, 0, 0)
+    _ENTRY_PRICE = (8, 1, 1)
     _ENTRY_DEVELOPER = (14,)
 
     def search(
@@ -129,6 +132,9 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return get_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -144,6 +150,9 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return (
             await aget_and_parse(
                 self._http,
@@ -206,7 +215,7 @@ class GooglePlaySearch(PooledClient):
         page with no results section at all is unreadable, which is a different
         answer and must not arrive as ``[]``.
         """
-        raise_for_http_failure(response, "Google Play search")
+        raise_for_http_failure(response, "Google Play search", credentialed=False)
         datasets = self._datasets_or_raise(response)
         readable = False
 
@@ -235,7 +244,7 @@ class GooglePlaySearch(PooledClient):
         """
         if response.status == 404:
             return None
-        raise_for_http_failure(response, "Google Play")
+        raise_for_http_failure(response, "Google Play", credentialed=False)
         datasets = self._datasets_or_raise(response)
 
         for data in self._preferring(datasets, self.DETAIL_DATASET):
@@ -364,10 +373,10 @@ class GooglePlaySearch(PooledClient):
             name=name,
             developer=scraped_text(self._at(block, self._DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._PRICE_MICROS)),
+            price=self._price(self._at(block, self._PRICE)),
             version=scraped_text(self._at(block, self._DETAIL_VERSION)) or self.VERSION,
-            rating=scraped_number(self._at(block, self._RATING), 0.0),
-            rating_count=int(scraped_number(self._at(block, self._RATING_COUNT), 0)),
+            rating=scraped_rating(self._at(block, self._RATING)),
+            rating_count=scraped_rating_count(self._at(block, self._RATING_COUNT)),
             url=self._url(app_id),
             icon_url=scraped_text(self._at(block, self._ICON)),
             current_version_release_date=self._display_date(
@@ -407,9 +416,9 @@ class GooglePlaySearch(PooledClient):
             name=scraped_text(self._at(block, self._ENTRY_NAME)) or "Unknown",
             developer=scraped_text(self._at(block, self._ENTRY_DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._ENTRY_PRICE_MICROS)),
+            price=self._price(self._at(block, self._ENTRY_PRICE)),
             version=self.VERSION,
-            rating=scraped_number(self._at(block, self._ENTRY_RATING), 0.0),
+            rating=scraped_rating(self._at(block, self._ENTRY_RATING)),
             # This layout carries no count anywhere; only a detail block does.
             rating_count=0,
             url=self._url(app_id),
@@ -440,15 +449,35 @@ class GooglePlaySearch(PooledClient):
         ids = parse_qs(urlsplit(url).query).get("id", [])
         return ids[0] if ids and ids[0] else None
 
-    def _price(self, micros: Any) -> str:
-        """A price, from an amount in millionths of the storefront's currency.
-
-        The currency is the storefront's own, so the ``$`` is only right for
-        storefronts that bill in dollars.
-        """
-        if micros is None or micros == 0:
+    def _price(self, price: Any) -> str:
+        """The storefront's display price, with an ISO-currency fallback."""
+        if price is None:
             return "Free"
+        if not isinstance(price, list) or len(price) < 2:
+            return "Unknown"
         try:
-            return f"${float(micros) / 1_000_000:.2f}"
+            micros = price[0]
+            if isinstance(micros, bool):
+                return "Unknown"
+            amount = float(micros)
+            if not math.isfinite(amount):
+                return "Unknown"
+            if amount < 0:
+                return "Unknown"
+            if amount == 0:
+                return "Free"
+            if len(price) > 2 and isinstance(price[2], str) and price[2].strip():
+                formatted = price[2].strip()
+                if (
+                    "-" in formatted
+                    or "\u2212" in formatted
+                    or (formatted.startswith("(") and formatted.endswith(")"))
+                ):
+                    return "Unknown"
+                return formatted
+            currency = price[1]
+            if not isinstance(currency, str) or not currency.strip():
+                return "Unknown"
+            return f"{currency.strip().upper()} {amount / 1_000_000:.2f}"
         except (TypeError, ValueError):
             return "Unknown"

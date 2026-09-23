@@ -10,6 +10,7 @@ from urllib.parse import quote, urlsplit
 
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
@@ -20,7 +21,7 @@ from app_reviews.models.types import Source
 _LOG = logging.getLogger(__name__)
 
 
-class AppStoreOfficialProvider:
+class AppStoreOfficialProvider(PooledClient):
     """Fetches one page from the App Store Connect API.
 
     Global API: one request covers every territory, and each review carries its
@@ -44,8 +45,8 @@ class AppStoreOfficialProvider:
     )
 
     def __init__(self, auth: TokenSource, *, http: HttpClient | None = None) -> None:
+        super().__init__(http=http)
         self._auth = auth
-        self._http = http or HttpClient()
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. cursor is the ``links.next`` URL from the last page."""
@@ -85,7 +86,7 @@ class AppStoreOfficialProvider:
             # client and retarget that request at another Connect endpoint.
             return self.URL_TEMPLATE.format(app_id=quote(app_id, safe=""))
 
-        if (refusal := self._cursor_refusal(cursor)) is not None:
+        if (refusal := self._cursor_refusal(app_id, cursor)) is not None:
             return PageResult(
                 error=FetchError(
                     country=None,
@@ -95,7 +96,7 @@ class AppStoreOfficialProvider:
             )
         return cursor
 
-    def _cursor_refusal(self, cursor: str) -> str | None:
+    def _cursor_refusal(self, app_id: str, cursor: str) -> str | None:
         """Why this cursor cannot be requested, or None if it can.
 
         ``urlsplit`` raises on a malformed IPv6 literal, so even parsing the
@@ -114,12 +115,23 @@ class AppStoreOfficialProvider:
             return f"it cannot be parsed as a URL ({exc})"
         if parsed.scheme != "https":
             return "expected an https URL"
+        if parsed.username is not None or parsed.password is not None:
+            return "user-info is not allowed"
         if parsed.hostname != self.API_HOST:
             return f"expected a URL on {self.API_HOST}"
-        if parsed.port not in (None, 443):
-            return f"expected the default port, got {parsed.port}"
-        if not parsed.path.startswith(self.CURSOR_PATH_PREFIX):
-            return f"expected a path under {self.CURSOR_PATH_PREFIX}"
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            return f"it has an invalid port ({exc})"
+        if port not in (None, 443):
+            return f"expected the default port, got {port}"
+        expected_path = (
+            f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
+        )
+        if parsed.path != expected_path:
+            return f"expected the exact path {expected_path}"
+        if parsed.fragment:
+            return "fragments are not allowed"
         return None
 
     def _to_page(self, response: HttpResponse, app_id: str) -> PageResult:
@@ -164,7 +176,11 @@ class AppStoreOfficialProvider:
 
         mapped = (self._review(entry, app_id) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        return PageResult(reviews=reviews, next_cursor=next_cursor)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
 
     def _next_cursor(self, data: dict[str, Any]) -> str | None:
         """The ``links.next`` URL, or None on the last page.
@@ -196,8 +212,6 @@ class AppStoreOfficialProvider:
             attrs = entry["attributes"]
             if not review_id:
                 raise ValueError("no id, which deduplication keys on")
-            if attrs.get("rating") is None:
-                raise ValueError("no rating")
             if not attrs.get("createdDate"):
                 raise ValueError("no createdDate")
 
@@ -205,7 +219,7 @@ class AppStoreOfficialProvider:
                 store="appstore",
                 app_id=app_id,
                 country=normalise_country(attrs.get("territory")),
-                rating=int(attrs["rating"]),
+                rating=self._rating(attrs["rating"]),
                 title=self._text(attrs.get("title")),
                 body=self._text(attrs.get("body")) or "",
                 author_name=self._text(attrs.get("reviewerNickname")) or "",
@@ -223,6 +237,14 @@ class AppStoreOfficialProvider:
                 "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
             )
             return None
+
+    def _rating(self, value: Any) -> int:
+        """Accept only the integer 1..5 domain documented by Connect."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("rating must be an integer")
+        if not 1 <= value <= 5:
+            raise ValueError(f"rating must be 1-5, got {value}")
+        return value
 
     def _id(self, entry: Any) -> Any:
         """This entry's review id, for a warning that names it and nothing else."""

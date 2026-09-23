@@ -1,6 +1,11 @@
+---
+description: Typed Python APIs for Apple App Store and Google Play review ingestion, search, and metadata.
+---
+
 # App Reviews
 
-Fetch app reviews from the **Apple App Store** and **Google Play Store** with a single Python package.
+Typed review ingestion and app metadata for the **Apple App Store** and
+**Google Play Store** with one Python package.
 
 ---
 
@@ -11,14 +16,17 @@ both behind one interface.
 
 - **No credentials to start.** The default sources are public endpoints.
 - **Both stores, one API.** `AppStoreReviews` and `GooglePlayReviews` follow the same pattern.
-- **Multi-country fetch.** Fetch from dozens of countries in a single call.
-- **Optional authenticated access.** Plug in App Store Connect or Google Play Developer API credentials for more data and higher limits.
+- **Apple storefront fetch.** Fetch public RSS reviews across storefronts in a
+  single call; Google Play reviews remain global.
+- **Optional authenticated access.** Plug in App Store Connect or Google Play
+  Developer API credentials for account-scoped review access.
 - **Minimal dependencies.** `cryptography` for JWT signing and `httpx` for transport.
 - **Real async.** Every entry point has an async twin (`afetch`, `aiter_reviews`, `aiter_pages`, `asearch`, ...) using `httpx.AsyncClient`, not a thread-pool wrapper. See [Async](guide/async.md).
 - **Streams or buffers, your choice.** `fetch()` sorts and filters the whole corpus; `iter_reviews()` yields reviews as they arrive so a 155-storefront walk never has to fit in memory. See [Paging and cursors](guide/paging.md).
 - **Pooled connections.** Each client holds one `httpx` connection pool, so a multi-page walk costs one TLS handshake, not one per page.
 - **Retries, timeouts and proxies.** Configured per client through `RetryConfig` and `proxy=`.
-- **JSON-ready output.** `to_dicts()` returns plain dicts for `json` or `csv`; the package ships no exporters.
+- **JSON-ready output.** `to_dict()` preserves reviews and diagnostics;
+  `to_dicts()` returns review rows for JSONL or CSV.
 - **Typed and tested.** Strict mypy, and coverage held at 85% or above.
 
 ---
@@ -28,19 +36,15 @@ both behind one interface.
 **Apple App Store:**
 
 ```python
-from app_reviews import AppStoreReviews, AppStoreAuth, Country
+from app_reviews import AppStoreReviews, Country
 
-client = AppStoreReviews(
-    auth=AppStoreAuth(
-        key_id="ABC123DEF4",
-        issuer_id="12345678-1234-1234-1234-123456789012",
-        key_path="/path/to/AuthKey.p8",
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US],
+        limit=20,
+        max_pages=2,
     )
-)
-
-# No countries= here: Connect is a global API. One request covers every
-# territory, and each review carries its own.
-result = client.fetch("123456789")
 
 for review in result:
     print(f"[{review.country}] {review.rating}* {review.title}")
@@ -49,15 +53,14 @@ for review in result:
 **Google Play Store:**
 
 ```python
-from app_reviews import GooglePlayReviews, Country
-
-client = GooglePlayReviews()
+from app_reviews import GooglePlayReviews
 
 # Play has one global review corpus, so there is no country to fan out over.
-result = client.fetch("com.example.app")
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=20, max_pages=2)
 
 for review in result:
-    print(f"[{review.country}] {review.rating}* {review.body[:80]}")
+    print(f"{review.rating}* {review.body[:80]}")
 ```
 
 Both return a `FetchResult` containing reviews and any per-country errors. `FetchResult` is iterable: loop over it directly to get `Review` objects.
@@ -85,3 +88,5 @@ Per-source detail: [How the sources differ](reference/capabilities.md).
 - [Quick Start](getting-started/quickstart.md): your first fetch, both stores
 - [Python API](guide/python-api.md): full API reference
 - [How It Works](reference/how-it-works.md): what the fetch pipeline does
+- [Comparison](comparison.md): choose between this package and focused clients
+- [FAQ](faq.md): direct answers about countries, limits, and credentials

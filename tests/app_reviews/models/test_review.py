@@ -18,6 +18,7 @@ def _make_review(**overrides):
         "author_name": "Tester",
         "created_at": datetime(2024, 1, 1, tzinfo=UTC),
         "source": "appstore_scraper",
+        "id": "review-1",
     }
     return Review(**(defaults | overrides))
 
@@ -42,6 +43,48 @@ class TestReviewRatingValidation:
     def test_negative_rating_raises(self):
         with pytest.raises(ValueError, match="rating must be 1-5"):
             _make_review(rating=-1)
+
+    @pytest.mark.parametrize("rating", [True, False, 1.5, "5"])
+    def test_rating_must_be_a_real_integer(self, rating):
+        with pytest.raises(ValueError, match="rating must be an integer"):
+            _make_review(rating=rating)
+
+
+class TestReviewIdentityAndTimestampValidation:
+    def test_id_is_required(self):
+        with pytest.raises(TypeError):
+            Review(  # type: ignore[call-arg]
+                store="appstore",
+                app_id="12345",
+                country="us",
+                rating=4,
+                title="Great",
+                body="Love it",
+                author_name="Tester",
+                source="appstore_scraper",
+                created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    @pytest.mark.parametrize("empty_id", ["", "   "])
+    def test_id_must_not_be_empty(self, empty_id):
+        with pytest.raises(ValueError, match="id must not be empty"):
+            _make_review(id=empty_id)
+
+    def test_exactly_one_source_timestamp_is_required(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            _make_review(created_at=None, updated_at=None)
+
+        with pytest.raises(ValueError, match="exactly one"):
+            _make_review(updated_at=datetime(2024, 1, 2, tzinfo=UTC))
+
+    def test_naive_timestamps_are_normalised_to_utc(self):
+        created = datetime(2024, 1, 1, 12, 30)
+        fetched = datetime(2024, 1, 2, 9, 45)
+
+        review = _make_review(created_at=created, fetched_at=fetched)
+
+        assert review.created_at == created.replace(tzinfo=UTC)
+        assert review.fetched_at == fetched.replace(tzinfo=UTC)
 
 
 class TestNullableFields:

@@ -8,7 +8,7 @@ import pytest
 
 from app_reviews.appstore.search import AppStoreSearch
 from app_reviews.core.http import HttpClient
-from app_reviews.errors import AppReviewsError, HttpError, ParseError
+from app_reviews.errors import AppReviewsError, HttpError, ParseError, RequestError
 from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
 
@@ -59,6 +59,29 @@ class TestConstruction:
 
 
 class TestSearch:
+    def test_zero_limit_returns_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([_itunes_result()]))
+
+        assert _client(handler).search("whatsapp", limit=0) == []
+        assert calls == 0
+
+    def test_negative_limit_is_rejected_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([]))
+
+        with pytest.raises(ValueError, match="limit"):
+            _client(handler).search("whatsapp", limit=-1)
+        assert calls == 0
+
     def test_maps_results(self):
         def handler(request):
             return httpx.Response(200, text=_payload([_itunes_result()]))
@@ -122,12 +145,56 @@ class TestSearch:
 
         assert _client(handler).search("xyznonexistent") == []
 
+    def test_non_finite_metadata_numbers_fall_back_without_aborting_search(self):
+        result = _itunes_result()
+        result["averageUserRating"] = "NaN"
+        result["userRatingCount"] = "Infinity"
+
+        apps = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert apps[0].rating == 0.0
+        assert apps[0].rating_count == 0
+
+    def test_huge_metadata_numbers_fall_back_without_aborting_search(self):
+        result = _itunes_result()
+        result["averageUserRating"] = 10**400
+        result["userRatingCount"] = 10**400
+
+        [app] = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert app.rating == 0.0
+        assert app.rating_count == 0
+
+    @pytest.mark.parametrize(
+        ("rating", "rating_count"),
+        [(-0.1, 10), (5.1, 10), (True, 10), (4.5, -1), (4.5, 1.5), (4.5, True)],
+    )
+    def test_out_of_domain_metadata_numbers_fall_back(self, rating, rating_count):
+        result = _itunes_result()
+        result["averageUserRating"] = rating
+        result["userRatingCount"] = rating_count
+
+        [app] = _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).search("whatsapp")
+
+        assert app.rating == (rating if rating == 4.5 else 0.0)
+        assert app.rating_count == (rating_count if rating_count == 10 else 0)
+
     def test_non_200_raises_http_error(self):
         def handler(request):
             return httpx.Response(503, text="")
 
         with pytest.raises(HttpError, match="503"):
             _client(handler).search("whatsapp")
+
+    def test_public_search_403_is_not_an_auth_error(self):
+        with pytest.raises(RequestError, match="403"):
+            _client(lambda request: httpx.Response(403)).search("whatsapp")
 
     def test_malformed_json_raises_rather_than_looking_empty(self):
         """An unreadable body is not "no results"; see
@@ -232,6 +299,19 @@ class TestAsyncParity:
         async_result = await _client(handler).alookup("310633997")
 
         assert sync_result == async_result
+
+    async def test_alookup_falls_back_for_invalid_metadata_domains(self):
+        result = _itunes_result()
+        result["averageUserRating"] = 6
+        result["userRatingCount"] = -1
+
+        app = await _client(
+            lambda request: httpx.Response(200, text=_payload([result]))
+        ).alookup("310633997")
+
+        assert app is not None
+        assert app.rating == 0.0
+        assert app.rating_count == 0
 
     async def test_alookup_returns_none_when_absent(self):
         def handler(request):
@@ -431,6 +511,33 @@ class TestTheAsyncPathSendsTheSameQuery:
         assert "term=whatsapp" in seen["url"]
         assert "country=de" in seen["url"]
         assert "limit=7" in seen["url"]
+
+    async def test_asearch_zero_limit_returns_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([_itunes_result()]))
+
+        assert await _client(handler).asearch("whatsapp", limit=0) == []
+        assert calls == 0
+
+    async def test_asearch_rejects_negative_limit_without_io(self):
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, text=_payload([]))
+
+        with pytest.raises(ValueError, match="limit"):
+            await _client(handler).asearch("whatsapp", limit=-1)
+        assert calls == 0
+
+    async def test_public_asearch_401_is_not_an_auth_error(self):
+        with pytest.raises(RequestError, match="401"):
+            await _client(lambda request: httpx.Response(401)).asearch("whatsapp")
 
     async def test_alookup_sends_the_identifier(self):
         seen = {}

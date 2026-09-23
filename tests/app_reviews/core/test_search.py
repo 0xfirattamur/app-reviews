@@ -7,6 +7,8 @@ instantiate, so what matters instead is that the two real clients satisfy it and
 that the step they share behaves.
 """
 
+from unittest.mock import AsyncMock, Mock
+
 import httpx
 import pytest
 
@@ -16,6 +18,7 @@ from app_reviews.core.search import (
     SearchClient,
     aget_and_parse,
     get_and_parse,
+    scraped_number,
 )
 from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import RetryConfig
@@ -73,6 +76,18 @@ class TestPoolOwnership:
 
         with AppStoreSearch(http=_pool(handler)) as client:
             assert client.search("notes") == []
+
+    async def test_injected_pool_remains_caller_owned(self):
+        pool = _pool(lambda _request: httpx.Response(200, text=""))
+        pool.close = Mock()
+        pool.aclose = AsyncMock()
+        client = AppStoreSearch(http=pool)
+
+        client.close()
+        await client.aclose()
+
+        pool.close.assert_not_called()
+        pool.aclose.assert_not_awaited()
 
 
 class TestGetAndParse:
@@ -138,3 +153,14 @@ class TestGetAndParse:
 
         with pytest.raises(RuntimeError, match="parse said no"):
             get_and_parse(_pool(handler), "https://example.test/x", {}, parse)
+
+
+class TestScrapedNumber:
+    @pytest.mark.parametrize(
+        "value", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"]
+    )
+    def test_non_finite_values_fall_back_to_the_default(self, value):
+        assert scraped_number(value, 0.0) == 0.0
+
+    def test_an_integer_too_large_for_a_float_falls_back_to_the_default(self):
+        assert scraped_number(10**400, 7.0) == 7.0

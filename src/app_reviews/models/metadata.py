@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
+from math import isfinite
+from typing import Any
 
 from app_reviews.models.types import Store
 
@@ -27,7 +29,8 @@ class AppMetadata:
 
     See the coverage table in ``docs/reference/models.md``.
 
-    ``price`` is formatted with ``$`` regardless of storefront currency.
+    ``price`` is the storefront's display value where the store publishes one;
+    otherwise it uses an ISO currency code and amount, or ``"Unknown"``.
     """
 
     app_id: str
@@ -57,3 +60,31 @@ class AppMetadata:
     Same precision caveat as ``current_version_release_date``. Doubles as the floor
     on a review history: no review of this app predates it.
     """
+
+    def __post_init__(self) -> None:
+        if isinstance(self.rating, float) and not isfinite(self.rating):
+            raise ValueError("rating must be finite")
+        if (
+            isinstance(self.rating, bool)
+            or not isinstance(self.rating, (int, float))
+            or not 0 <= self.rating <= 5
+        ):
+            raise ValueError("rating must be a finite number from 0 to 5")
+        if isinstance(self.rating_count, float) and not isfinite(self.rating_count):
+            raise ValueError("rating_count must be finite")
+        if (
+            isinstance(self.rating_count, bool)
+            or not isinstance(self.rating_count, int)
+            or self.rating_count < 0
+        ):
+            raise ValueError("rating_count must be a non-negative integer")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return every metadata field as a JSON-safe plain dictionary."""
+        values: dict[str, Any] = {}
+        for model_field in fields(self):
+            value = getattr(self, model_field.name)
+            values[model_field.name] = (
+                value.isoformat() if isinstance(value, datetime) else value
+            )
+        return values

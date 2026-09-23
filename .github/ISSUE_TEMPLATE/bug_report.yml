@@ -1,0 +1,78 @@
+name: Bug report
+description: Report reproducible incorrect behavior in app-reviews
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Remove credentials, tokens, private keys, reviewer names, and full review
+        text before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: app-reviews version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: store
+    attributes:
+      label: Store
+      options:
+        - Apple App Store
+        - Google Play
+        - Both
+        - Not store-specific
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source
+      options:
+        - Public source (no auth)
+        - Official API (auth)
+        - Search or lookup
+        - Unsure
+    validations:
+      required: true
+  - type: input
+    id: country
+    attributes:
+      label: Storefront country
+      description: Leave blank for a global review source.
+      placeholder: us
+  - type: input
+    id: app_id
+    attributes:
+      label: Public app ID or package name
+      description: Do not post an unpublished app identifier.
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include bounded code and the complete sanitized error.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, operating system, and relevant proxy details.
+    validations:
+      required: true
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Data hygiene
+      options:
+        - label: I removed credentials and personal review data.
+          required: true

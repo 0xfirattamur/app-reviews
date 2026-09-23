@@ -25,6 +25,7 @@ junit.xml
 
 # Docs
 site/
+.cache/
 
 # Virtual environments
 .venv/

@@ -16,6 +16,7 @@ from typing import get_args
 
 import pytest
 
+import app_reviews
 from app_reviews import (
     AppReviewsError,
     AuthError,
@@ -24,6 +25,7 @@ from app_reviews import (
     NotFoundError,
     ParseError,
     RateLimitError,
+    RequestError,
     ServerError,
     TransportError,
 )
@@ -37,7 +39,16 @@ LEAVES = (
     ServerError,
     TransportError,
     ParseError,
+    RequestError,
 )
+
+
+def test_request_error_is_a_public_non_retryable_http_error():
+    request_error = getattr(app_reviews, "RequestError", None)
+
+    assert request_error is not None
+    assert issubclass(request_error, HttpError)
+    assert request_error not in TestRetryabilityIsReadableFromTheType.RETRYABLE
 
 
 class TestTheClassIsTheClassification:
@@ -67,7 +78,15 @@ class TestHierarchy:
         assert issubclass(cls, AppReviewsError)
 
     @pytest.mark.parametrize(
-        "cls", (RateLimitError, NotFoundError, ServerError, TransportError, ParseError)
+        "cls",
+        (
+            RateLimitError,
+            NotFoundError,
+            RequestError,
+            ServerError,
+            TransportError,
+            ParseError,
+        ),
     )
     def test_store_request_failures_are_http_errors(self, cls):
         """`except HttpError` keeps catching everything a request can raise."""
@@ -97,6 +116,8 @@ class TestTheTwoTaxonomiesCannotDrift:
             (401, AuthError),
             (403, AuthError),
             (404, NotFoundError),
+            (400, RequestError),
+            (422, RequestError),
             (500, ServerError),
             (503, ServerError),
         ],
@@ -107,7 +128,7 @@ class TestTheTwoTaxonomiesCannotDrift:
     def test_error_for_prefers_a_transport_failure_over_the_status(self):
         assert error_for(0, "connection refused") is TransportError
 
-    @pytest.mark.parametrize("status", (401, 403, 404, 429, 500, 503, 0))
+    @pytest.mark.parametrize("status", (400, 401, 403, 404, 422, 429, 500, 503, 0))
     def test_error_for_and_classify_agree(self, status):
         """The raised class and the returned string describe the same failure."""
         assert error_for(status) is _CLASS_FOR[classify(status)]

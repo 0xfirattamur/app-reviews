@@ -248,7 +248,6 @@ Country.AMERICAS = frozenset(
         Country.EC,
         Country.GD,
         Country.GT,
-        Country.GW,
         Country.GY,
         Country.HN,
         Country.JM,

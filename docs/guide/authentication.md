@@ -1,14 +1,21 @@
+---
+description: Configure App Store Connect and Google Play Developer API credentials safely.
+---
+
 # Authentication
 
 Both stores work **without any authentication**. The default providers use public endpoints and require no setup.
 
-If you need higher rate limits or more complete data, you can set up authenticated access using the official store APIs. This page walks through the setup for each store.
+If you need account-scoped official access, you can configure the store APIs.
+Their fields, ordering, and history differ from the public sources; they are not
+strict supersets. This page walks through setup for each store.
 
 ---
 
 ## Apple App Store Connect API
 
-The official API gives you access to all reviews with higher rate limits and more metadata than the public RSS feed.
+The official API gives credentials access to reviews for apps in the associated
+App Store Connect account.
 
 ### What You Need
 
@@ -51,19 +58,17 @@ Save it somewhere safe, like `~/.appstore-keys/AuthKey_ABC123DEF4.p8`.
 Pass the credentials to `AppStoreReviews` via `AppStoreAuth`:
 
 ```python
-from app_reviews import AppStoreReviews, AppStoreAuth, Country
+from app_reviews import AppStoreAuth, AppStoreReviews
 
-client = AppStoreReviews(
+with AppStoreReviews(
     auth=AppStoreAuth(
         key_id="ABC123DEF4",
         issuer_id="12345678-1234-1234-1234-123456789012",
         key_path="/path/to/AuthKey_ABC123DEF4.p8",
     )
-)
-
-# Connect is global: one request, every territory. `countries=` is ignored
-# here (and warns); each review reports its own `country`.
-result = client.fetch("123456789")
+) as client:
+    # Connect is global; each review may report its own territory.
+    result = client.fetch("324684580", limit=100, max_pages=3)
 ```
 
 ### No Auth (Public RSS Feed)
@@ -74,8 +79,8 @@ If you do not provide `auth`, the client automatically uses the public RSS feed:
 from app_reviews import AppStoreReviews
 
 # No auth: uses the public RSS feed
-client = AppStoreReviews()
-result = client.fetch("123456789")
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=100, max_pages=3)
 ```
 
 ### How It Works
@@ -131,16 +136,15 @@ Go to the [Google Play Console](https://play.google.com/console/), then **Settin
 Pass the credentials to `GooglePlayReviews` via `GooglePlayAuth`:
 
 ```python
-from app_reviews import GooglePlayReviews, GooglePlayAuth, Country
+from app_reviews import GooglePlayAuth, GooglePlayReviews
 
-client = GooglePlayReviews(
+with GooglePlayReviews(
     auth=GooglePlayAuth(
         service_account_path="/path/to/service-account.json",
     )
-)
-
-# Play has one global review corpus; `countries=` is ignored here.
-result = client.fetch("com.example.app")
+) as client:
+    # Play reviews are global; reviewer country is not reported.
+    result = client.fetch("com.spotify.music", limit=100, max_pages=3)
 ```
 
 ### No Auth (Public Web Endpoint)
@@ -151,8 +155,8 @@ If you do not provide `auth`, the client automatically uses the public web endpo
 from app_reviews import GooglePlayReviews
 
 # No auth: uses the public web endpoint
-client = GooglePlayReviews()
-result = client.fetch("com.example.app")
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=100, max_pages=3)
 ```
 
 ### How It Works

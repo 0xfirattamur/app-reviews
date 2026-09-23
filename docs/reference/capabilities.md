@@ -1,3 +1,7 @@
+---
+description: Compare country behavior, ordering, history, and fields across four review sources.
+---
+
 # How the sources differ
 
 Four sources back two stores, and they do not behave alike. This page is the
@@ -18,17 +22,20 @@ Which source you get is decided by whether you pass `auth=`:
 | `GooglePlayReviews()` | `googleplay_scraper` |
 | `GooglePlayReviews(auth=...)` | `googleplay_official` |
 
-`client.source` tells you at runtime, and `client.resolve_countries([...])`
-answers the country question directly: it returns `[""]` for a global source.
+`client.source` tells you at runtime. Country handling is part of each public
+method's contract: Apple RSS accepts storefronts, App Store Connect is global,
+and Google Play review clients reject country arguments.
 
 | | `appstore_scraper` | `appstore_official` | `googleplay_scraper` | `googleplay_official` |
 |---|---|---|---|---|
 | Credentials | none | Connect `.p8` | none | service account |
-| Countries | **per storefront** | global | global | global |
+| Countries | **per storefront** | global | unsupported (rejected) | unsupported (rejected) |
 | Page order | newest-first | newest-first | newest-first | **not guaranteed** |
 | History | unbounded | unbounded | unbounded | **last 7 days** |
 | Ceiling | **~500 per storefront** | unbounded | unbounded | unbounded |
 | `review.country` | set | set | `None` | `None` |
+| `review.title` | set | set | `None` | legacy text only |
+| `review.language` | `None` | `None` | `None` | set when reported |
 | `review.raw` | populated | populated | populated | populated |
 
 ---
@@ -40,9 +47,17 @@ Only `appstore_scraper` has a country dimension. Its feed URL is per storefront
 storefront's own reviews, and fetching `us` and `gb` gets you two different
 review sets.
 
-The other three are global APIs: one request covers every territory, so a
-country fan-out would repeat the same request N times for identical data.
-`countries=` is collapsed to a single call there, and logs a warning saying so.
+App Store Connect is global: one request covers every territory, and reviews
+may carry their own territory. Its high-level client resolves a requested
+storefront fan-out to one global walk.
+
+An explicit empty or all-blank `countries` collection is a no-op and makes no
+requests on every review client. Otherwise, Google Play review clients reject
+any nonblank `country` or `countries` selection before network I/O. Neither the
+public scraper nor the official Developer API exposes a review-country
+dimension, so silently accepting a storefront would suggest a filter that does
+not exist. Google Play search and metadata still accept `country` to select the
+storefront used for presentation, availability, and price.
 
 `googleplay_scraper` looks like it should be per-country (the batchexecute
 request does take `gl` and `hl`), and it is easy to assume varying them
@@ -102,8 +117,9 @@ keep an append-only observation log: a day fetched without `raw` can never be
 reprocessed, so a mapping bug found later has nothing to go back to.
 
 Prior to 0.6.0 the Play scraper set `raw=None` while the other three populated
-it. Its shape differs by source: the iTunes and Connect APIs send JSON objects
-while Play's endpoints send positional arrays, so `raw` is `dict | list | None`.
+it. Its shape differs by source: Apple and the official Play API send JSON
+objects, while Play's web endpoint sends positional arrays, so `raw` is
+`dict | list | None`.
 
 `to_dicts()` omits it unless you ask: `result.to_dicts(include_raw=True)`. It is
 off by default because the payload routinely dwarfs the review around it.

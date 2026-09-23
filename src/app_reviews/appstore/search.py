@@ -13,9 +13,11 @@ from app_reviews.core.search import (
     aget_and_parse,
     get_and_parse,
     scraped_datetime,
-    scraped_number,
+    scraped_rating,
+    scraped_rating_count,
     scraped_text,
 )
+from app_reviews.core.validation import require_non_negative
 from app_reviews.errors import ParseError
 from app_reviews.models.country import Country, normalise_country
 from app_reviews.models.metadata import AppMetadata
@@ -39,6 +41,9 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return get_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -53,6 +58,9 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        require_non_negative(limit, "limit")
+        if limit == 0:
+            return []
         return await aget_and_parse(
             self._http,
             self.SEARCH_URL,
@@ -133,7 +141,7 @@ class AppStoreSearch(PooledClient):
         than return data, so reporting ``[]`` would be indistinguishable from an
         app that genuinely does not exist.
         """
-        raise_for_http_failure(response, api)
+        raise_for_http_failure(response, api, credentialed=False)
         try:
             results = json.loads(response.body).get("results", [])
         except (AttributeError, json.JSONDecodeError) as exc:
@@ -182,8 +190,8 @@ class AppStoreSearch(PooledClient):
             category=scraped_text(result.get("primaryGenreName")) or "Unknown",
             price=scraped_text(result.get("formattedPrice")) or "Unknown",
             version=scraped_text(result.get("version")) or "Unknown",
-            rating=scraped_number(result.get("averageUserRating"), 0.0),
-            rating_count=int(scraped_number(result.get("userRatingCount"), 0)),
+            rating=scraped_rating(result.get("averageUserRating")),
+            rating_count=scraped_rating_count(result.get("userRatingCount")),
             url=scraped_text(result.get("trackViewUrl"))
             or f"https://apps.apple.com/app/id{app_id}",
             icon_url=scraped_text(result.get("artworkUrl512")),

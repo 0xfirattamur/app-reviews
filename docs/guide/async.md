@@ -1,3 +1,7 @@
+---
+description: Fetch, stream, search, and look up app reviews with native async Python APIs.
+---
+
 # Async
 
 Every entry point has an async twin using real async I/O over `httpx`, not a
@@ -20,10 +24,10 @@ from app_reviews import AppStoreReviews, Country
 
 
 async def main():
-    client = AppStoreReviews()
-    result = await client.afetch(
-        "324684580", countries=[Country.US, Country.GB]
-    )
+    async with AppStoreReviews() as client:
+        result = await client.afetch(
+            "324684580", countries=[Country.US, Country.GB]
+        )
     for outcome in result.outcomes:
         print(outcome.country, outcome.reviews_fetched, outcome.stopped_because)
 
@@ -78,8 +82,9 @@ from app_reviews import AppStoreSearch
 
 
 async def main():
-    results = await AppStoreSearch().asearch("fitness tracker")
-    app = await AppStoreSearch().alookup("com.burbn.instagram")
+    async with AppStoreSearch() as client:
+        results = await client.asearch("fitness tracker")
+        app = await client.alookup("com.burbn.instagram")
 ```
 
 ## Async metadata lookup
@@ -89,5 +94,6 @@ from app_reviews import AppStoreSearch
 
 
 async def main():
-    metadata = await AppStoreSearch().alookup("123456789")
+    async with AppStoreSearch() as client:
+        metadata = await client.alookup("123456789")
 ```

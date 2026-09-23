@@ -1,3 +1,7 @@
+---
+description: Bound review requests, resume cursors, and stream pages without buffering entire review corpora.
+---
+
 # Paging and cursors
 
 `fetch()` walks every page for you. When you need to own the loop (to
@@ -17,10 +21,9 @@ If you only want the reviews and not the pages, skip to
 ```python
 from app_reviews import AppStoreReviews
 
-client = AppStoreReviews()
-page = client.fetch_page("324684580", country="us")
-
-print(len(page.reviews), page.next_cursor)
+with AppStoreReviews() as client:
+    page = client.fetch_page("324684580", country="us")
+    print(len(page.reviews), page.next_cursor)
 ```
 
 `next_cursor` is opaque and provider-specific: a page number for the RSS
@@ -28,7 +31,8 @@ feed, a URL for App Store Connect, a token for Google Play. Persist it
 verbatim and pass it back to resume:
 
 ```python
-page = client.fetch_page("324684580", country="us", cursor=saved_cursor)
+with AppStoreReviews() as client:
+    page = client.fetch_page("324684580", country="us", cursor=saved_cursor)
 ```
 
 `next_cursor is None` means there are no more pages.

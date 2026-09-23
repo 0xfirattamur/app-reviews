@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "app-reviews"
-version = "0.6.0"
-description = "The go-to Python package for App Store and Google Play review extraction"
+version = "1.0.0"
+description = "Typed sync and async Python client for App Store and Google Play reviews, app search, metadata, and resumable cursors"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -13,15 +13,32 @@ authors = [
     { name = "Firat Tamur" },
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
+]
+keywords = [
+    "app-store",
+    "google-play",
+    "app-reviews",
+    "reviews",
+    "review-scraper",
+    "app-store-connect",
+    "google-play-developer-api",
+    "aso",
+    "itunes",
+    "httpx",
+    "asyncio",
 ]
 dependencies = [
     # Ranges, not pins. A library's `==` becomes every consumer's `==`: when a
@@ -39,12 +56,47 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/firattamurcw/app-reviews"
-Repository = "https://github.com/firattamurcw/app-reviews"
-Issues = "https://github.com/firattamurcw/app-reviews/issues"
+Homepage = "https://github.com/0xfirattamur/app-reviews"
+Documentation = "https://0xfirattamur.github.io/app-reviews/"
+Changelog = "https://github.com/0xfirattamur/app-reviews/blob/main/CHANGELOG.md"
+Repository = "https://github.com/0xfirattamur/app-reviews"
+Issues = "https://github.com/0xfirattamur/app-reviews/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/app_reviews"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/.github/release-notes",
+    "/docs",
+    "/scripts",
+    "/src",
+    "/tests",
+    "/.pre-commit-config.yaml",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
+    "/CODE_OF_CONDUCT.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/Makefile",
+    "/README.md",
+    "/SECURITY.md",
+    "/mkdocs.yml",
+    "/pyproject.toml",
+    "/uv.lock",
+]
+exclude = [
+    "/.cache",
+    "/.coverage*",
+    "/.mypy_cache",
+    "/.pytest_cache",
+    "/.ruff_cache",
+    "/.venv",
+    "/dist",
+    "/site",
+    "**/__pycache__",
+    "**/*.py[cod]",
+]
 
 [dependency-groups]
 dev = [
@@ -54,7 +106,12 @@ dev = [
     "mypy==2.3.1",
     "ruff==0.16.3",
     "pre-commit==4.6.2",
-    "mkdocs-material>=9.6",
+    "mkdocs-material[imaging]>=9.6,<10",
+    "mkdocs-llmstxt>=0.5,<0.6",
+]
+release = [
+    "check-wheel-contents==0.6.3",
+    "hatchling==1.32.4",
 ]
 
 [tool.ruff]

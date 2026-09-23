@@ -200,6 +200,29 @@ class TestFieldMapping:
 
         assert len(page.reviews) == 1
         assert page.error is None
+        assert page.skipped_reviews == 1
+
+    @pytest.mark.parametrize(
+        ("slot", "value"),
+        [
+            (0, 123),
+            (1, "Carol"),
+            (1, [["Carol"]]),
+            (2, 4.5),
+            (2, True),
+            (4, {"body": "fine"}),
+            (10, 210),
+            (10, False),
+        ],
+    )
+    def test_wrong_typed_present_scalar_skips_the_review(self, slot, value):
+        entry = _gp_entry()
+        entry[slot] = value
+
+        page = _serving(_gp_body([entry])).fetch_page("com.example.app", "us", None)
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
 
 
 class TestUnusableTimestamps:
@@ -261,11 +284,35 @@ class TestPagination:
 
         assert page.next_cursor is None
 
+    @pytest.mark.parametrize("container", ["reviews", {"review": []}, 42])
+    def test_present_non_list_reviews_container_is_a_parse_error(self, container):
+        inner = json.dumps([container, None, [None]])
+        raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
+
+        page = _serving(raw).fetch_page("com.example.app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    @pytest.mark.parametrize("pagination", ["next", {"token": "x"}, [None, 42]])
+    def test_present_malformed_pagination_is_a_parse_error(self, pagination):
+        inner = json.dumps([[], pagination, [None]])
+        raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
+
+        page = _serving(raw).fetch_page("com.example.app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
 
 class TestErrorClassification:
     @pytest.mark.parametrize(
         ("status", "kind"),
-        [(429, "rate_limited"), (403, "auth"), (404, "not_found"), (503, "server")],
+        [
+            (429, "rate_limited"),
+            (401, "request"),
+            (403, "request"),
+            (404, "not_found"),
+            (503, "server"),
+        ],
     )
     def test_status_maps_to_kind(self, status, kind):
         page = _serving("", status=status).fetch_page("com.example.app", "us", None)

@@ -258,6 +258,7 @@ class TestEntryResilience:
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1", "good-2"]
+        assert page.skipped_reviews == 1
 
     def test_bad_entry_preserves_the_cursor(self):
         broken = _connect_entry("broken")
@@ -443,6 +444,83 @@ class TestCursorIsNotAnOpenRedirect:
         assert seen[-1][0] == cursor
         assert seen[-1][1] == "Bearer token"
 
+    @pytest.mark.parametrize(
+        "cursor",
+        [
+            "https://api.appstoreconnect.apple.com/v1/apps/other/customerReviews?cursor=X",
+            "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews/extra?cursor=X",
+            "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews/../users",
+            "https://api.appstoreconnect.apple.com/v1/apps/12345/%2e%2e/users",
+            "https://user@api.appstoreconnect.apple.com/v1/apps/12345/customerReviews",
+            "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews#secret",
+        ],
+    )
+    def test_cursor_must_be_the_exact_collection_for_the_requested_app(self, cursor):
+        seen, provider = self._requests()
+
+        page = provider.fetch_page("12345", "", cursor)
+
+        assert seen == []
+        assert page.error is not None and page.error.kind == "parse"
+
+    def test_rejection_happens_before_the_token_source_is_called(self):
+        class ExplodingToken:
+            def authorization_header(self):
+                raise AssertionError("cursor validation must happen before JWT I/O")
+
+            async def aauthorization_header(self):
+                raise AssertionError("cursor validation must happen before JWT I/O")
+
+        provider = AppStoreOfficialProvider(ExplodingToken())
+
+        page = provider.fetch_page(
+            "12345",
+            "",
+            "https://api.appstoreconnect.apple.com/v1/apps/other/customerReviews",
+        )
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    @pytest.mark.parametrize("port", ["abc", "70000"])
+    def test_malformed_port_is_a_parse_result_before_token_or_http(self, port):
+        class ExplodingToken:
+            def authorization_header(self):
+                raise AssertionError("token source must not be called")
+
+            async def aauthorization_header(self):
+                raise AssertionError("token source must not be called")
+
+        provider = AppStoreOfficialProvider(ExplodingToken())
+        cursor = (
+            f"https://api.appstoreconnect.apple.com:{port}"
+            "/v1/apps/12345/customerReviews"
+        )
+
+        page = provider.fetch_page("12345", "", cursor)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    @pytest.mark.parametrize("port", ["abc", "70000"])
+    async def test_async_malformed_port_is_a_parse_result_before_token_or_http(
+        self, port
+    ):
+        class ExplodingToken:
+            def authorization_header(self):
+                raise AssertionError("token source must not be called")
+
+            async def aauthorization_header(self):
+                raise AssertionError("token source must not be called")
+
+        provider = AppStoreOfficialProvider(ExplodingToken())
+        cursor = (
+            f"https://api.appstoreconnect.apple.com:{port}"
+            "/v1/apps/12345/customerReviews"
+        )
+
+        page = await provider.afetch_page("12345", "", cursor)
+
+        assert page.error is not None and page.error.kind == "parse"
+
     async def test_the_async_path_refuses_too(self):
         seen, provider = self._requests()
 
@@ -495,6 +573,20 @@ class TestConnectFieldResilience:
 
         assert len(page.reviews) == 1
         assert page.reviews[0].author_name == ""
+
+    @pytest.mark.parametrize("rating", [True, 4.5, "5"])
+    def test_a_coercible_non_integer_rating_is_skipped(self, rating):
+        page = self._one(lambda e: e["attributes"].update(rating=rating))
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
+
+    @pytest.mark.parametrize("rating", [1, 3, 5])
+    def test_a_real_integer_rating_is_kept(self, rating):
+        page = self._one(lambda e: e["attributes"].update(rating=rating))
+
+        assert [review.rating for review in page.reviews] == [rating]
+        assert page.skipped_reviews == 0
 
     @pytest.mark.parametrize(
         "mutate",

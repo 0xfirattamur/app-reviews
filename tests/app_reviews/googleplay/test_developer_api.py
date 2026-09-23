@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -20,8 +21,9 @@ def _dev_entry(
     body: str = "It's fine",
     seconds: Any = 1710500000,
     app_version: str = "5.0.1",
+    reviewer_language: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    entry = {
         "reviewId": review_id,
         "authorName": author,
         "comments": [
@@ -35,6 +37,9 @@ def _dev_entry(
             }
         ],
     }
+    if reviewer_language is not None:
+        entry["comments"][0]["userComment"]["reviewerLanguage"] = reviewer_language
+    return entry
 
 
 def _payload(entries: list[dict[str, Any]], token: str | None = None) -> str:
@@ -102,6 +107,9 @@ class TestFetchPage:
     def test_no_token_param_on_the_first_page(self):
         assert "token=" not in _url_for("com.example.app")
 
+    def test_requests_the_maximum_supported_page_size(self):
+        assert "maxResults=100" in _url_for("com.example.app")
+
     def test_maps_entry_fields(self):
         page = _serving(_payload([_dev_entry()])).fetch_page(
             "com.example.app", "", None
@@ -130,12 +138,52 @@ class TestFetchPage:
 
         assert page.reviews[0].title is None
 
+    def test_maps_reviewer_language_without_treating_it_as_country(self):
+        page = _serving(_payload([_dev_entry(reviewer_language="tr")])).fetch_page(
+            "com.example.app", "", None
+        )
+
+        assert page.reviews[0].language == "tr"
+        assert page.reviews[0].country is None
+
+    def test_legacy_tab_separates_title_from_body(self):
+        page = _serving(
+            _payload([_dev_entry(body="A legacy title\tThe review body")])
+        ).fetch_page("com.example.app", "", None)
+
+        assert page.reviews[0].title == "A legacy title"
+        assert page.reviews[0].body == "The review body"
+
     def test_nanos_become_sub_second_precision(self):
         entry = _dev_entry()
         entry["comments"][0]["userComment"]["lastModified"]["nanos"] = 839_000_000
         page = _serving(_payload([entry])).fetch_page("com.example.app", "", None)
 
         assert page.reviews[0].updated_at.microsecond == 839_000
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("reviewId", 123),
+            ("authorName", ["Dave"]),
+            ("text", {"body": "fine"}),
+            ("appVersionName", 501),
+            ("reviewerLanguage", ["tr"]),
+            ("starRating", 4.5),
+            ("starRating", True),
+        ],
+    )
+    def test_wrong_typed_present_scalar_skips_the_review(self, field, value):
+        entry = _dev_entry(reviewer_language="en")
+        if field in {"reviewId", "authorName"}:
+            entry[field] = value
+        else:
+            entry["comments"][0]["userComment"][field] = value
+
+        page = _serving(_payload([entry])).fetch_page("com.example.app", "", None)
+
+        assert page.reviews == []
+        assert page.skipped_reviews == 1
 
 
 class TestAppIdIsNotAPathInjection:
@@ -162,7 +210,7 @@ class TestAppIdIsNotAPathInjection:
         assert url.startswith(
             "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/"
         )
-        assert url.endswith("/reviews")
+        assert urlsplit(url).path.endswith("/reviews")
         assert "/v3/applications/victim.app" not in url
         assert "/evil" not in url
 
@@ -287,6 +335,7 @@ class TestEntryResilience:
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1", "good-2"]
+        assert page.skipped_reviews == 1
 
     def test_bad_entry_preserves_the_cursor(self):
         entries = [{"reviewId": "broken"}, _dev_entry("good-1")]

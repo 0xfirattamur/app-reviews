@@ -13,6 +13,7 @@ from app_reviews.core.paging import (
     StopPolicy,
     is_per_country,
     orders_newest_first,
+    prefer_stop_reason,
 )
 from app_reviews.core.reviews import BaseReviews
 from app_reviews.errors import AuthError, ServerError, TransportError
@@ -20,6 +21,16 @@ from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import Sort, Source
+
+
+@pytest.mark.parametrize("safety_reason", ["cycle", "stalled", "max_pages"])
+def test_limit_outranks_safety_floor_stop_reasons(safety_reason):
+    assert prefer_stop_reason(safety_reason, "limit") == "limit"
+
+
+@pytest.mark.parametrize("higher_reason", ["error", "exhausted", "since"])
+def test_limit_preserves_higher_priority_stop_reasons(higher_reason):
+    assert prefer_stop_reason(higher_reason, "limit") == higher_reason
 
 
 def _review(created_at: datetime, review_id: str = "1", rating: int = 5) -> Review:
@@ -385,6 +396,53 @@ class TestResolveCountries:
         assert client.resolve_countries(["gb", "de"]) == [""]
 
 
+class TestPublicRequestBudget:
+    def test_iter_pages_honours_max_pages(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "a")], "1"),
+                _page([_review(NOW, "b")], "2"),
+                _page([_review(NOW, "c")], None),
+            ]
+        )
+
+        pages = list(FakeClient(provider).iter_pages("123", max_pages=2))
+
+        assert len(pages) == 2
+        assert pages[-1].stopped_because == "max_pages"
+        assert len(provider.calls) == 2
+
+    async def test_aiter_pages_honours_max_pages(self):
+        provider = FakeProvider(
+            [
+                _page([_review(NOW, "a")], "1"),
+                _page([_review(NOW, "b")], "2"),
+                _page([_review(NOW, "c")], None),
+            ]
+        )
+
+        pages = [
+            page async for page in FakeClient(provider).aiter_pages("123", max_pages=2)
+        ]
+
+        assert len(pages) == 2
+        assert pages[-1].stopped_because == "max_pages"
+        assert len(provider.calls) == 2
+
+    def test_zero_limit_iter_pages_does_no_io(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        assert list(FakeClient(provider).iter_pages("123", limit=0)) == []
+        assert provider.calls == []
+
+    def test_negative_limit_iter_pages_is_rejected(self):
+        provider = FakeProvider([_page([_review(NOW)], None)])
+
+        with pytest.raises(ValueError, match="limit"):
+            list(FakeClient(provider).iter_pages("123", limit=-1))
+        assert provider.calls == []
+
+
 class _CyclingProvider:
     """Hands back the same cursor forever, as a stalled API would.
 
@@ -516,6 +574,30 @@ class TestARepeatingCursorEndsTheWalk:
 
         assert provider.calls == 2
         assert pages[-1].stopped_because == "cycle"
+
+    def test_a_resumed_walk_does_not_request_its_initial_cursor_twice(self):
+        provider = FakeProvider(
+            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+        )
+
+        pages = list(FakeClient(provider).iter_pages("123", cursor="1"))
+
+        assert provider.calls == [("us", "1")]
+        assert [review.id for review in pages[0].reviews] == ["resumed"]
+        assert pages[0].stopped_because == "cycle"
+
+    async def test_an_async_resumed_walk_does_not_request_initial_cursor_twice(self):
+        provider = FakeProvider(
+            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+        )
+
+        pages = [
+            page async for page in FakeClient(provider).aiter_pages("123", cursor="1")
+        ]
+
+        assert provider.calls == [("us", "1")]
+        assert [review.id for review in pages[0].reviews] == ["resumed"]
+        assert pages[0].stopped_because == "cycle"
 
     def test_iter_reviews_does_not_spin_either(self):
         provider = _CyclingProvider()
@@ -937,19 +1019,28 @@ class TestZeroAndNegativeLimits:
             FakeProvider([_page([_review(NOW, "1"), _review(NOW, "2")], None)])
         )
 
-    @pytest.mark.parametrize("limit", [0, -1, -5])
-    def test_iter_reviews_yields_nothing(self, limit):
-        assert list(self._client().iter_reviews("123", limit=limit)) == []
+    def test_iter_reviews_yields_nothing_for_zero(self):
+        assert list(self._client().iter_reviews("123", limit=0)) == []
 
-    @pytest.mark.parametrize("limit", [0, -1, -5])
-    async def test_aiter_reviews_yields_nothing(self, limit):
-        assert [r async for r in self._client().aiter_reviews("123", limit=limit)] == []
+    async def test_aiter_reviews_yields_nothing_for_zero(self):
+        assert [r async for r in self._client().aiter_reviews("123", limit=0)] == []
 
-    @pytest.mark.parametrize("limit", [0, -1, -5])
-    def test_fetch_returns_nothing(self, limit):
-        """``FetchResult.limit`` sliced ``reviews[:-1]`` for a negative n, which
-        drops from the wrong end rather than returning nothing."""
-        assert self._client().fetch("123", limit=limit).reviews == []
+    def test_fetch_returns_nothing_for_zero(self):
+        assert self._client().fetch("123", limit=0).reviews == []
+
+    @pytest.mark.parametrize("limit", [-1, -5])
+    def test_sync_entry_points_reject_negative_limits(self, limit):
+        with pytest.raises(ValueError, match="limit"):
+            list(self._client().iter_reviews("123", limit=limit))
+        with pytest.raises(ValueError, match="limit"):
+            self._client().fetch("123", limit=limit)
+
+    @pytest.mark.parametrize("limit", [-1, -5])
+    async def test_async_entry_points_reject_negative_limits(self, limit):
+        with pytest.raises(ValueError, match="limit"):
+            [r async for r in self._client().aiter_reviews("123", limit=limit)]
+        with pytest.raises(ValueError, match="limit"):
+            await self._client().afetch("123", limit=limit)
 
 
 class TestAsyncFanOutDoesNotAbandonItsPeers:
@@ -1073,6 +1164,22 @@ class TestResumingFromAPersistedCursor:
 
         assert pages[-1].next_cursor == "1"
         assert pages[-1].stopped_because == "limit"
+
+    def test_a_yielded_page_keeps_its_skipped_review_count(self):
+        provider = FakeProvider(
+            [
+                PageResult(
+                    reviews=[_review(NOW, "p1")],
+                    next_cursor="1",
+                    skipped_reviews=2,
+                )
+            ]
+        )
+
+        [page] = list(FakeClient(provider).iter_pages("123", limit=1))
+
+        assert page.stopped_because == "limit"
+        assert page.skipped_reviews == 2
 
     def test_a_walk_resumes_where_the_cursor_left_off(self):
         provider = FakeProvider(self._pages())

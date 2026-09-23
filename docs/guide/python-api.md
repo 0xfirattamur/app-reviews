@@ -1,3 +1,7 @@
+---
+description: Public sync and async app-reviews Python API, result models, errors, search, and metadata.
+---
+
 # Python API
 
 Four main classes: two for reviews, two for search and lookup. All follow the same pattern: create a client, call a method.
@@ -78,7 +82,8 @@ result = client.fetch(
     ratings=None,    # list[int] | None: filter to specific star ratings
     sort=Sort.NEWEST,# Sort: sort order
     limit=None,      # int | None: max reviews to return
-    concurrency=None,# int | None: max countries fetched in parallel (default: one worker per country)
+    concurrency=None,# int | None: max countries fetched in parallel (default: 8)
+    max_pages=None,  # int | None: request budget per country (default: 10,000)
 )
 ```
 
@@ -106,31 +111,31 @@ auth = AppStoreAuth(
 
 ```python
 # No auth (public RSS feed)
-client = AppStoreReviews()
-result = client.fetch("123456789")
-
-# Multiple countries
 from app_reviews import Country
-result = client.fetch("123456789", countries=[Country.US, Country.GB, Country.DE])
+
+with AppStoreReviews() as client:
+    result = client.fetch("123456789")
+    multi_country = client.fetch(
+        "123456789", countries=[Country.US, Country.GB, Country.DE]
+    )
 
 # With auth
-client = AppStoreReviews(
+with AppStoreReviews(
     auth=AppStoreAuth(
         key_id="ABC123DEF4",
         issuer_id="12345678-1234-1234-1234-123456789012",
         key_path="/path/to/AuthKey.p8",
     )
-)
-result = client.fetch("123456789", countries=[Country.US, Country.GB])
-
-# Reuse client
-spotify = client.fetch("324684580", countries=[Country.US, Country.GB])
-instagram = client.fetch("389801252", countries=[Country.US])
-twitter = client.fetch("333903271", ratings=[1, 2])
+) as client:
+    # App Store Connect is global; reuse one client for account-owned apps.
+    spotify = client.fetch("324684580", limit=100)
+    instagram = client.fetch("389801252", limit=100)
+    twitter = client.fetch("333903271", ratings=[1, 2])
 
 # Filter by date and rating
 from datetime import date
-result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
+with AppStoreReviews() as client:
+    result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
 ```
 
 ---
@@ -156,7 +161,14 @@ Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play 
 
 ### fetch()
 
-Same parameters as `AppStoreReviews.fetch()`, except `app_id` is a package name (e.g. `"com.example.app"`).
+The filtering, sorting, limit, and request-budget parameters match
+`AppStoreReviews.fetch()`, and `app_id` is a package name (for example,
+`"com.example.app"`). An explicit empty or all-blank `countries` collection is
+a no-op and makes no requests on every review client. Otherwise, Google Play
+review clients reject any nonblank `country` or `countries` selection before
+network I/O: the public and official sources expose one global review corpus
+and no reviewer-country field. Google Play search and metadata continue to
+accept `country` as a storefront selector.
 
 ### GooglePlayAuth
 
@@ -170,15 +182,15 @@ auth = GooglePlayAuth(
 
 ```python
 # No auth
-client = GooglePlayReviews()
-result = client.fetch("com.example.app")
+with GooglePlayReviews() as client:
+    result = client.fetch("com.example.app")
 
 # With auth
 from app_reviews import Sort
-client = GooglePlayReviews(
+with GooglePlayReviews(
     auth=GooglePlayAuth(service_account_path="/path/to/service-account.json")
-)
-result = client.fetch("com.example.app", countries=[Country.US], sort=Sort.NEWEST, limit=100)
+) as client:
+    result = client.fetch("com.example.app", sort=Sort.NEWEST, limit=100)
 ```
 
 ---
@@ -209,7 +221,9 @@ Country.DE   # "de"
 Each group is a `frozenset[Country]` and can be passed straight to `countries=`,
 which takes any collection of `Country` or `str`. Plain strings work too:
 `countries=["us", "gb"]`. Entries are normalised and deduplicated, so `"US"`,
-`"us"` and `"USA"` name one storefront and are walked once.
+`"us"` and `"USA"` name one storefront and are walked once. These selections
+apply to Apple review storefronts; Google Play review clients reject nonblank
+country selections because their review corpus is global.
 
 ---
 
@@ -259,11 +273,13 @@ if result.errors:
 
 ### Serialise
 
-`to_dicts()` gives you JSON-serialisable plain dicts: timestamps as ISO 8601
-strings, and the provider payload (`raw`) left out unless you ask for it:
+`to_dict()` gives you the complete JSON-safe result envelope, including errors,
+outcomes and skipped-record counts. `to_dicts()` is the compatibility helper for
+review rows only. Provider payloads (`raw`) are left out unless you ask for them:
 
 ```python
-records = result.to_dicts()                    # list[dict], JSON-safe
+payload = result.to_dict()                     # reviews + diagnostics
+records = result.to_dicts()                    # review rows only
 records = result.to_dicts(include_raw=True)    # keep the provider payload
 ```
 
@@ -278,10 +294,11 @@ json.dumps(result.to_dicts(), indent=2)                      # JSON
 "\n".join(json.dumps(d) for d in result.to_dicts())          # JSONL
 
 rows = result.to_dicts()
-with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
+if rows:
+    with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
 ```
 
 `newline=""` is required when writing CSV; without it, review bodies
@@ -295,10 +312,10 @@ containing newlines produce broken rows on some platforms.
 |-------|------|-------------|
 | `id` | `str` | Raw identifier assigned by the source ([details](../reference/models.md#review-ids)) |
 | `store` | `Store` | `"appstore"` or `"googleplay"` |
-| `app_id` | `str` | App Store ID or package name |
+| `app_id` | `str` | Numeric Apple app ID or Google Play package name |
 | `country` | `str \| None` | Storefront queried. `None` if the source does not report one (e.g. `googleplay_official`, `googleplay_scraper`) |
 | `rating` | `int` | Star rating (`1`-`5`) |
-| `title` | `str \| None` | Review title. `None` for sources with no title concept (Google Play) |
+| `title` | `str \| None` | Review title. Google Play web has none; the official API may expose a legacy title |
 | `body` | `str` | Review text |
 | `author_name` | `str` | Reviewer display name |
 | `app_version` | `str \| None` | App version at time of review |
@@ -307,7 +324,7 @@ containing newlines produce broken rows on some platforms.
 | `source` | `Source` | Provider (e.g. `"appstore_scraper"`, `"googleplay_official"`) |
 | `language` | `str \| None` | Review language code |
 | `fetched_at` | `datetime \| None` | When the review was fetched |
-| `raw` | `dict \| list \| None` | Raw API response payload. A list from Play, which sends arrays |
+| `raw` | `dict \| list \| None` | Raw provider payload. Apple and official Play use objects; Play web uses arrays |
 
 ### Error handling
 
@@ -344,14 +361,15 @@ from a `FetchError`:
 ```python
 from app_reviews import AppStoreSearch, AuthError, HttpError, RateLimitError
 
-try:
-    apps = AppStoreSearch().search("fitness tracker")
-except RateLimitError as err:
-    back_off(err.status)
-except AuthError:
-    alert_a_human()
-except HttpError as err:
-    log(type(err).__name__, err.status)
+with AppStoreSearch() as client:
+    try:
+        apps = client.search("fitness tracker")
+    except RateLimitError as err:
+        back_off(err.status)
+    except AuthError:
+        alert_a_human()
+    except HttpError as err:
+        log(type(err).__name__, err.status)
 ```
 
 The exception class carries the classification, so there is no `kind` attribute to
@@ -363,8 +381,9 @@ when the exchange never produced one.
 |---|---|---|
 | `RateLimitError` | HTTP 429 | yes, later |
 | `ServerError` | HTTP 5xx | yes |
-| `TransportError` | connection refused, timeout, bad URL, unmapped sub-500 | yes |
-| `AuthError` | credentials rejected, or unusable | **no** |
+| `TransportError` | connection refused, timeout, or an exchange that did not complete | yes |
+| `AuthError` | credentials rejected, or unusable; 401/403 from an official credentialed endpoint | **no** |
+| `RequestError` | another permanent HTTP 4xx rejection, including 401/403 from a credential-free public endpoint | no |
 | `NotFoundError` | HTTP 404 | no |
 | `ParseError` | a success carrying an unreadable body | no |
 
@@ -492,12 +511,12 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `app_id` | `str` | Bundle ID (App Store) or package name (Google Play) |
+| `app_id` | `str` | Numeric track ID for App Store results, or Google Play package name |
 | `store` | `Store` | `"appstore"` or `"googleplay"` |
 | `name` | `str` | App display name |
 | `developer` | `str` | Developer or publisher name |
 | `category` | `str` | Primary category (e.g. `"Social Networking"`) |
-| `price` | `str` | Formatted price (e.g. `"Free"`, `"$4.99"`) |
+| `price` | `str` | Localized store price, ISO fallback, `"Free"`, or `"Unknown"` |
 | `version` | `str` | Current version string |
 | `rating` | `float` | Average star rating (`0.0`-`5.0`) |
 | `rating_count` | `int` | Total number of ratings |
@@ -513,10 +532,13 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 
 > **Note:** Google Play search results may have `"Unknown"` for `name`,
 > `developer` and `category`, and `0` for `rating_count`, because a regular search hit
-> carries no count. `price` falls back to `"Free"` when the store reports none,
-> and `version` is always `"Varies with device"`, because a regular search hit
-> carries no version field. Use `lookup()` for a real rating count, and for the
-> real version when the app publishes one.
+> carries no count. Google Play `price` prefers the localized display value;
+> absent data or numeric zero becomes `"Free"`, a positive numeric amount plus
+> ISO currency becomes an ISO-formatted fallback, and malformed/non-finite data
+> or a missing currency becomes `"Unknown"`. `version` is always
+> `"Varies with device"`, because a regular search hit carries no version field.
+> Use `lookup()` for a real rating count, and for the real version when the app
+> publishes one.
 
 ### Examples
 
@@ -524,20 +546,24 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 from app_reviews import AppStoreSearch, GooglePlaySearch, Country
 
 # Search App Store
-results = AppStoreSearch().search("weather", country=Country.GB, limit=5)
-for app in results:
-    print(f"{app.name} by {app.developer} ({app.rating}*)")
+with AppStoreSearch() as client:
+    results = client.search("weather", country=Country.GB, limit=5)
+    for app in results:
+        print(f"{app.name} by {app.developer} ({app.rating}*)")
 
 # Search Google Play
-results = GooglePlaySearch().search("weather", country=Country.US, limit=5)
-for app in results:
-    print(f"{app.name}: {app.icon_url}")
+with GooglePlaySearch() as client:
+    results = client.search("weather", country=Country.US, limit=5)
+    for app in results:
+        print(f"{app.name}: {app.icon_url}")
 
 # Look up a specific app, then fetch its reviews
 from app_reviews import GooglePlayReviews
-app = GooglePlaySearch().lookup("com.whatsapp")
+with GooglePlaySearch() as search:
+    app = search.lookup("com.whatsapp")
 if app:
-    reviews = GooglePlayReviews().fetch(app.app_id, countries=[Country.US])
+    with GooglePlayReviews() as reviews_client:
+        reviews = reviews_client.fetch(app.app_id)
     print(f"{app.name}: {len(reviews)} reviews")
 ```
 
@@ -550,9 +576,10 @@ Use the search client for the store you are asking about:
 ```python
 from app_reviews import AppStoreSearch, GooglePlaySearch, Country
 
-meta = AppStoreSearch().lookup("324684580")                  # None if absent
-meta = GooglePlaySearch().lookup("com.whatsapp")
-meta = AppStoreSearch().lookup("324684580", country=Country.DE)
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    meta = apple.lookup("324684580")                         # None if absent
+    meta = play.lookup("com.whatsapp")
+    german_meta = apple.lookup("324684580", country=Country.DE)
 ```
 
 `lookup()` returns `AppMetadata | None`, and `alookup()` is the async twin.
