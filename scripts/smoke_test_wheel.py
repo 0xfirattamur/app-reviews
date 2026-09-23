@@ -69,12 +69,14 @@ def smoke_test(dist_dir: Path, expected_version: str) -> None:
             check=True,
         )
         python = _python_in(venv)
+        # Not --offline: `uv sync` caches by lockfile URL, which `uv pip install`
+        # cannot read, so offline resolution fails on a cold CI cache. The
+        # exported requirements are hash-pinned from uv.lock, so integrity holds.
         subprocess.run(
             [
                 "uv",
                 "pip",
                 "install",
-                "--offline",
                 "--python",
                 str(python),
                 "--requirement",
