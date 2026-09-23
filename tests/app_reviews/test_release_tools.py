@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import zipfile
+import sys
 from pathlib import Path
 
 import pytest
@@ -224,6 +225,7 @@ def _prepare(
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="release.sh is POSIX-only")
 def test_release_script_prepares_branch_and_public_versions_without_mutating_history(
     tmp_path: Path,
 ) -> None:
@@ -252,6 +254,7 @@ def test_release_script_prepares_branch_and_public_versions_without_mutating_his
         ("develop", ("--create", "1.1.0"), True, "clean"),
     ],
 )
+@pytest.mark.skipif(sys.platform == "win32", reason="release.sh is POSIX-only")
 def test_release_script_fails_closed(
     tmp_path: Path,
     branch: str,
