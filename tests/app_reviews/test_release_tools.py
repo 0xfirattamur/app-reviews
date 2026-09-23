@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import zipfile
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
