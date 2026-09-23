@@ -104,7 +104,7 @@ dev = [
     "pytest-cov==7.1.0",
     "pytest-asyncio==1.4.0",
     "mypy==2.3.1",
-    "ruff==0.16.3",
+    "ruff==0.16.8",
     "pre-commit==4.6.2",
     "mkdocs-material[imaging]>=9.6,<10",
     "mkdocs-llmstxt>=0.5,<0.6",
