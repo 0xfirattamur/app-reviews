@@ -1,0 +1,2058 @@
+# App Reviews
+
+> Typed sync and async Python client for App Store and Google Play reviews, app search, metadata, and resumable cursors
+
+Typed Python APIs for bounded Apple App Store and Google Play review ingestion, app search, metadata lookup, and resumable pagination.
+
+# Getting started
+
+# App Reviews
+
+Typed review ingestion and app metadata for the **Apple App Store** and **Google Play Store** with one Python package.
+
+______________________________________________________________________
+
+## Why App Reviews?
+
+Each store has a different API, authentication and data format. This package puts both behind one interface.
+
+- **No credentials to start.** The default sources are public endpoints.
+- **Both stores, one API.** `AppStoreReviews` and `GooglePlayReviews` follow the same pattern.
+- **Apple storefront fetch.** Fetch public RSS reviews across storefronts in a single call; Google Play reviews remain global.
+- **Optional authenticated access.** Plug in App Store Connect or Google Play Developer API credentials for account-scoped review access.
+- **Minimal dependencies.** `cryptography` for JWT signing and `httpx` for transport.
+- **Real async.** Every entry point has an async twin (`afetch`, `aiter_reviews`, `aiter_pages`, `asearch`, ...) using `httpx.AsyncClient`, not a thread-pool wrapper. See [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md).
+- **Streams or buffers, your choice.** `fetch()` sorts and filters the whole corpus; `iter_reviews()` yields reviews as they arrive so a 155-storefront walk never has to fit in memory. See [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md).
+- **Pooled connections.** Each client holds one `httpx` connection pool, so a multi-page walk costs one TLS handshake, not one per page.
+- **Retries, timeouts and proxies.** Configured per client through `RetryConfig` and `proxy=`.
+- **JSON-ready output.** `to_dict()` preserves reviews and diagnostics; `to_dicts()` returns review rows for JSONL or CSV.
+- **Typed and tested.** Strict mypy, and coverage held at 85% or above.
+
+______________________________________________________________________
+
+## Quick Example
+
+**Apple App Store:**
+
+```
+from app_reviews import AppStoreReviews, Country
+
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US],
+        limit=20,
+        max_pages=2,
+    )
+
+for review in result:
+    print(f"[{review.country}] {review.rating}* {review.title}")
+```
+
+**Google Play Store:**
+
+```
+from app_reviews import GooglePlayReviews
+
+# Play has one global review corpus, so there is no country to fan out over.
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=20, max_pages=2)
+
+for review in result:
+    print(f"{review.rating}* {review.body[:80]}")
+```
+
+Both return a `FetchResult` containing reviews and any per-country errors. `FetchResult` is iterable: loop over it directly to get `Review` objects.
+
+______________________________________________________________________
+
+## Limitations
+
+- **How far back you can reach differs by source**
+  - `appstore_scraper`: ~500 most recent reviews per storefront
+  - `googleplay_official`: **the last 7 days only**; full history needs a Play Console CSV export, which this package does not read
+  - `appstore_official`, `googleplay_scraper`: unbounded
+- **The Google Play web endpoint is undocumented** and rate-limited, and can change without notice
+- **Authenticated APIs require developer accounts**
+  - Apple Developer Program: $99/year
+  - Google Play Developer account: $25 one-time
+
+Per-source detail: [How the sources differ](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md).
+
+______________________________________________________________________
+
+## Next Steps
+
+- [Installation](https://0xfirattamur.github.io/app-reviews/getting-started/installation/index.md): install the package
+- [Quick Start](https://0xfirattamur.github.io/app-reviews/getting-started/quickstart/index.md): your first fetch, both stores
+- [Python API](https://0xfirattamur.github.io/app-reviews/guide/python-api/index.md): full API reference
+- [How It Works](https://0xfirattamur.github.io/app-reviews/reference/how-it-works/index.md): what the fetch pipeline does
+- [Comparison](https://0xfirattamur.github.io/app-reviews/comparison/index.md): choose between this package and focused clients
+- [FAQ](https://0xfirattamur.github.io/app-reviews/faq/index.md): direct answers about countries, limits, and credentials
+
+# Installation
+
+## Requirements
+
+- **Python 3.11** or higher
+
+______________________________________________________________________
+
+## Install with pip
+
+```
+pip install app-reviews
+```
+
+## Install with uv
+
+```
+uv add app-reviews
+```
+
+______________________________________________________________________
+
+## Install from Source
+
+```
+git clone https://github.com/0xfirattamur/app-reviews.git
+cd app-reviews
+uv sync
+```
+
+To also install development tools:
+
+```
+uv sync --group dev
+```
+
+______________________________________________________________________
+
+## Verify the Installation
+
+```
+python -c "from app_reviews import AppStoreReviews; print('OK')"
+```
+
+______________________________________________________________________
+
+## Dependencies
+
+Two runtime dependencies:
+
+| Package        | Purpose                                  |
+| -------------- | ---------------------------------------- |
+| `cryptography` | JWT signing for authenticated API access |
+| `httpx`        | HTTP transport, sync and async           |
+
+# Quick Start
+
+Fetching reviews from both stores, with no credentials.
+
+______________________________________________________________________
+
+## Fetch Apple App Store Reviews
+
+```
+from app_reviews import AppStoreReviews
+
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=20, max_pages=2)
+
+for review in result:
+    print(f"{review.rating}* {review.title}")
+    print(f"  {review.body[:100]}")
+    print(f"  by {review.author_name}, {review.country}")
+```
+
+Replace `"324684580"` with a numeric App Store ID (the number after `/id` in the app's URL).
+
+______________________________________________________________________
+
+## Fetch Google Play Store Reviews
+
+```
+from app_reviews import GooglePlayReviews
+
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=20, max_pages=2)
+
+for review in result:
+    print(f"{review.rating}* {review.body[:100]}")
+    print(f"  by {review.author_name}")
+```
+
+Replace `"com.spotify.music"` with a package name (the `id` parameter in the Google Play URL). Google Play review responses do not include reviewer country, so `review.country` is `None`.
+
+______________________________________________________________________
+
+## Fetch from Multiple Countries
+
+```
+from app_reviews import AppStoreReviews, Country
+
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US, Country.GB, Country.DE, Country.FR, Country.JP],
+        max_pages=5,
+    )
+
+print(f"Fetched {len(result)} reviews")
+```
+
+______________________________________________________________________
+
+## Reuse the Client
+
+The client holds connection config (auth, proxy, retry). Reuse it for multiple apps:
+
+```
+from app_reviews import AppStoreReviews, AppStoreAuth, Country
+
+with AppStoreReviews(
+    auth=AppStoreAuth(
+        key_id="ABC123DEF4",
+        issuer_id="12345678-1234-1234-1234-123456789012",
+        key_path="/path/to/AuthKey.p8",
+    )
+) as client:
+    # Connect is global: do not pass storefront countries here.
+    spotify = client.fetch("324684580", limit=100, max_pages=3)
+    instagram = client.fetch("389801252", limit=100, max_pages=3)
+```
+
+______________________________________________________________________
+
+`countries=` only applies to the public App Store RSS feed
+
+It is the one per-country review source. An explicit empty or all-blank `countries` collection is a no-op and makes no requests on every review client. App Store Connect is global and may report a territory on each review. Google Play review clients reject any nonblank `country` or `countries` selection before network I/O because neither Play source has a review-country dimension. Google Play search and metadata still accept a storefront `country` for presentation, availability, and price.
+
+## Filter Results
+
+```
+from datetime import date
+from app_reviews import AppStoreReviews, Country
+
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US, Country.GB, Country.DE],
+        max_pages=5,
+    )
+
+bad_recent = result.filter(ratings=[1, 2], since=date(2025, 1, 1))
+
+for review in bad_recent:
+    print(f"{review.rating}* {review.body[:80]}")
+```
+
+______________________________________________________________________
+
+## Understanding the Result
+
+Every `client.fetch()` call returns a `FetchResult`. It is iterable and supports `len()` and `bool()`.
+
+| Property / Method    | Description                                               |
+| -------------------- | --------------------------------------------------------- |
+| `for r in result`    | Iterate over `Review` objects.                            |
+| `len(result)`        | Number of reviews.                                        |
+| `bool(result)`       | `True` if there is at least one review.                   |
+| `result.reviews`     | The list of `Review` objects.                             |
+| `result.errors`      | List of `FetchError` objects for countries that failed.   |
+| `result.filter(...)` | Returns a new filtered `FetchResult`.                     |
+| `result.sort(...)`   | Returns a new sorted `FetchResult`.                       |
+| `result.limit(n)`    | Returns a new `FetchResult` truncated to `n` reviews.     |
+| `result.to_dict()`   | Complete JSON-safe envelope with reviews and diagnostics. |
+| `result.to_dicts()`  | Review rows only, ready for JSONL or guarded CSV export.  |
+
+```
+from app_reviews import AppStoreReviews
+
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=20, max_pages=2)
+
+print(f"Reviews: {len(result)}")
+
+if result.errors:
+    for err in result.errors:
+        print(f"Failed: {err.country} ({err.message})")
+```
+
+A fetch can partially succeed. If 3 out of 5 countries succeed, you get reviews from those 3 and errors for the other 2.
+
+______________________________________________________________________
+
+## Next Steps
+
+- [Python API](https://0xfirattamur.github.io/app-reviews/guide/python-api/index.md): all parameters and options
+- [Authentication](https://0xfirattamur.github.io/app-reviews/guide/authentication/index.md): set up authenticated APIs
+- [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md): stream reviews, resume a walk
+# Guides and reference
+
+# Async
+
+Every entry point has an async twin using real async I/O over `httpx`, not a thread-pool wrapper.
+
+| sync               | async                     |
+| ------------------ | ------------------------- |
+| `fetch()`          | `afetch()`                |
+| `iter_reviews()`   | `aiter_reviews()`         |
+| `iter_pages()`     | `aiter_pages()`           |
+| `fetch_page()`     | `afetch_page()`           |
+| `search()`         | `asearch()`               |
+| `lookup()`         | `alookup()`               |
+| `close()` / `with` | `aclose()` / `async with` |
+
+```
+import asyncio
+
+from app_reviews import AppStoreReviews, Country
+
+
+async def main():
+    async with AppStoreReviews() as client:
+        result = await client.afetch(
+            "324684580", countries=[Country.US, Country.GB]
+        )
+    for outcome in result.outcomes:
+        print(outcome.country, outcome.reviews_fetched, outcome.stopped_because)
+
+
+asyncio.run(main())
+```
+
+`afetch()` fans out across countries with `asyncio.gather` behind a semaphore, with no threads. `concurrency=1` makes it sequential.
+
+```
+async def walk_pages(client):
+    async for page in client.aiter_pages("324684580", country="us"):
+        await store(page.reviews)
+```
+
+```
+async def stream_reviews(client):
+    async for review in client.aiter_reviews("324684580", countries=["us", "gb"]):
+        await handle(review)
+```
+
+The sync path is a separate implementation, not a wrapper around the async one, so calling `fetch()` from inside a running event loop is safe.
+
+Async credential work stays off the event loop: the Google Play token exchange is awaited, and App Store JWT signing, which is blocking local work with no async equivalent, runs in a thread. Either way it happens once per client, not once per request.
+
+______________________________________________________________________
+
+## Closing the pool
+
+Each client owns one connection pool, so its sockets outlive a single request. Use `async with`, or call `aclose()`:
+
+```
+async def main():
+    async with AppStoreReviews() as client:
+        result = await client.afetch("324684580")
+```
+
+______________________________________________________________________
+
+## Async search and lookup
+
+`AppStoreSearch` and `GooglePlaySearch` follow the same pattern:
+
+```
+from app_reviews import AppStoreSearch
+
+
+async def main():
+    async with AppStoreSearch() as client:
+        results = await client.asearch("fitness tracker")
+        app = await client.alookup("com.burbn.instagram")
+```
+
+## Async metadata lookup
+
+```
+from app_reviews import AppStoreSearch
+
+
+async def main():
+    async with AppStoreSearch() as client:
+        metadata = await client.alookup("123456789")
+```
+
+# Authentication
+
+Both stores work **without any authentication**. The default providers use public endpoints and require no setup.
+
+If you need account-scoped official access, you can configure the store APIs. Their fields, ordering, and history differ from the public sources; they are not strict supersets. This page walks through setup for each store.
+
+______________________________________________________________________
+
+## Apple App Store Connect API
+
+The official API gives credentials access to reviews for apps in the associated App Store Connect account.
+
+### What You Need
+
+- An [Apple Developer Program](https://developer.apple.com/programs/) membership ($99/year)
+- An API key from App Store Connect
+- Three pieces of information: **Key ID**, **Issuer ID**, and a **`.p8` private key file**
+
+### Step-by-Step Setup
+
+**Step 1: Open App Store Connect**
+
+Go to [App Store Connect](https://appstoreconnect.apple.com/) and sign in with your Apple Developer account.
+
+**Step 2: Navigate to API Keys**
+
+Go to **Users and Access** in the top menu, then click the **Keys** tab. If you don't see this tab, you may need the Admin or Account Holder role.
+
+**Step 3: Generate a New Key**
+
+Click the **+** button to create a new API key. Give it a name (like "App Reviews") and select the appropriate access level.
+
+After creating the key, you will see two values on the page:
+
+- **Key ID**, a short alphanumeric string (like `ABC123DEF4`)
+- **Issuer ID**, a UUID (like `12345678-1234-1234-1234-123456789012`)
+
+Copy both.
+
+**Step 4: Download the Private Key**
+
+Click **Download API Key** to get the `.p8` file. This file contains your private key.
+
+Download it now
+
+You can only download the `.p8` file **once**. If you lose it, you will need to create a new key.
+
+Save it somewhere safe, like `~/.appstore-keys/AuthKey_ABC123DEF4.p8`.
+
+**Step 5: Use the Credentials**
+
+Pass the credentials to `AppStoreReviews` via `AppStoreAuth`:
+
+```
+from app_reviews import AppStoreAuth, AppStoreReviews
+
+with AppStoreReviews(
+    auth=AppStoreAuth(
+        key_id="ABC123DEF4",
+        issuer_id="12345678-1234-1234-1234-123456789012",
+        key_path="/path/to/AuthKey_ABC123DEF4.p8",
+    )
+) as client:
+    # Connect is global; each review may report its own territory.
+    result = client.fetch("324684580", limit=100, max_pages=3)
+```
+
+### No Auth (Public RSS Feed)
+
+If you do not provide `auth`, the client automatically uses the public RSS feed:
+
+```
+from app_reviews import AppStoreReviews
+
+# No auth: uses the public RSS feed
+with AppStoreReviews() as client:
+    result = client.fetch("324684580", limit=100, max_pages=3)
+```
+
+### How It Works
+
+The package uses your `.p8` private key to sign a JWT (JSON Web Token) using the ES256 algorithm. This token is sent as a Bearer token in the `Authorization` header of each request to the App Store Connect API.
+
+Tokens are short-lived. One client signs once and reuses the result until it nears expiry, not once per fetch. Your private key never leaves your machine.
+
+______________________________________________________________________
+
+## Google Play Developer API
+
+The official API gives you access to reviews through Google's authenticated endpoint, with pagination support and structured data.
+
+### What You Need
+
+- A [Google Cloud](https://console.cloud.google.com/) account
+- A Google Play Developer account linked to your Google Cloud project
+- A **service account JSON key file**
+
+### Step-by-Step Setup
+
+**Step 1: Open Google Cloud Console**
+
+Go to [Google Cloud Console](https://console.cloud.google.com/) and select your project (or create a new one).
+
+**Step 2: Enable the Google Play Developer API**
+
+Go to **APIs & Services** > **Library**, search for "Google Play Android Developer API", and click **Enable**.
+
+**Step 3: Create a Service Account**
+
+Go to **APIs & Services** > **Credentials**, click **Create Credentials** > **Service Account**.
+
+Give it a name (like "app-reviews") and click through the wizard. You do not need to grant it any Google Cloud roles; the permissions come from the Google Play Console side.
+
+**Step 4: Download the Key File**
+
+After creating the service account, click on it, go to the **Keys** tab, and click **Add Key** > **Create New Key** > **JSON**.
+
+This downloads a JSON file. Save it somewhere safe, like `~/.google-keys/service-account.json`.
+
+**Step 5: Link to Google Play Console**
+
+Go to the [Google Play Console](https://play.google.com/console/), then **Settings** > **API access**. Find your service account and click **Grant access**. Give it at least **View app information and download bulk reports** permission.
+
+Propagation delay
+
+After granting access, it can take up to 24 hours for the permissions to take effect.
+
+**Step 6: Use the Credentials**
+
+Pass the credentials to `GooglePlayReviews` via `GooglePlayAuth`:
+
+```
+from app_reviews import GooglePlayAuth, GooglePlayReviews
+
+with GooglePlayReviews(
+    auth=GooglePlayAuth(
+        service_account_path="/path/to/service-account.json",
+    )
+) as client:
+    # Play reviews are global; reviewer country is not reported.
+    result = client.fetch("com.spotify.music", limit=100, max_pages=3)
+```
+
+### No Auth (Public Web Endpoint)
+
+If you do not provide `auth`, the client automatically uses the public web endpoint:
+
+```
+from app_reviews import GooglePlayReviews
+
+# No auth: uses the public web endpoint
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=100, max_pages=3)
+```
+
+### How It Works
+
+The package reads your service account JSON file, extracts the RSA private key, and signs a JWT using the RS256 algorithm. This JWT is exchanged for an OAuth2 access token via Google's token endpoint.
+
+The access token is then used as a Bearer token in requests to the Google Play Developer API. One client exchanges once and reuses the token until it nears expiry, not once per fetch. Your private key never leaves your machine.
+
+# Paging and cursors
+
+`fetch()` walks every page for you. When you need to own the loop (to checkpoint progress, to resume in another process, or to rate-limit yourself), use the lower rungs.
+
+If you only want the reviews and not the pages, skip to [Streaming reviews](#streaming-reviews): `iter_reviews()` is the rung between `iter_pages()` and `fetch()`, and it is what most streaming code wants.
+
+______________________________________________________________________
+
+## One page at a time
+
+`fetch_page()` makes exactly one request and hands back the cursor:
+
+```
+from app_reviews import AppStoreReviews
+
+with AppStoreReviews() as client:
+    page = client.fetch_page("324684580", country="us")
+    print(len(page.reviews), page.next_cursor)
+```
+
+`next_cursor` is opaque and provider-specific: a page number for the RSS feed, a URL for App Store Connect, a token for Google Play. Persist it verbatim and pass it back to resume:
+
+```
+with AppStoreReviews() as client:
+    page = client.fetch_page("324684580", country="us", cursor=saved_cursor)
+```
+
+`next_cursor is None` means there are no more pages.
+
+______________________________________________________________________
+
+## Iterating one country
+
+`iter_pages()` drives the loop and owns the `since` early stop:
+
+```
+from datetime import datetime, timedelta, UTC
+
+since = datetime.now(UTC) - timedelta(days=2)
+
+for page in client.iter_pages("324684580", country="us", since=since):
+    store(page.reviews)
+    checkpoint(page.next_cursor)
+```
+
+The last page yielded carries `stopped_because`: `"exhausted"`, `"limit"`, `"since"`, `"cycle"`, `"stalled"`, `"max_pages"` or `"error"`. Every earlier page has `stopped_because is None`. See [Models](https://0xfirattamur.github.io/app-reviews/reference/models/#stopreason) for what each value means and [Source capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md) for which sources honor `since`.
+
+`iter_pages()` also accepts `limit`, which bounds *this walk*: it stops once `limit` reviews have been yielded across pages.
+
+```
+for page in client.iter_pages("324684580", country="us", limit=100):
+    store(page.reviews)
+```
+
+`fetch()` does not always apply the same bound for the same `limit`. It drives the identical page walk internally, but decides for itself whether stopping at `limit` unfiltered reviews is safe, and exhausts pagination instead when it is not: with a non-newest `sort`, on a source that does not guarantee newest-first ordering, or when a `ratings`/`until` filter is also requested, since none of those let it know in advance which of the first `limit` reviews fetched will be the ones the caller actually wants. See [Source capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md) for which sources guarantee newest-first ordering.
+
+______________________________________________________________________
+
+## Streaming reviews
+
+Reach for `iter_pages()` when you care about pages: cursors, checkpoints, per-page errors. When you just want reviews, `iter_reviews()` yields them one at a time and spans countries, so the nested loop disappears:
+
+```
+for review in client.iter_reviews("324684580", countries=["us", "gb"]):
+    handle(review)
+```
+
+versus the same thing a rung lower:
+
+```
+for country in ["us", "gb"]:
+    for page in client.iter_pages("324684580", country=country):
+        for review in page.reviews:
+            handle(review)
+```
+
+The difference from `fetch()` is memory, not convenience. `fetch()` filters, sorts and limits across the whole corpus, so it must hold every review of every country before it returns anything; with `Country.ALL` that is 155 storefronts at once. `iter_reviews()` holds one page.
+
+That is also the trade: no cross-country sorting, and no `ratings` or `until` filtering, because all three need the full set in hand. Reviews arrive in fetch order, country by country, walked in sequence rather than concurrently, because a concurrent fan-out would have to buffer to put results back in order, which is the cost this rung exists to avoid.
+
+`limit` here means "yield at most this many", counted across countries, not `fetch()`'s "the N best under `sort`". `since` behaves as it does in `iter_pages()`, stopping the walk early where the source guarantees ordering.
+
+Because a generator has nowhere to hand a `FetchError` back, a country whose walk fails is logged at WARNING and skipped. Use `fetch()` or `iter_pages()` when you need the failure as data.
+
+`aiter_reviews()` is the async twin.
+
+______________________________________________________________________
+
+## Errors
+
+`iter_pages()` reports failures rather than raising: a failed page is yielded with `.error` set and the walk stops, so you keep the pages you already consumed. The one exception is `AuthError`: an unusable credential is configuration that every country and page would repeat, so it is raised rather than reported N times:
+
+```
+for page in client.iter_pages("324684580", country="us"):
+    if page.error:
+        if page.error.retryable:
+            schedule_retry(page.error)
+        break
+    store(page.reviews)
+```
+
+See [Models](https://0xfirattamur.github.io/app-reviews/reference/models/#fetcherror) for `ErrorKind`.
+
+# Python API
+
+Four main classes: two for reviews, two for search and lookup. All follow the same pattern: create a client, call a method.
+
+`fetch()` is the top of a four-rung ladder (`fetch_page()` -> `iter_pages()` -> `iter_reviews()` -> `fetch()`), and every rung has an async twin. This page covers `fetch()`; see [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md) for the lower rungs (including `iter_reviews()`, which streams reviews instead of buffering them), and [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md) for the `a`-prefixed equivalents.
+
+Every client owns one HTTP connection pool, so close it when you are done or use it as a context manager. See [Connection pooling](#connection-pooling).
+
+______________________________________________________________________
+
+## Imports
+
+Everything public comes from the top-level package. There is one import path per name:
+
+```
+from app_reviews import AppStoreReviews, Country, Sort, FetchResult, HttpError
+```
+
+That is the whole contract, and it is why the package's internal layout is free to change without breaking you: nothing supported points at a submodule. `app_reviews.models` deliberately re-exports nothing; import the models from the root.
+
+For annotating your own code, the closed vocabularies are exported too:
+
+```
+from app_reviews import ErrorKind, Review, Sort, Source, StopReason, Store
+
+def handle(review: Review, source: Source) -> None: ...
+```
+
+Two submodules are documented and reasonable to reach into:
+
+```
+from app_reviews.appstore import AppStoreScraperProvider, AppStoreOfficialProvider
+from app_reviews.googleplay import GooglePlayScraperProvider, GooglePlayOfficialProvider
+```
+
+`app_reviews.appstore` and `app_reviews.googleplay` each hold one store's five pieces: credentials, its two providers, its reviews client, its search client. Reach in when you want to drive a provider directly, or to pin a source rather than letting the presence of credentials choose it. Both also re-export their two clients, but prefer the root for those.
+
+`app_reviews.core` is the store-agnostic engine: the connection pool, the page walk, the protocols. Internal, and carries no compatibility promise.
+
+______________________________________________________________________
+
+## AppStoreReviews
+
+```
+from app_reviews import AppStoreReviews, AppStoreAuth
+```
+
+### Constructor
+
+```
+client = AppStoreReviews(
+    auth=None,       # AppStoreAuth | None: credentials for App Store Connect API
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+Without `auth`, uses the public RSS feed. With `auth`, uses the App Store Connect API.
+
+### fetch()
+
+```
+result = client.fetch(
+    app_id,          # str: App Store ID (numeric)
+    countries=None,  # Collection[Country | str] | None: storefronts (default: ["us"])
+    since=None,      # date | datetime | None: only reviews on or after this date
+    until=None,      # date | datetime | None: only reviews on or before this date
+    ratings=None,    # list[int] | None: filter to specific star ratings
+    sort=Sort.NEWEST,# Sort: sort order
+    limit=None,      # int | None: max reviews to return
+    concurrency=None,# int | None: max countries fetched in parallel (default: 8)
+    max_pages=None,  # int | None: request budget per country (default: 10,000)
+)
+```
+
+`since` also **reduces how many requests are made**, not just what is returned: on a source whose pages arrive newest-first (see [how the sources differ](https://0xfirattamur.github.io/app-reviews/reference/capabilities/#page-order)), the page walk stops as soon as it reaches a page older than `since`. See [How It Works](https://0xfirattamur.github.io/app-reviews/reference/how-it-works/#the-fetch-pipeline).
+
+`limit` bounds the walk too, but only for `sort=Sort.NEWEST` on a newest-first source; with `Sort.OLDEST` or `Sort.RATING` the "best N" are not the first N fetched, so pagination must exhaust before truncating.
+
+### AppStoreAuth
+
+```
+auth = AppStoreAuth(
+    key_id="ABC123DEF4",
+    issuer_id="12345678-1234-1234-1234-123456789012",
+    key_path="/path/to/AuthKey_ABC123DEF4.p8",
+)
+```
+
+### Examples
+
+```
+# No auth (public RSS feed)
+from app_reviews import Country
+
+with AppStoreReviews() as client:
+    result = client.fetch("123456789")
+    multi_country = client.fetch(
+        "123456789", countries=[Country.US, Country.GB, Country.DE]
+    )
+
+# With auth
+with AppStoreReviews(
+    auth=AppStoreAuth(
+        key_id="ABC123DEF4",
+        issuer_id="12345678-1234-1234-1234-123456789012",
+        key_path="/path/to/AuthKey.p8",
+    )
+) as client:
+    # App Store Connect is global; reuse one client for account-owned apps.
+    spotify = client.fetch("324684580", limit=100)
+    instagram = client.fetch("389801252", limit=100)
+    twitter = client.fetch("333903271", ratings=[1, 2])
+
+# Filter by date and rating
+from datetime import date
+with AppStoreReviews() as client:
+    result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
+```
+
+______________________________________________________________________
+
+## GooglePlayReviews
+
+```
+from app_reviews import GooglePlayReviews, GooglePlayAuth
+```
+
+### Constructor
+
+```
+client = GooglePlayReviews(
+    auth=None,       # GooglePlayAuth | None: credentials for Developer API
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play Developer API.
+
+### fetch()
+
+The filtering, sorting, limit, and request-budget parameters match `AppStoreReviews.fetch()`, and `app_id` is a package name (for example, `"com.example.app"`). An explicit empty or all-blank `countries` collection is a no-op and makes no requests on every review client. Otherwise, Google Play review clients reject any nonblank `country` or `countries` selection before network I/O: the public and official sources expose one global review corpus and no reviewer-country field. Google Play search and metadata continue to accept `country` as a storefront selector.
+
+### GooglePlayAuth
+
+```
+auth = GooglePlayAuth(
+    service_account_path="/path/to/service-account.json",
+)
+```
+
+### Examples
+
+```
+# No auth
+with GooglePlayReviews() as client:
+    result = client.fetch("com.example.app")
+
+# With auth
+from app_reviews import Sort
+with GooglePlayReviews(
+    auth=GooglePlayAuth(service_account_path="/path/to/service-account.json")
+) as client:
+    result = client.fetch("com.example.app", sort=Sort.NEWEST, limit=100)
+```
+
+______________________________________________________________________
+
+## Country Enum
+
+`Country` is a `StrEnum`; values are two-letter country codes.
+
+```
+from app_reviews import Country
+
+Country.US   # "us"
+Country.GB   # "gb"
+Country.DE   # "de"
+```
+
+**Region groups:**
+
+| Group                      | Description                  |
+| -------------------------- | ---------------------------- |
+| `Country.ALL`              | All 155 supported countries  |
+| `Country.EUROPE`           | European countries           |
+| `Country.AMERICAS`         | North and South America      |
+| `Country.ASIA_PACIFIC`     | Asia-Pacific region          |
+| `Country.MIDDLE_EAST`      | Middle East and North Africa |
+| `Country.ENGLISH_SPEAKING` | English-speaking countries   |
+
+Each group is a `frozenset[Country]` and can be passed straight to `countries=`, which takes any collection of `Country` or `str`. Plain strings work too: `countries=["us", "gb"]`. Entries are normalised and deduplicated, so `"US"`, `"us"` and `"USA"` name one storefront and are walked once. These selections apply to Apple review storefronts; Google Play review clients reject nonblank country selections because their review corpus is global.
+
+______________________________________________________________________
+
+## Sort Enum
+
+```
+from app_reviews import Sort
+
+Sort.NEWEST   # most recent first (default)
+Sort.OLDEST   # oldest first
+Sort.RATING   # highest rated first
+```
+
+______________________________________________________________________
+
+## Working with Results
+
+### Iterate, count, and check
+
+```
+result = client.fetch("123456789")
+
+for review in result:
+    print(review.title)
+
+print(f"Reviews: {len(result)}")
+
+if result:
+    print("Got reviews!")
+```
+
+### Filter after fetching
+
+```
+from datetime import date
+
+bad_recent = result.filter(ratings=[1, 2], since=date(2025, 1, 1))
+```
+
+### Check errors
+
+```
+if result.errors:
+    for err in result.errors:
+        print(f"Failed: {err.country} ({err.message})")
+```
+
+### Serialise
+
+`to_dict()` gives you the complete JSON-safe result envelope, including errors, outcomes and skipped-record counts. `to_dicts()` is the compatibility helper for review rows only. Provider payloads (`raw`) are left out unless you ask for them:
+
+```
+payload = result.to_dict()                     # reviews + diagnostics
+records = result.to_dicts()                    # review rows only
+records = result.to_dicts(include_raw=True)    # keep the provider payload
+```
+
+From there the standard library does the rest. The package ships no exporters: serialisation is a solved problem and `json`/`csv` do it better than a wrapper would.
+
+```
+import csv, json
+
+json.dumps(result.to_dicts(), indent=2)                      # JSON
+"\n".join(json.dumps(d) for d in result.to_dicts())          # JSONL
+
+rows = result.to_dicts()
+if rows:
+    with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+```
+
+`newline=""` is required when writing CSV; without it, review bodies containing newlines produce broken rows on some platforms.
+
+### Review
+
+`fetch()` returns a `FetchResult` containing `Review` objects, frozen dataclasses with these fields:
+
+| Field         | Type                   | Description                                                                                                                |
+| ------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | `str`                  | Raw identifier assigned by the source ([details](https://0xfirattamur.github.io/app-reviews/reference/models/#review-ids)) |
+| `store`       | `Store`                | `"appstore"` or `"googleplay"`                                                                                             |
+| `app_id`      | `str`                  | Numeric Apple app ID or Google Play package name                                                                           |
+| `country`     | `str \| None`          | Storefront queried. `None` if the source does not report one (e.g. `googleplay_official`, `googleplay_scraper`)            |
+| `rating`      | `int`                  | Star rating (`1`-`5`)                                                                                                      |
+| `title`       | `str \| None`          | Review title. Google Play web has none; the official API may expose a legacy title                                         |
+| `body`        | `str`                  | Review text                                                                                                                |
+| `author_name` | `str`                  | Reviewer display name                                                                                                      |
+| `app_version` | `str \| None`          | App version at time of review                                                                                              |
+| `created_at`  | `datetime \| None`     | When written. `None` on sources that only report a modification time                                                       |
+| `updated_at`  | `datetime \| None`     | Last modified. `None` on sources that only report a creation time                                                          |
+| `source`      | `Source`               | Provider (e.g. `"appstore_scraper"`, `"googleplay_official"`)                                                              |
+| `language`    | `str \| None`          | Review language code                                                                                                       |
+| `fetched_at`  | `datetime \| None`     | When the review was fetched                                                                                                |
+| `raw`         | `dict \| list \| None` | Raw provider payload. Apple and official Play use objects; Play web uses arrays                                            |
+
+### Error handling
+
+`fetch()` does not raise on partial failures. Check `result.errors`: each is a `FetchError` with a typed `kind` (`ErrorKind`) to branch retry policy on, rather than parsing exception text:
+
+```
+result = client.fetch("123456789")
+
+if not result and result.errors:
+    print("All fetches failed:")
+    for err in result.errors:
+        print(f"  {err.country}: {err.message} ({err.kind})")
+elif result.errors:
+    print(f"Got {len(result)} reviews, but some countries failed:")
+    for err in result.errors:
+        if err.retryable:
+            schedule_retry(err)
+        print(f"  {err.country}: {err.message} ({err.kind})")
+```
+
+`fetch()` surfaces errors that older versions swallowed: previously, a page error on a country that had already yielded some reviews was logged and discarded, so a non-empty `result` could still hide a failure. Errors now always reach `result.errors`, so code that treated "got some reviews" as "nothing failed" will start seeing failures it did not see before.
+
+`search()` and `lookup()` **raise** instead: a single request has a single outcome, so there is no partial result to hand back. They raise `HttpError`, which carries the same `kind` and `status` you would have got from a `FetchError`:
+
+```
+from app_reviews import AppStoreSearch, AuthError, HttpError, RateLimitError
+
+with AppStoreSearch() as client:
+    try:
+        apps = client.search("fitness tracker")
+    except RateLimitError as err:
+        back_off(err.status)
+    except AuthError:
+        alert_a_human()
+    except HttpError as err:
+        log(type(err).__name__, err.status)
+```
+
+The exception class carries the classification, so there is no `kind` attribute to read and no `kind=` to pass, so an error cannot be labelled as something it is not. `status` is the HTTP status when the failure came from a response, and `None` when the exchange never produced one.
+
+| exception        | raised when                                                                                    | retry?     |
+| ---------------- | ---------------------------------------------------------------------------------------------- | ---------- |
+| `RateLimitError` | HTTP 429                                                                                       | yes, later |
+| `ServerError`    | HTTP 5xx                                                                                       | yes        |
+| `TransportError` | connection refused, timeout, or an exchange that did not complete                              | yes        |
+| `AuthError`      | credentials rejected, or unusable; 401/403 from an official credentialed endpoint              | **no**     |
+| `RequestError`   | another permanent HTTP 4xx rejection, including 401/403 from a credential-free public endpoint | no         |
+| `NotFoundError`  | HTTP 404                                                                                       | no         |
+| `ParseError`     | a success carrying an unreadable body                                                          | no         |
+
+All except `AuthError` subclass `HttpError`, so `except HttpError` still catches every request-level failure. `AuthError` sits beside it because an unreadable key file is an auth failure with no HTTP in it. Everything subclasses `AppReviewsError`.
+
+On the `fetch` path there is nothing to catch: a walk over many countries reports `FetchError` values in `result.errors` instead, carrying the matching [`ErrorKind`](https://0xfirattamur.github.io/app-reviews/reference/models/#errorkind) as data. One taxonomy, two deliveries: `core.classify` maps a status to both.
+
+______________________________________________________________________
+
+## Connection pooling
+
+Each client owns one `HttpClient`, which holds a single `httpx.Client` / `AsyncClient` for its lifetime. That means a multi-page walk reuses one connection instead of performing a TLS handshake per page, and that the sockets stay open until you close them:
+
+```
+with AppStoreReviews() as client:
+    result = client.fetch("324684580")
+```
+
+`close()` and `aclose()` do the same thing explicitly. A client remains usable afterwards; the next request reopens the pool.
+
+To share one pool across several clients, or to set a custom transport, build it yourself:
+
+```
+from app_reviews import AppStoreReviews, AppStoreSearch, HttpClient, RetryConfig
+
+pool = HttpClient(proxy="http://proxy.example.com:8080", retry=RetryConfig())
+reviews = AppStoreReviews(http=pool)
+search = AppStoreSearch(http=pool)
+```
+
+A pool you pass with `http=` already carries its own `proxy` and `retry`, so passing either alongside it raises `TypeError` rather than silently ignoring what you asked for.
+
+### Per-country outcomes
+
+`result.outcomes` is a `list[CountryOutcome]`, one per requested country (or a single entry with `country=None` for global sources). Each reports how many pages and reviews were fetched, why the walk stopped (`stopped_because`), and how long it took:
+
+```
+for outcome in result.outcomes:
+    print(outcome.country, outcome.pages, outcome.reviews_fetched,
+          outcome.stopped_because)
+```
+
+`stopped_because` distinguishes `"exhausted"` (no more data) from every other value, all of which mean more data may exist: `"limit"` and `"since"` because the walk stopped asking, `"cycle"`, `"stalled"` and `"max_pages"` because it gave up on a source that would not end, and `"error"`. See [Models](https://0xfirattamur.github.io/app-reviews/reference/models/#countryoutcome).
+
+______________________________________________________________________
+
+## App Search & Lookup
+
+Search for apps by keyword and look up app metadata by ID. No authentication required.
+
+### AppStoreSearch
+
+```
+from app_reviews import AppStoreSearch, Country
+```
+
+```
+client = AppStoreSearch(
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+#### search()
+
+```
+results = client.search(
+    "fitness tracker",       # str: search query
+    country=Country.US,      # Country: store region (default: US)
+    limit=50,                # int: max results (default: 50)
+)
+# returns list[AppMetadata]
+```
+
+#### lookup()
+
+```
+app = client.lookup(
+    "com.whatsapp.WhatsApp", # str: bundle ID
+    country=Country.US,      # Country: store region (default: US)
+)
+# returns AppMetadata | None
+```
+
+### GooglePlaySearch
+
+```
+from app_reviews import GooglePlaySearch, Country
+```
+
+```
+client = GooglePlaySearch(
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+Same `search()` and `lookup()` methods as `AppStoreSearch`. For lookup, pass a package name (e.g. `"com.whatsapp"`).
+
+### AppMetadata
+
+Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with these fields:
+
+| Field                          | Type               | Description                                                         |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------- |
+| `app_id`                       | `str`              | Numeric track ID for App Store results, or Google Play package name |
+| `store`                        | `Store`            | `"appstore"` or `"googleplay"`                                      |
+| `name`                         | `str`              | App display name                                                    |
+| `developer`                    | `str`              | Developer or publisher name                                         |
+| `category`                     | `str`              | Primary category (e.g. `"Social Networking"`)                       |
+| `price`                        | `str`              | Localized store price, ISO fallback, `"Free"`, or `"Unknown"`       |
+| `version`                      | `str`              | Current version string                                              |
+| `rating`                       | `float`            | Average star rating (`0.0`-`5.0`)                                   |
+| `rating_count`                 | `int`              | Total number of ratings                                             |
+| `url`                          | `str`              | Store page URL                                                      |
+| `icon_url`                     | `str \| None`      | App icon image URL                                                  |
+| `current_version_release_date` | `datetime \| None` | When the current version shipped                                    |
+| `first_release_date`           | `datetime \| None` | When the app first appeared on the store                            |
+
+> **Dates:** both are `None` when the store publishes none, because a date has no honest placeholder. Precision differs: the App Store sends a real timestamp, while Google Play publishes only a day, so a Play date is midnight UTC on that day. A Play *search* hit carries neither; use `lookup()`.
+>
+> **Note:** Google Play search results may have `"Unknown"` for `name`, `developer` and `category`, and `0` for `rating_count`, because a regular search hit carries no count. Google Play `price` prefers the localized display value; absent data or numeric zero becomes `"Free"`, a positive numeric amount plus ISO currency becomes an ISO-formatted fallback, and malformed/non-finite data or a missing currency becomes `"Unknown"`. `version` is always `"Varies with device"`, because a regular search hit carries no version field. Use `lookup()` for a real rating count, and for the real version when the app publishes one.
+
+### Examples
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, Country
+
+# Search App Store
+with AppStoreSearch() as client:
+    results = client.search("weather", country=Country.GB, limit=5)
+    for app in results:
+        print(f"{app.name} by {app.developer} ({app.rating}*)")
+
+# Search Google Play
+with GooglePlaySearch() as client:
+    results = client.search("weather", country=Country.US, limit=5)
+    for app in results:
+        print(f"{app.name}: {app.icon_url}")
+
+# Look up a specific app, then fetch its reviews
+from app_reviews import GooglePlayReviews
+with GooglePlaySearch() as search:
+    app = search.lookup("com.whatsapp")
+if app:
+    with GooglePlayReviews() as reviews_client:
+        reviews = reviews_client.fetch(app.app_id)
+    print(f"{app.name}: {len(reviews)} reviews")
+```
+
+______________________________________________________________________
+
+## Metadata for one app
+
+Use the search client for the store you are asking about:
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, Country
+
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    meta = apple.lookup("324684580")                         # None if absent
+    meta = play.lookup("com.whatsapp")
+    german_meta = apple.lookup("324684580", country=Country.DE)
+```
+
+`lookup()` returns `AppMetadata | None`, and `alookup()` is the async twin.
+
+Earlier versions shipped a `lookup_metadata()` helper that guessed the store from the id's shape. It was removed in 0.6.0: the guess was a lowercase reverse-DNS regex, so real Play packages like `com.Slack` and `com.t_mobile.pr.mytmobile` were routed to the App Store and came back as "not found". A caller always knows which store an id came from, and if you genuinely need to route a mixed batch, the test is one line, because App Store ids are numeric:
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, HttpClient
+
+with HttpClient() as pool:                       # one pool for the whole batch
+    apple, play = AppStoreSearch(http=pool), GooglePlaySearch(http=pool)
+    for app_id in app_ids:
+        client = apple if app_id.isdigit() else play
+        meta = client.lookup(app_id)
+```
+
+# How the sources differ
+
+Four sources back two stores, and they do not behave alike. This page is the reference for the differences that change how you call the library.
+
+There is no runtime object to query. A `capabilities()` function used to publish these as data and was removed in 0.6.0: of its seven fields the library read two, one had the same value for every source, and one described a reply API this package never calls. "How do these sources differ" is a question you have while *writing* code, so it is answered here, where you are at the time.
+
+Which source you get is decided by whether you pass `auth=`:
+
+| Client                        | Source                |
+| ----------------------------- | --------------------- |
+| `AppStoreReviews()`           | `appstore_scraper`    |
+| `AppStoreReviews(auth=...)`   | `appstore_official`   |
+| `GooglePlayReviews()`         | `googleplay_scraper`  |
+| `GooglePlayReviews(auth=...)` | `googleplay_official` |
+
+`client.source` tells you at runtime. Country handling is part of each public method's contract: Apple RSS accepts storefronts, App Store Connect is global, and Google Play review clients reject country arguments.
+
+|                   | `appstore_scraper`      | `appstore_official` | `googleplay_scraper`   | `googleplay_official`  |
+| ----------------- | ----------------------- | ------------------- | ---------------------- | ---------------------- |
+| Credentials       | none                    | Connect `.p8`       | none                   | service account        |
+| Countries         | **per storefront**      | global              | unsupported (rejected) | unsupported (rejected) |
+| Page order        | newest-first            | newest-first        | newest-first           | **not guaranteed**     |
+| History           | unbounded               | unbounded           | unbounded              | **last 7 days**        |
+| Ceiling           | **~500 per storefront** | unbounded           | unbounded              | unbounded              |
+| `review.country`  | set                     | set                 | `None`                 | `None`                 |
+| `review.title`    | set                     | set                 | `None`                 | legacy text only       |
+| `review.language` | `None`                  | `None`              | `None`                 | set when reported      |
+| `review.raw`      | populated               | populated           | populated              | populated              |
+
+______________________________________________________________________
+
+## Countries
+
+Only `appstore_scraper` has a country dimension. Its feed URL is per storefront (`https://itunes.apple.com/{country}/rss/...`), each request returns that storefront's own reviews, and fetching `us` and `gb` gets you two different review sets.
+
+App Store Connect is global: one request covers every territory, and reviews may carry their own territory. Its high-level client resolves a requested storefront fan-out to one global walk.
+
+An explicit empty or all-blank `countries` collection is a no-op and makes no requests on every review client. Otherwise, Google Play review clients reject any nonblank `country` or `countries` selection before network I/O. Neither the public scraper nor the official Developer API exposes a review-country dimension, so silently accepting a storefront would suggest a filter that does not exist. Google Play search and metadata still accept `country` to select the storefront used for presentation, availability, and price.
+
+`googleplay_scraper` looks like it should be per-country (the batchexecute request does take `gl` and `hl`), and it is easy to assume varying them partitions the corpus the way the RSS URL does. It does not. Play has one global review corpus per app; `gl`/`hl` select the store's *presentation* locale (currency formatting, translated UI strings), never a review filter. Fetching `us`, `gb` and `de` against one app returns the same reviews three times. That is also why `Review.country` is always `None` for this source: there is no storefront to attribute a review to.
+
+`appstore_official` is global in the same sense (one request), but each review carries its own `territory`, so `Review.country` is set. Apple reports it as ISO alpha-3 (`"USA"`); the package normalises to the alpha-2 form `Country` uses (`"us"`), and the original stays in `raw["attributes"]["territory"]`.
+
+## Page order
+
+Three sources are guaranteed newest-first: the RSS feed asks for `sortBy=mostRecent`, Connect for `sort=-createdDate`, and the Play scraper sends Play's own "newest" sort id.
+
+`googleplay_official` is not. The Developer API documents no ordering guarantee, and truncating a fetch on an unverified assumption would silently lose reviews.
+
+This gates the `since` early stop. On the three ordered sources, `since` stops the walk once a page's oldest review predates it, so the later requests are never made. Against `googleplay_official` every fetch walks to exhaustion and `since` only filters what you get back.
+
+## History
+
+`googleplay_official` reaches back **seven days** and no further. Google documents this in a `Note:` under "Retrieving a set of reviews" on the [reply-to-reviews guide](https://developers.google.com/android-publisher/reply-to-reviews):
+
+> Note: You can retrieve only the reviews that users have created or modified within the last week.
+
+That is the API's own limitation, not a package restriction: the API refuses to return anything older. For full Google Play history, export a CSV from Play Console; this package does not read that format.
+
+## Ceiling
+
+`appstore_scraper` serves at most 10 pages of ~50 reviews per storefront, so **~500 reviews per storefront** is a hard ceiling regardless of `since` or `limit`. The walk reports `stopped_because="exhausted"` on reaching it, because the feed genuinely offers nothing more.
+
+The other three are unbounded in request terms, though `googleplay_official` is bounded in time (above).
+
+## `review.raw`
+
+Every source populates it with the provider's own payload. That matters if you keep an append-only observation log: a day fetched without `raw` can never be reprocessed, so a mapping bug found later has nothing to go back to.
+
+Prior to 0.6.0 the Play scraper set `raw=None` while the other three populated it. Its shape differs by source: Apple and the official Play API send JSON objects, while Play's web endpoint sends positional arrays, so `raw` is `dict | list | None`.
+
+`to_dicts()` omits it unless you ask: `result.to_dicts(include_raw=True)`. It is off by default because the payload routinely dwarfs the review around it.
+
+## Replies
+
+Neither store's reply API is implemented here. If you build replies yourself, note that they only accept identifiers the store's own list endpoint minted, so a scraper-sourced review id will not work. This package does not verify that claim, so treat it as a starting point rather than a fact.
+
+______________________________________________________________________
+
+### An empty App Store RSS feed is ambiguous
+
+`appstore_scraper` cannot tell these three apart:
+
+1. the app genuinely has no reviews
+1. the app does not exist
+1. Apple is throttling you
+
+All three return HTTP 200 with a well-formed feed containing no entries, and the responses are byte-identical, so the walk reports `reviews=[], errors=[], stopped_because="exhausted"` in every case. Verified by requesting a real app and a nonexistent one and getting the same 873-byte body.
+
+This is a limit of the source, not something the package can classify: there is nothing in the response to branch on. If "did this app return zero reviews, and why" has to be answerable, use `appstore_official`: Connect answers 403 for an app outside your account, which surfaces as `AuthError`.
+
+# How It Works
+
+What the package does when you call `client.fetch()`.
+
+______________________________________________________________________
+
+## The Fetch Pipeline
+
+`fetch()` is the top of a four-rung ladder. Each rung is built on the one below, so there is exactly one page-walk implementation:
+
+1. **Resolve countries.** Only the App Store RSS feed is per-storefront: the requested list for per-country sources, or a single `[""]` call for global APIs where the country dimension does not exist. That is the only place the fact is recorded; providers do not also answer it. See [Source capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md).
+1. **Walk each country's pages.** One request per page, following the provider's opaque cursor.
+1. **Stop.** On an exhausted cursor, on `limit`, on a page older than `since`, on a cursor the source repeated (`"cycle"`), on a run of review-less pages from a source still issuing cursors (`"stalled"`), on the page ceiling (`"max_pages"`), or on an error. Which one happened is reported in `CountryOutcome.stopped_because`.
+1. **Merge, filter, sort, truncate.** Reviews from every country are combined, then date and rating filters apply, then the sort, then `limit`.
+
+Countries are fetched concurrently (threads for `fetch()`, `asyncio.gather` behind a semaphore for `afetch()`), bounded by `concurrency`. See [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md).
+
+To drive the page walk yourself instead of calling `fetch()`, see [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md). To stream reviews without holding them all in memory, use `iter_reviews()`: step 4 is what forces `fetch()` to buffer the whole corpus, and `iter_reviews()` is the rung that skips it.
+
+### `since` reduces fetching, it does not just filter
+
+Passing `since` stops the walk once a page's oldest review predates it, so the remaining requests are never made. This requires the source to return reviews newest-first. Where that is not guaranteed, the walk runs to completion and `since` only filters, because a later page could still hold reviews inside the window.
+
+### `limit` means "the N best under `sort`"
+
+With `sort=Sort.NEWEST` on a newest-first source, `limit` also bounds the walk. With `Sort.OLDEST` or `Sort.RATING` it cannot: the highest-rated reviews are not the first ones fetched, so the walk is exhausted before truncating. That is correct but slower, and it is logged at INFO.
+
+______________________________________________________________________
+
+## Provider Selection
+
+The provider is selected automatically based on whether you provide auth credentials:
+
+- **With auth**: uses the official API (App Store Connect or Google Play Developer API).
+- **Without auth**: uses the free scraper (RSS feed or web scraper).
+
+There is no manual provider override. If you pass credentials, you get the official API.
+
+______________________________________________________________________
+
+## Providers Overview
+
+|                     | Apple App Store                                                    | Google Play                                           |
+| ------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- |
+| **Scraper (free)**  | RSS feed. Public, no auth. Max ~500 recent reviews.                | Web scraper. Public, no auth. Rate-limited by Google. |
+| **Official (auth)** | App Store Connect API. Requires Apple Developer account + API key. | Google Play Developer API. Requires service account.  |
+| **Source value**    | `appstore_scraper` / `appstore_official`                           | `googleplay_scraper` / `googleplay_official`          |
+
+Each source's behavioral differences (ordering guarantees, reply support, country handling, history depth) are captured as data in [Source capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md).
+
+______________________________________________________________________
+
+## Data Sources
+
+### Apple App Store: RSS Feed (Scraper)
+
+Public JSON feed. No authentication.
+
+**Endpoint:** `https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/page={page}/json`
+
+- Up to 50 reviews per page, paginates through all available pages.
+- Returns: review ID, rating, title, body, author, app version, timestamps.
+- **Limit:** ~500 most recent reviews per app per country.
+- Apple documents no rate limit for this feed.
+
+### Apple App Store: App Store Connect API (Official)
+
+Authenticated REST API for app developers.
+
+**Endpoint:** `https://api.appstoreconnect.apple.com/v1/apps/{app_id}/customerReviews`
+
+- Signs a JWT using your `.p8` private key (ES256).
+- You can only access reviews for apps you own.
+- Requires Apple Developer Program membership ($99/year).
+
+### Google Play: Web Scraper
+
+Sends requests to Google Play's internal batch endpoint.
+
+**Endpoint:** `https://play.google.com/_/PlayStoreUi/data/batchexecute`
+
+- Up to 200 reviews per request, follows continuation tokens.
+- Automatic exponential backoff on rate limits.
+- Returns: review ID, rating, body, author, creation timestamp and app version.
+- **Undocumented endpoint**: can break if Google changes their internal API.
+- Google Play reviews do not have titles.
+
+### Google Play: Developer API (Official)
+
+Authenticated REST API (v3).
+
+**Endpoint:** `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{app_id}/reviews`
+
+- Signs a JWT using service account key (RS256), exchanges for OAuth2 token.
+- Structured pagination.
+- Requests up to 100 reviews per page.
+- Preserves `reviewerLanguage` and legacy tab-separated titles when present.
+- You can only access reviews for apps you own.
+- Requires Google Cloud + Google Play Developer account.
+- Permissions can take up to 24 hours to propagate.
+- **Only the last 7 days are retrievable.** Google documents this limit in a `Note:` under "Retrieving a set of reviews" on the [reply-to-reviews guide](https://developers.google.com/android-publisher/reply-to-reviews): reviews are retrievable only if they were created or modified within the last week. Full history requires a CSV export from Play Console, which this package does not read. See [how the sources differ](https://0xfirattamur.github.io/app-reviews/reference/capabilities/#history).
+- **No documented ordering.** The API gives no guarantee that pages arrive newest-first, so the `since`/`limit` early stop never applies to this source, and every fetch walks to exhaustion.
+
+______________________________________________________________________
+
+## Authentication Flow
+
+### App Store Connect (ES256)
+
+1. Read `.p8` private key.
+1. Build JWT with Key ID and Issuer ID.
+1. Sign with ES256.
+1. Send as `Authorization: Bearer {token}`.
+1. Signed once per client, not once per request. Reading the key and signing are blocking work, so the async ladder does them in a thread.
+
+### Google Play Developer API (RS256)
+
+1. Read service account JSON, extract RSA private key.
+1. Build JWT with `androidpublisher` scope.
+1. Sign with RS256.
+1. Exchange JWT for OAuth2 access token at `https://oauth2.googleapis.com/token`.
+1. Send access token as `Authorization: Bearer {token}`.
+1. Exchanged once per client, not once per request, and over the same connection pool as the review requests, so it honours the same `proxy` and `retry`.
+
+Private keys never leave your machine.
+
+______________________________________________________________________
+
+## HTTP Layer
+
+All HTTP goes through [`httpx`](https://www.python-httpx.org/), a required runtime dependency. Every sync call has an async twin using `httpx.AsyncClient` for real async I/O, not a thread-pool wrapper. See [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md).
+
+- **One connection pool per client.** Each client owns an `HttpClient` that holds a single `httpx.Client`/`AsyncClient` for its lifetime, so a ten-page walk performs one TLS handshake rather than ten. Because the sockets outlive the request, close the client when you are done, or use it as a context manager:
+
+  ```
+  with AppStoreReviews() as client:
+      result = client.fetch("324684580")
+  ```
+
+  The async ladder has `aclose()` and `async with`. A client stays usable after `close()`; the next request reopens the pool.
+
+- **Retries** with configurable exponential backoff (`RetryConfig`).
+
+- **Timeouts** to prevent hanging requests.
+
+- **Proxy support** via constructor parameter. Pass your own pool with `http=HttpClient(...)` to share one between clients or to set a custom transport.
+
+- **Classified errors, one vocabulary.** A failed exchange (a bad status, a transport failure, or a malformed response body) is classified into an `ErrorKind` (`rate_limited`, `auth`, `not_found`, `request`, `server`, `transport`, `parse`), so callers branch on `kind` instead of parsing exception text. A completed permanent 4xx rejection maps to `request` and `RequestError`; it is not retryable. A 401/403 maps to `auth` only when an official endpoint received credentials. Credential-free public RSS, web, search, and lookup endpoints have no credentials to repair, so their 401/403 maps to `request` instead. Delivery depends on the layer: `fetch`/`iter_pages` walk many pages across many countries where partial success is normal, so they report a `FetchError` as data; `search`/`lookup` are single requests with a single outcome, so they raise: `RateLimitError`, `AuthError`, `RequestError`, `ServerError` and the rest, all under `HttpError`/`AppReviewsError`. The class is the classification. Both are importable from the package root.
+
+______________________________________________________________________
+
+## Metadata Lookup
+
+The search clients fetch app info without fetching reviews.
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch
+
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    apple_metadata = apple.lookup("123456789")
+    play_metadata = play.lookup("com.example.app")
+```
+
+- **Apple:** iTunes Lookup API (`https://itunes.apple.com/lookup?id={app_id}`), which takes `id` for numeric track ids and `bundleId` otherwise; the client picks the right param from the id's shape.
+- **Google:** Parses the Google Play store page HTML.
+- **Async:** `alookup()` is the async equivalent.
+- **No store guessing:** 0.6.0 removed the `lookup_metadata()` helper that inferred the store from the id. The caller picks the client, because the caller knows the store and the heuristic did not.
+
+# Models
+
+All models are frozen dataclasses with `__slots__`.
+
+Frozen means fields cannot be reassigned, not that contents cannot change
+
+`frozen=True` rejects `result.reviews = [...]`, but the list itself is a plain `list`: `result.reviews.append(...)` and `review.raw["k"] = v` both work and mutate the model in place. Nothing in this package does that; `filter`, `sort` and `limit` all return new objects. Treat the containers as read-only, and copy before mutating if you need to.
+
+______________________________________________________________________
+
+## Review
+
+A single app review, normalized across all stores and providers.
+
+```
+from app_reviews import Review
+```
+
+| Field         | Type                           | Default  | Description                                                                                                                                                                                                      |
+| ------------- | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`       | `"appstore"` or `"googleplay"` | Required | Which store.                                                                                                                                                                                                     |
+| `app_id`      | `str`                          | Required | App ID or package name.                                                                                                                                                                                          |
+| `country`     | `str \| None`                  | Required | Storefront queried, not the reviewer's location. `None` if the source does not report one (`googleplay_official`, `googleplay_scraper`: Play has one global review corpus, so there is no storefront to report). |
+| `rating`      | `int`                          | Required | Star rating 1-5. Validated on creation.                                                                                                                                                                          |
+| `title`       | `str \| None`                  | Required | Review title. Google Play web has none; the official API may expose a legacy title.                                                                                                                              |
+| `body`        | `str`                          | Required | Review body text.                                                                                                                                                                                                |
+| `author_name` | `str`                          | Required | Author display name.                                                                                                                                                                                             |
+| `source`      | `Source`                       | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`.                                                                                                            |
+| `created_at`  | `datetime` or `None`           | `None`   | When the review was posted. `None` where the source reports no creation date.                                                                                                                                    |
+| `updated_at`  | `datetime` or `None`           | `None`   | Last edit time. `None` where the source reports no modification date.                                                                                                                                            |
+| `app_version` | `str` or `None`                | `None`   | App version reviewed.                                                                                                                                                                                            |
+| `language`    | `str` or `None`                | `None`   | Review language.                                                                                                                                                                                                 |
+| `id`          | `str`                          | Required | Non-empty raw identifier assigned by the source. See below.                                                                                                                                                      |
+| `fetched_at`  | `datetime` or `None`           | `None`   | When the review was fetched.                                                                                                                                                                                     |
+| `raw`         | `dict`, `list` or `None`       | `None`   | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays.                                                                                          |
+
+Rows are in field order, which is also the positional-constructor order, though `Review` is far easier to get right with keywords.
+
+### Review IDs
+
+`id` is the identifier the source assigned, passed through unchanged: the App Store RSS `id` or Connect `customerReviews.id`, the Google Play `batchexecute` review id or `androidpublisher` `reviewId`.
+
+IDs are not comparable across sources
+
+An `id` is unique within a `(store, source)` pair, but not across sources. The two providers for a given store read genuinely different identifier spaces, so the same real-world review fetched via `googleplay_scraper` and via `googleplay_official` carries two different ids.
+
+Key deduplication on `(store, source, id)`, and use `source` to tell provenance apart.
+
+For App Store Connect, `customerReviewResponses` requires a Connect `customerReviews.id`. RSS ids are numeric (`14357217033`) and Connect ids are opaque, and Apple exposes no mapping between them: the `customerReviews` endpoint has no id filter and no legacy-id attribute. So an `appstore_scraper` id cannot be used to reply.
+
+Google Play appears to use one identifier space for both providers, so a `googleplay_scraper` id may be usable with `androidpublisher` `reviews.reply`. This package neither implements replies nor tests that, so treat it as unverified.
+
+______________________________________________________________________
+
+## FetchResult
+
+The return value of `client.fetch()` / `client.afetch()`. Contains reviews, any per-country errors, and a per-country breakdown. Iterable: loop directly to get `Review` objects.
+
+```
+from app_reviews import FetchResult
+```
+
+### Fields
+
+| Field             | Type                   | Description                                                                                                        |
+| ----------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `reviews`         | `list[Review]`         | The fetched reviews, merged across countries, filtered and sorted.                                                 |
+| `errors`          | `list[FetchError]`     | Per-country fetch failures. Derived from `outcomes`, so it can never disagree with them or be lost by a transform. |
+| `outcomes`        | `list[CountryOutcome]` | One entry per country actually walked. See [CountryOutcome](#countryoutcome).                                      |
+| `skipped_reviews` | `int`                  | Total malformed or unusable review rows skipped across all outcomes. Derived from `outcomes`.                      |
+
+### Methods
+
+| Method                          | Returns            | Description                                                                                    |
+| ------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
+| `__iter__()`                    | `Iterator[Review]` | Iterate over reviews.                                                                          |
+| `__len__()`                     | `int`              | Number of reviews.                                                                             |
+| `__bool__()`                    | `bool`             | `True` if there is at least one review.                                                        |
+| `filter(ratings, since, until)` | `FetchResult`      | Return a new filtered `FetchResult`.                                                           |
+| `sort(order)`                   | `FetchResult`      | Return a new sorted `FetchResult`.                                                             |
+| `limit(n)`                      | `FetchResult`      | Return a new `FetchResult` truncated to `n` reviews.                                           |
+| `to_dicts(include_raw=False)`   | `list[dict]`       | JSON-serialisable plain dicts: ISO 8601 timestamps, `raw` omitted unless asked.                |
+| `to_dict(include_raw=False)`    | `dict`             | Complete JSON-safe envelope containing `reviews`, `outcomes`, `errors`, and `skipped_reviews`. |
+
+Use `FetchResult.to_dict(include_raw=False)` for automation and persistence when the difference between an empty success and a failed fetch matters. Use `to_dicts()` only when review rows are sufficient. Passing `include_raw=True` includes provider payloads inside serialized reviews.
+
+A fetch can partially succeed. Check `result.errors` to see which countries failed, and `result.outcomes` for the full per-country picture, including countries that succeeded but stopped early on `since` or `limit`.
+
+Errors are more visible than they used to be
+
+Older versions discarded a country's page error once that country had already yielded some reviews, so a non-empty `FetchResult` could still hide a failure. Errors now always reach `result.errors` and the matching `CountryOutcome.error`.
+
+______________________________________________________________________
+
+## FetchError
+
+A per-country fetch failure.
+
+```
+from app_reviews import FetchError
+```
+
+| Field       | Type          | Description                                                                                             |
+| ----------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `country`   | `str \| None` | Storefront that failed, or `None` for a global source.                                                  |
+| `message`   | `str`         | Error description.                                                                                      |
+| `kind`      | `ErrorKind`   | What kind of failure this was. Branch retry policy on this, not `message`. See [ErrorKind](#errorkind). |
+| `status`    | `int \| None` | HTTP status code, if the exchange produced one.                                                         |
+| `retryable` | `bool`        | Read-only, derived from `kind`. Prefer deciding policy per `kind` yourself over trusting this.          |
+
+______________________________________________________________________
+
+## What each source actually fills
+
+Measured against the live APIs, not inferred from the schema. A blank cell means the source never reports that field, so it is always `None`, not "sometimes missing".
+
+| field                             | `appstore_scraper` | `appstore_official` | `googleplay_scraper` | `googleplay_official` |
+| --------------------------------- | ------------------ | ------------------- | -------------------- | --------------------- |
+| `id`                              | yes                | yes                 | yes                  | yes                   |
+| `store` / `app_id` / `source`     | yes                | yes                 | yes                  | yes                   |
+| `rating` / `body` / `author_name` | yes                | yes                 | yes                  | yes                   |
+| `fetched_at`                      | yes                | yes                 | yes                  | yes                   |
+| `created_at`                      | -                  | yes                 | yes                  | -                     |
+| `updated_at`                      | yes                | -                   | -                    | yes                   |
+| `raw`                             | yes                | yes                 | yes                  | yes                   |
+| `country`                         | yes                | yes                 | -                    | -                     |
+| `title`                           | yes                | yes                 | -                    | legacy text only      |
+| `app_version`                     | yes                | -                   | mostly               | yes                   |
+| `language`                        | -                  | -                   | -                    | yes                   |
+
+Two things worth planning around:
+
+- **The paid API reports less than the free one in places.** App Store Connect sends only `body`, `createdDate`, `rating`, `reviewerNickname`, `territory` and `title`, so `app_version` is always `None` on `appstore_official` while the RSS feed does provide it.
+- **Only the Google Play Developer API reports language.** Its `reviewerLanguage` value is a language code, not the reviewer's country.
+- **No source reports both timestamps.** Exactly one of `created_at`/`updated_at` is set for every source this package has, and it is the field that source orders by; read `review.dated_at` for whichever is present. The model itself only accepts exactly one timestamp. `is_edited` was removed because no source provides enough information to derive it consistently.
+
+`country` follows one alphabet everywhere: Connect reports ISO alpha-3 (`"USA"`), which is normalised to the alpha-2 form `Country` uses (`"us"`). Apple's original value stays in `raw["attributes"]["territory"]`.
+
+## CountryOutcome
+
+What one country's fetch actually did. Part of `FetchResult.outcomes`.
+
+```
+from app_reviews import CountryOutcome
+```
+
+| Field             | Type                 | Description                                                                                                                                                                                                                                       |
+| ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `country`         | `str \| None`        | The country walked, or `None` for a global source.                                                                                                                                                                                                |
+| `pages`           | `int`                | Number of pages requested.                                                                                                                                                                                                                        |
+| `reviews_fetched` | `int`                | Reviews this country's walk pulled off the wire, **before** the cross-country filter/sort/limit. Compare with `len(result.reviews)`, which is what survived: `fetch(ratings=[5])` makes them differ, and the gap tells you the filter is working. |
+| `stopped_because` | `StopReason`         | Why the walk ended. See [StopReason](#stopreason).                                                                                                                                                                                                |
+| `error`           | `FetchError \| None` | Set if the walk ended on an error.                                                                                                                                                                                                                |
+| `elapsed`         | `float`              | Wall-clock seconds spent on this country.                                                                                                                                                                                                         |
+| `skipped_reviews` | `int`                | Malformed or unusable review rows skipped during this walk.                                                                                                                                                                                       |
+
+`CountryOutcome.to_dict()` serializes every field and nests the complete `FetchError` dictionary when an error is present.
+
+`stopped_because` distinguishes "there is no more data" (`"exhausted"`) from "we stopped asking" (`"limit"`, `"since"`), facts that look identical if you only see the review count.
+
+______________________________________________________________________
+
+## PageResult
+
+The result of one provider page request, returned by `fetch_page()` / `afetch_page()`, and yielded by `iter_pages()` / `aiter_pages()`. See [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md).
+
+```
+from app_reviews import PageResult
+```
+
+| Field             | Type                 | Description                                                                                                                                   |
+| ----------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reviews`         | `list[Review]`       | Reviews on this page.                                                                                                                         |
+| `next_cursor`     | `str \| None`        | Opaque, provider-specific cursor. Persist it verbatim to resume later. `None` means no more pages.                                            |
+| `error`           | `FetchError \| None` | Set if this page failed.                                                                                                                      |
+| `stopped_because` | `StopReason \| None` | Set only on the final page of an `iter_pages()`/`aiter_pages()` walk. Always `None` on a bare `fetch_page()` call, which has nothing to stop. |
+| `skipped_reviews` | `int`                | Malformed or unusable review rows skipped while parsing this page.                                                                            |
+
+`PageResult.to_dict(include_raw=False)` returns a JSON-safe page envelope with `reviews`, `skipped_reviews`, `next_cursor`, `error`, and `stopped_because`.
+
+______________________________________________________________________
+
+## ErrorKind
+
+A `Literal` classifying why a fetch failed. Branch retry policy on this rather than on `message` text or a caught exception type.
+
+```
+from app_reviews import ErrorKind
+```
+
+| Value            | Meaning                                                                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"rate_limited"` | HTTP 429.                                                                                                                                                                    |
+| `"auth"`         | HTTP 401 or 403 from a credentialed official API, or credentials that cannot be used.                                                                                        |
+| `"not_found"`    | HTTP 404.                                                                                                                                                                    |
+| `"server"`       | HTTP 5xx.                                                                                                                                                                    |
+| `"request"`      | A completed, permanent HTTP 4xx rejection that is not rate limiting, not-found, or credentialed authentication. This includes 401/403 from credential-free public endpoints. |
+| `"transport"`    | Connection failure or timeout.                                                                                                                                               |
+| `"parse"`        | The response body was malformed, not `json.JSONDecodeError` raised out of the call but a classified error you can inspect.                                                   |
+
+On single-request operations, the `"request"` kind is raised as `RequestError`. It is nonretryable. A public RSS, web, search, or lookup endpoint has no caller credentials to repair, so its 401/403 is also a request rejection; 401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint.
+
+______________________________________________________________________
+
+## StopReason
+
+A `Literal` reporting why a page walk ended. Appears on `PageResult.stopped_because` (final page only) and `CountryOutcome.stopped_because`.
+
+```
+from app_reviews import StopReason
+```
+
+| Value         | Meaning                                                                                                                    |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `"exhausted"` | The provider ran out of pages. There is no more data.                                                                      |
+| `"limit"`     | The caller's `limit` was reached. More data may exist.                                                                     |
+| `"since"`     | A page predated `since`, so paging stopped early. More data may exist.                                                     |
+| `"cycle"`     | The source repeated a cursor, so following it again would not advance. More data may exist, but this walk cannot reach it. |
+| `"stalled"`   | The source kept issuing fresh cursors but returned no reviews for several consecutive pages, so it is not advancing.       |
+| `"max_pages"` | The walk hit its page ceiling. More data may exist; resume from the final page's cursor.                                   |
+| `"error"`     | The walk failed. See the accompanying `FetchError`.                                                                        |
+
+`"exhausted"` outranks both `"limit"` and `"since"` when they apply together, so "there is no more data" is never mislabelled "we stopped asking". `"stalled"` and `"max_pages"` rank last for the same reason: they mean the walk gave up on a source that would not end, so any reason the source or the caller supplied is the truer answer.
+
+`"cycle"`, `"stalled"` and `"max_pages"` are the walk's three floors against a source that never finishes. Nothing else bounds one: the App Store RSS feed has its own page ceiling, but Connect and both Play sources rely on the endpoint to stop issuing cursors.
+
+- `"cycle"` catches a repeated page token.
+- `"stalled"` catches the harder case, a *fresh* token every page with no reviews on it. `limit` and `since` are both driven by reviews actually seen, so an empty-page source escapes them both: `limit=5` would otherwise walk forever.
+- `"max_pages"` is the backstop for a source that returns data forever, and it also bounds the cursor set the walk retains to detect cycles. Raise the public `max_pages=` argument on `fetch()`, `afetch()`, `iter_pages()`, `aiter_pages()`, `iter_reviews()`, or `aiter_reviews()` when a bounded job intentionally needs more pages.
+
+______________________________________________________________________
+
+## Country
+
+`StrEnum` with two-letter country codes.
+
+```
+from app_reviews import Country
+```
+
+### Region Groups
+
+| Group                      | Description                   |
+| -------------------------- | ----------------------------- |
+| `Country.ALL`              | All 155 supported countries.  |
+| `Country.EUROPE`           | European countries.           |
+| `Country.AMERICAS`         | North and South America.      |
+| `Country.ASIA_PACIFIC`     | Asia-Pacific region.          |
+| `Country.MIDDLE_EAST`      | Middle East and North Africa. |
+| `Country.ENGLISH_SPEAKING` | English-speaking countries.   |
+
+Plain strings also work for Apple review storefronts: `countries=["us", "gb"]`. An explicit empty or all-blank `countries` collection makes no requests; Google Play review clients reject nonblank country selections because their review corpus is global.
+
+______________________________________________________________________
+
+## Sort
+
+Controls review order.
+
+```
+from app_reviews import Sort
+```
+
+| Value         | Description                  |
+| ------------- | ---------------------------- |
+| `Sort.NEWEST` | Most recent first (default). |
+| `Sort.OLDEST` | Oldest first.                |
+| `Sort.RATING` | Highest rated first.         |
+
+______________________________________________________________________
+
+## RetryConfig
+
+HTTP retry and timeout settings.
+
+```
+from app_reviews import RetryConfig
+```
+
+| Field            | Type              | Default                     | Description                                                                                                 |
+| ---------------- | ----------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `max_retries`    | `int`             | `3`                         | Maximum number of retries per request.                                                                      |
+| `backoff_factor` | `float`           | `0.5`                       | Multiplier for wait time between retries.                                                                   |
+| `timeout`        | `float`           | `30.0`                      | Per-request timeout in seconds.                                                                             |
+| `retry_on`       | `tuple[int, ...]` | `(500, 502, 503, 504, 429)` | Immutable HTTP status codes that trigger a retry. Any collection passed by the caller is copied to a tuple. |
+| `max_backoff`    | `float`           | `60.0`                      | Ceiling on any single wait, in seconds.                                                                     |
+
+Waits follow `backoff_factor * 2**attempt`, capped at `max_backoff`. A server's `Retry-After` header overrides that schedule when present, because it is the only party that knows when it will serve again, and returning sooner than asked is what turns throttling into a longer block. Both seconds (`Retry-After: 30`) and the HTTP-date form are read, and both are capped at `max_backoff` too, so an outsized header cannot park a request.
+
+```
+from app_reviews import AppStoreReviews, RetryConfig
+
+client = AppStoreReviews(
+    retry=RetryConfig(max_retries=5, backoff_factor=1.0, retry_on=(429, 503))
+)
+```
+
+______________________________________________________________________
+
+## AppMetadata
+
+Returned by `search()` and `lookup()` on the search clients.
+
+```
+from app_reviews import AppStoreSearch
+
+with AppStoreSearch() as client:
+    metadata = client.lookup("123456789")   # AppMetadata | None
+```
+
+| Field                          | Type                           | Description                                      |
+| ------------------------------ | ------------------------------ | ------------------------------------------------ |
+| `app_id`                       | `str`                          | App ID or package name.                          |
+| `store`                        | `"appstore"` or `"googleplay"` | Which store.                                     |
+| `name`                         | `str`                          | App display name.                                |
+| `developer`                    | `str`                          | Developer or publisher.                          |
+| `category`                     | `str`                          | Primary category.                                |
+| `price`                        | `str`                          | Store-formatted price, `"Free"`, or `"Unknown"`. |
+| `version`                      | `str`                          | Current version, where the store publishes one.  |
+| `rating`                       | `float`                        | Average star rating.                             |
+| `rating_count`                 | `int`                          | Total number of ratings.                         |
+| `url`                          | `str`                          | Store page URL.                                  |
+| `current_version_release_date` | `datetime \| None`             | When the current version shipped.                |
+| `first_release_date`           | `datetime \| None`             | When the app first appeared on the store.        |
+
+Text and number fields are non-optional, so a store that does not report one gets a stated placeholder rather than `None`. The two dates are the exception: a date has no honest placeholder, and a sentinel would sort, filter and diff as though it were real. Precision differs by store: the App Store sends a real timestamp, Google Play only the day it renders, so a Play date is midnight UTC on that day. Measured against the live stores:
+
+| field                                                 | `AppStoreSearch`   | `GooglePlaySearch.lookup`  | `GooglePlaySearch.search`     |
+| ----------------------------------------------------- | ------------------ | -------------------------- | ----------------------------- |
+| `name` / `developer` / `category` / `rating`          | yes                | yes                        | yes                           |
+| `rating_count`                                        | yes                | yes                        | always `0`                    |
+| `version`                                             | yes                | when the app publishes one | always `"Varies with device"` |
+| `icon_url`                                            | yes                | yes                        | yes                           |
+| `current_version_release_date` / `first_release_date` | yes, to the second | yes, to the day            | always `None`                 |
+
+- **Google Play publishes a version for some apps, not all.** `lookup()` returns the real one when the detail page carries it, and `"Varies with device"` when it does not, which is what the store itself shows for an app shipping per-device variants. Verified against the `us` storefront: Firefox publishes `153.0.1`, while Spotify and Duolingo publish nothing. A regular *search* hit has no version field at all, so it always reports the placeholder; use `lookup()` for a real one. Not to be confused with the version string attached to a *review*, which names the build that reviewer was running rather than the app's current release.
+- **Play's search layout carries no rating count.** A regular search hit has a rating but no count anywhere in it, so `rating_count` is `0`. Two exceptions get a real count: `lookup()`, and the one *featured* hit a search returns, because Play embeds a full detail block for it. Use `lookup()` when you need counts.
+- **`price` prefers the store's localized formatted price.** For Google Play, the following fallbacks are deterministic. Absent price data and an explicit numeric zero are `"Free"`. When no localized string is present, a positive numeric amount and a non-empty ISO currency code produce a conservative ISO fallback such as `"TRY 109.00"`; the client does not guess a currency symbol. Malformed or non-finite amounts are `"Unknown"`, as are positive amounts with a missing currency. Apple preserves its `formattedPrice` value and uses `"Unknown"` when that value is absent or unusable.
+
+______________________________________________________________________
+
+## Type Aliases
+
+```
+from app_reviews.models.types import Store, Source
+```
+
+| Type     | Values                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------- |
+| `Store`  | `"appstore"`, `"googleplay"`                                                                 |
+| `Source` | `"appstore_scraper"`, `"appstore_official"`, `"googleplay_scraper"`, `"googleplay_official"` |
+
+______________________________________________________________________
+# Project
+
+# Compare App Store and Google Play review clients
+
+Choose by source coverage and operational requirements, not by package name. `app-reviews` fits Python applications that need one typed model, bounded paging, and explicit partial-failure data across both stores.
+
+## Audited feature matrix
+
+The cells below reflect public documentation and repository metadata checked on 2026-09-21. “Typed” describes the published Python interface, not the upstream store payload. “Maintained” reports observable project status rather than predicting future support.
+
+| Capability               | `app-reviews`                                         | `google-play-scraper`                                                                                 | `app-store-scraper`               | `app-store-web-scraper`                                                                            | Apple RSS directly              | App Store Connect directly                      | Google Play Developer API directly |
+| ------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------- | ----------------------------------------------- | ---------------------------------- |
+| Both stores              | Yes                                                   | No, Play only                                                                                         | No, Apple only                    | No, Apple only                                                                                     | No, Apple only                  | No, Apple only                                  | No, Play only                      |
+| Maintained               | Current v1 work in 2026                               | Not archived; last code push Aug 2024                                                                 | Archived/read-only since Oct 2021 | Not archived; last code push Jun 2024                                                              | Apple-operated but undocumented | Vendor-supported API                            | Vendor-supported API               |
+| Native async             | Yes                                                   | No documented async API                                                                               | No                                | No                                                                                                 | Your HTTP client decides        | Your HTTP client decides                        | Your HTTP client decides           |
+| Typed interface          | Ships `py.typed`; dataclasses and typed errors        | Declares the `Typing :: Typed` classifier, but its wheel has no `py.typed` marker; dictionary results | No published typing claim         | Annotated `AppReview` API and `Typing :: Typed` classifier, but its wheel has no `py.typed` marker | Raw JSON                        | Generated/manual client decides                 | Generated/manual client decides    |
+| Country behavior         | Apple RSS per storefront; other review sources global | `country`/`lang` presentation parameters                                                              | One Apple storefront per client   | One Apple storefront per entry                                                                     | URL selects Apple storefront    | Global request; review territory may be present | Global; no reviewer country field  |
+| Resumable cursor exposed | Yes, opaque cursors                                   | Yes, continuation token                                                                               | No                                | No public cursor; lazy iterator                                                                    | Numeric page in URL             | `links.next` URL                                | `nextPageToken`                    |
+| Runtime dependency count | 2 (`httpx`, `cryptography`)                           | 0                                                                                                     | 1 (`requests`)                    | 1 (`urllib3`)                                                                                      | 0 beyond chosen HTTP stack      | Chosen auth/HTTP stack                          | Chosen auth/HTTP stack             |
+| CLI                      | No                                                    | No documented CLI                                                                                     | No                                | No                                                                                                 | Not applicable                  | Not applicable                                  | Not applicable                     |
+
+Sources used for this audit:
+
+- [`google-play-scraper` repository](https://github.com/JoMingyu/google-play-scraper)
+- archived [`app-store-scraper` repository](https://github.com/cowboy-bebug/app-store-scraper)
+- [`app-store-web-scraper` repository](https://github.com/futurice/app-store-web-scraper)
+- [Apple App Store Connect customer reviews](https://developer.apple.com/documentation/appstoreconnectapi/list-all-customer-reviews-for-an-app)
+- [Google Play reviews API](https://developers.google.com/android-publisher/api-ref/rest/v3/reviews/list)
+
+The Apple RSS endpoint is included because all three public Apple paths in the table ultimately depend on it. It exposes at most ten pages of roughly fifty reviews for each storefront and has no formal service contract.
+
+## Source behavior inside app-reviews
+
+| Source                    | Country behavior                                | Ordering       | History limit                                      | Authentication     |
+| ------------------------- | ----------------------------------------------- | -------------- | -------------------------------------------------- | ------------------ |
+| Apple RSS                 | Per storefront                                  | Newest first   | About 500 recent reviews per storefront            | None               |
+| App Store Connect         | Global request; review territory may be present | Newest first   | No package-imposed time window                     | Apple credentials  |
+| Google Play web           | Global review corpus                            | Newest first   | No package-imposed time window                     | None               |
+| Google Play Developer API | Global review corpus                            | Not documented | Reviews created or modified in the last seven days | Google credentials |
+
+For exact fields and caveats, read [Source capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md).
+
+## Migrating from google-play-scraper
+
+`google-play-scraper` returns review dictionaries and a continuation token:
+
+```
+from google_play_scraper import reviews
+
+rows, continuation_token = reviews("com.spotify.music", count=100)
+```
+
+`app-reviews` returns typed reviews plus fetch diagnostics:
+
+```
+from app_reviews import GooglePlayReviews
+
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=100, max_pages=5)
+
+rows = result.to_dicts()
+diagnostics = result.to_dict()
+```
+
+Field names and timestamp semantics differ. Treat this as a migration, not a drop-in import replacement. In particular, Google Play review country is `None` because neither supported Play review source reports reviewer location.
+
+## When not to use app-reviews
+
+Do not use this package when you need Play Console CSV history, to post developer replies, to crawl arbitrary store pages, or to run a standalone service without writing an application wrapper. Prefer a store's official API when policy, support guarantees, or account-scoped data matter more than credential-free access. Prefer a focused single-store library when its existing schema is already the contract used by your application.
+
+# App review fetching FAQ
+
+## How do I fetch App Store reviews in Python?
+
+Use the numeric Apple app ID with `AppStoreReviews`; the public RSS source needs no credentials and is queried per storefront.
+
+```
+from app_reviews import AppStoreReviews, Country
+
+with AppStoreReviews() as client:
+    result = client.fetch(
+        "324684580",
+        countries=[Country.US],
+        limit=50,
+        max_pages=2,
+    )
+```
+
+## How do I get Google Play reviews in Python?
+
+Use the Android package name with `GooglePlayReviews`; the default public source needs no credentials.
+
+```
+from app_reviews import GooglePlayReviews
+
+with GooglePlayReviews() as client:
+    result = client.fetch("com.spotify.music", limit=50, max_pages=2)
+```
+
+## Do I need an API key or developer account?
+
+No for the default public sources; yes for App Store Connect or the Google Play Developer API.
+
+Pass `AppStoreAuth` or `GooglePlayAuth` to select the corresponding official source. Official APIs only expose apps available to the credentials.
+
+## How many reviews can I fetch, and how far back?
+
+It depends on the source: Apple RSS exposes about 500 recent reviews per storefront, while Google's Developer API exposes reviews created or modified in the last seven days.
+
+App Store Connect and Google Play's public web source have no package-imposed history window, but upstream availability and throttling still apply. Set `limit=` for the number returned and `max_pages=` for the maximum requests per source walk.
+
+## Is fetching App Store and Google Play reviews legal?
+
+There is no universal answer; review the store terms, applicable law, and your use of personal data for the jurisdictions involved.
+
+This project does not provide legal advice. Official APIs are preferable when you need store-supported access or account-scoped policy controls. Public sources can change or throttle access without notice.
+
+## How is app-reviews different from google-play-scraper and app-store-scraper?
+
+`app-reviews` covers both stores with one typed sync/async model and can also use both official review APIs.
+
+The other projects are focused public-source clients with their own dictionary schemas. See the factual [comparison](https://0xfirattamur.github.io/app-reviews/comparison/index.md) before migrating.
+
+## Why are title and country None on Google Play reviews?
+
+Google Play's supported review sources do not report reviewer country, and its public web source does not have a review-title field.
+
+The Developer API may carry a legacy title inside review text and may report `reviewerLanguage`; language is not location. Storefront parameters can affect presentation and pricing but do not partition the review corpus.
+
+An explicit empty or all-blank `countries` collection is a no-op and makes no requests on every review client. Otherwise, Google Play review clients reject any nonblank `country` or `countries` selection before network I/O. Google Play search and metadata still accept `country` to select the storefront used for presentation, availability, and price.
+
+## How do I fetch many Apple storefronts without running out of memory?
+
+Use `iter_reviews()` to process reviews as pages arrive and set `max_pages`; the buffered `fetch()` path caps its default country fan-out at eight workers.
+
+```
+from app_reviews import AppStoreReviews, Country
+
+with AppStoreReviews() as client:
+    for review in client.iter_reviews(
+        "324684580",
+        countries=Country.ALL,
+        max_pages=2,
+    ):
+        save(review.to_dict())
+```
+
+The streaming iterator moves through countries sequentially and does not return a `FetchResult`; page failures are logged. Use buffered `fetch()` when your automation must receive structured outcomes and errors.
+
+## How should an agent consume a fetch result?
+
+Return `FetchResult.to_dict()`, not only `to_dicts()`, so empty success, partial success, skipped records, and provider failure remain distinguishable.
+
+```
+payload = result.to_dict()
+if payload["errors"]:
+    handle_errors(payload["errors"])
+```
+
+# Changelog
+
+All notable changes to `app-reviews` are recorded here. Release details for recent versions are also kept in [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
+
+## [1.0.0](https://github.com/0xfirattamur/app-reviews/compare/v0.6.0...v1.0.0) - 2026-09-22
+
+The first stable API release.
+
+### Added
+
+- Complete `FetchResult.to_dict()` envelopes with reviews, outcomes, errors, retryability, stop reasons, skipped-record counts, and optional raw payloads.
+- Explicit `max_pages` request budgets across buffered and streaming review fetches.
+- Context management plus public protocol and transport types for typing, lower-level use, and direct built-in provider integration. Custom providers cannot be injected into the high-level clients or paging engine in v1.
+- Root exports for `HttpResponse`, `ReviewProvider`, `TokenSource`, and the new non-retryable `RequestError` classification.
+- Reviewer language and legacy-title mapping for Google Play's official API.
+
+### Changed
+
+- Review IDs are required. Naive timestamps get UTC attached; already-aware offsets are preserved.
+- Date-only `until` filters include the complete UTC day.
+- The default multi-storefront concurrency is capped at eight.
+- Negative limits raise; zero limits and explicit empty or all-blank country collections make no requests.
+- Google Play rejects any nonblank review-country selection before network I/O; its search and metadata storefront selector remains supported.
+- Permanent HTTP client errors are non-retryable and RSS access blocks receive a source-appropriate classification.
+- Google Play prices retain the storefront's formatted currency.
+- Provider pages report malformed records instead of silently losing them.
+
+### Security
+
+- App Store Connect pagination cursors are bound to the expected review endpoint and app before a credential-bearing request is sent.
+
+See the [v1.0.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.0.0.md) for migration instructions.
+
+## [0.6.0](https://github.com/0xfirattamur/app-reviews/compare/v0.5.0...v0.6.0) - 2026-08-02
+
+Introduced the page/cursor ladder, native async entry points, typed outcomes, pooled connections, bounded retry behavior, and a redesigned public review API. This was a breaking prerelease. See the [v0.6.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v0.6.0.md).
+
+## [0.5.0](https://github.com/0xfirattamur/app-reviews/compare/v0.4.0...v0.5.0) - 2026-07-29
+
+Removed the terminal UI and CLI, made the package library-focused, and corrected review identifiers. See the [v0.5.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v0.5.0.md).
+
+## [0.4.0](https://github.com/0xfirattamur/app-reviews/compare/v0.3.1...v0.4.0) - 2026-04-09
+
+Added the earlier unified review/search API and expanded tests and packaging.
+
+## [0.3.1](https://github.com/0xfirattamur/app-reviews/compare/v0.3.0...v0.3.1) - 2026-04-08
+
+Corrected prerelease packaging and provider behavior.
+
+## [0.3.0](https://github.com/0xfirattamur/app-reviews/compare/v0.2.1...v0.3.0) - 2026-04-08
+
+Expanded store search and review fetching capabilities.
+
+## [0.2.1](https://github.com/0xfirattamur/app-reviews/compare/v0.2.0...v0.2.1) - 2026-04-07
+
+Corrected metadata and distribution details.
+
+## [0.2.0](https://github.com/0xfirattamur/app-reviews/compare/v0.1.1...v0.2.0) - 2026-04-07
+
+Added the first cross-store public API.
+
+## [0.1.1](https://github.com/0xfirattamur/app-reviews/compare/v0.1.0...v0.1.1) - 2026-04-04
+
+Corrected initial package behavior and metadata.
+
+## [0.1.0](https://github.com/0xfirattamur/app-reviews/releases/tag/v0.1.0) - 2026-04-04
+
+Initial release.
+
+# Contributing
+
+Thanks for helping out. Bug reports, fixes, and new store support are all welcome.
+
+Participation is covered by the [Code of Conduct](https://github.com/0xfirattamur/app-reviews/blob/main/CODE_OF_CONDUCT.md).
+
+## Setup
+
+```
+git clone https://github.com/0xfirattamur/app-reviews.git
+cd app-reviews
+make install
+pre-commit install
+```
+
+## Commands
+
+| Command           | What it does                                             |
+| ----------------- | -------------------------------------------------------- |
+| `make all`        | lint + typecheck + test + build; run this before pushing |
+| `make test`       | tests with coverage                                      |
+| `make format`     | auto-fix style                                           |
+| `make docs-serve` | preview docs at `localhost:8000`                         |
+
+Live tests hit real store endpoints and are skipped by default. Run them with `make test ARGS="-m live"` or `uv run pytest -m live`.
+
+## Standards
+
+- Python 3.11+, `mypy --strict`, and ruff must all pass
+- All HTTP goes through the shared `HttpClient` in `app_reviews.core.http`
+- `cryptography` and `httpx` are the only runtime dependencies; keep it that way
+- Models are `@dataclass(frozen=True, slots=True)`
+- Coverage stays at or above 85%
+
+## Pull requests
+
+Branch from `main`, add tests, run `make all`, and open the PR. For anything large, open an issue first so the interface can be discussed. Small fixes can go straight to a PR. Never include store credentials or personal review data in a fixture or report.
+
+## Releases
+
+Releases are prepared on an exact `release/vX.Y.Z` branch and reviewed through a pull request to `main`:
+
+```
+git switch develop-or-another-reviewed-base
+./scripts/release.sh --create X.Y.Z
+# Finish release notes and changelog, then run:
+make all
+```
+
+The preparation script refuses to run on `main` or a dirty tree. It updates the project, lockfile, citation, release-note template, and changelog, but never commits, tags, pushes, merges, or publishes. Commit the prepared changes on the release branch and open a PR. Only after that PR is reviewed and merged to `main` should a maintainer create and push `vX.Y.Z`; the tag workflow verifies the version, ancestry, tests, archives, and wheel before publishing.
+
+## Security
+
+Please don't file public issues for vulnerabilities. See the [security policy](https://github.com/0xfirattamur/app-reviews/blob/main/SECURITY.md).

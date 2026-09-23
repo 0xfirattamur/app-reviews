@@ -1,0 +1,29 @@
+# App Reviews
+
+> Typed sync and async Python client for App Store and Google Play reviews, app search, metadata, and resumable cursors
+
+Typed Python APIs for bounded Apple App Store and Google Play review ingestion, app search, metadata lookup, and resumable pagination.
+
+## Getting started
+
+- [Home](https://0xfirattamur.github.io/app-reviews/index.md)
+- [Installation](https://0xfirattamur.github.io/app-reviews/getting-started/installation/index.md)
+- [Quick Start](https://0xfirattamur.github.io/app-reviews/getting-started/quickstart/index.md)
+
+## Guides and reference
+
+- [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md)
+- [Authentication](https://0xfirattamur.github.io/app-reviews/guide/authentication/index.md)
+- [Paging and Cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md)
+- [Python API](https://0xfirattamur.github.io/app-reviews/guide/python-api/index.md)
+- [Source Capabilities](https://0xfirattamur.github.io/app-reviews/reference/capabilities/index.md)
+- [How It Works](https://0xfirattamur.github.io/app-reviews/reference/how-it-works/index.md)
+- [Models](https://0xfirattamur.github.io/app-reviews/reference/models/index.md)
+
+## Project
+
+- [Comparison](https://0xfirattamur.github.io/app-reviews/comparison/index.md)
+- [FAQ](https://0xfirattamur.github.io/app-reviews/faq/index.md)
+- [Changelog](https://0xfirattamur.github.io/app-reviews/changelog/index.md)
+- [Contributing](https://0xfirattamur.github.io/app-reviews/contributing/index.md)
+

@@ -1,0 +1,2307 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Reference for Review, FetchResult, outcomes, errors, metadata, countries, and configuration models.">
+      
+      
+      
+        <link rel="canonical" href="https://0xfirattamur.github.io/app-reviews/reference/models/">
+      
+      
+        <link rel="prev" href="../../guide/authentication/">
+      
+      
+        <link rel="next" href="../capabilities/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Models - App Reviews</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Models - App Reviews" />
+<meta property="og:description" content="Reference for Review, FetchResult, outcomes, errors, metadata, countries, and configuration models." />
+<meta property="og:image" content="https://0xfirattamur.github.io/app-reviews/assets/images/social/reference/models.png" />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:url" content="https://0xfirattamur.github.io/app-reviews/reference/models/" />
+<meta property="twitter:card" content="summary_large_image" />
+<meta property="twitter:title" content="Models - App Reviews" />
+<meta property="twitter:description" content="Reference for Review, FetchResult, outcomes, errors, metadata, countries, and configuration models." />
+<meta property="twitter:image" content="https://0xfirattamur.github.io/app-reviews/assets/images/social/reference/models.png" />
+</head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#models" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="App Reviews" class="md-header__button md-logo" aria-label="App Reviews" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            App Reviews
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Models
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/0xfirattamur/app-reviews" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    0xfirattamur/app-reviews
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="App Reviews" class="md-nav__button md-logo" aria-label="App Reviews" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    App Reviews
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/0xfirattamur/app-reviews" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    0xfirattamur/app-reviews
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/paging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paging and Cursors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/async/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#review-ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review IDs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetchresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FetchResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FetchResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetcherror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FetchError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-source-actually-fills" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each source actually fills
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#countryoutcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CountryOutcome
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pageresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PageResult
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errorkind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ErrorKind
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stopreason" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StopReason
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#country" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Country
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Country">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#region-groups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Region Groups
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sort" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sort
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retryconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RetryConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appmetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AppMetadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#type-aliases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Type Aliases
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Source Capabilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how-it-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How It Works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#review-ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review IDs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetchresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FetchResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FetchResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetcherror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FetchError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-source-actually-fills" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each source actually fills
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#countryoutcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CountryOutcome
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pageresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PageResult
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errorkind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ErrorKind
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stopreason" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StopReason
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#country" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Country
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Country">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#region-groups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Region Groups
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sort" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sort
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retryconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RetryConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appmetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AppMetadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#type-aliases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Type Aliases
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="models">Models</h1>
+<p>All models are frozen dataclasses with <code>__slots__</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Frozen means fields cannot be reassigned, not that contents cannot change</p>
+<p><code>frozen=True</code> rejects <code>result.reviews = [...]</code>, but the list itself is a plain
+<code>list</code>: <code>result.reviews.append(...)</code> and <code>review.raw["k"] = v</code> both work and
+mutate the model in place. Nothing in this package does that; <code>filter</code>, <code>sort</code>
+and <code>limit</code> all return new objects. Treat the containers as read-only, and copy
+before mutating if you need to.</p>
+</div>
+<hr />
+<h2 id="review">Review</h2>
+<p>A single app review, normalized across all stores and providers.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">Review</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>store</code></td>
+<td><code>"appstore"</code> or <code>"googleplay"</code></td>
+<td>Required</td>
+<td>Which store.</td>
+</tr>
+<tr>
+<td><code>app_id</code></td>
+<td><code>str</code></td>
+<td>Required</td>
+<td>App ID or package name.</td>
+</tr>
+<tr>
+<td><code>country</code></td>
+<td><code>str \| None</code></td>
+<td>Required</td>
+<td>Storefront queried, not the reviewer's location. <code>None</code> if the source does not report one (<code>googleplay_official</code>, <code>googleplay_scraper</code>: Play has one global review corpus, so there is no storefront to report).</td>
+</tr>
+<tr>
+<td><code>rating</code></td>
+<td><code>int</code></td>
+<td>Required</td>
+<td>Star rating 1-5. Validated on creation.</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td><code>str \| None</code></td>
+<td>Required</td>
+<td>Review title. Google Play web has none; the official API may expose a legacy title.</td>
+</tr>
+<tr>
+<td><code>body</code></td>
+<td><code>str</code></td>
+<td>Required</td>
+<td>Review body text.</td>
+</tr>
+<tr>
+<td><code>author_name</code></td>
+<td><code>str</code></td>
+<td>Required</td>
+<td>Author display name.</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td><code>Source</code></td>
+<td>Required</td>
+<td>Data source: <code>appstore_scraper</code>, <code>appstore_official</code>, <code>googleplay_scraper</code>, or <code>googleplay_official</code>.</td>
+</tr>
+<tr>
+<td><code>created_at</code></td>
+<td><code>datetime</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>When the review was posted. <code>None</code> where the source reports no creation date.</td>
+</tr>
+<tr>
+<td><code>updated_at</code></td>
+<td><code>datetime</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>Last edit time. <code>None</code> where the source reports no modification date.</td>
+</tr>
+<tr>
+<td><code>app_version</code></td>
+<td><code>str</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>App version reviewed.</td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>str</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>Review language.</td>
+</tr>
+<tr>
+<td><code>id</code></td>
+<td><code>str</code></td>
+<td>Required</td>
+<td>Non-empty raw identifier assigned by the source. See below.</td>
+</tr>
+<tr>
+<td><code>fetched_at</code></td>
+<td><code>datetime</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>When the review was fetched.</td>
+</tr>
+<tr>
+<td><code>raw</code></td>
+<td><code>dict</code>, <code>list</code> or <code>None</code></td>
+<td><code>None</code></td>
+<td>Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays.</td>
+</tr>
+</tbody>
+</table>
+<p>Rows are in field order, which is also the positional-constructor order,
+though <code>Review</code> is far easier to get right with keywords.</p>
+<h3 id="review-ids">Review IDs</h3>
+<p><code>id</code> is the identifier the source assigned, passed through unchanged: the App Store RSS <code>id</code> or Connect <code>customerReviews.id</code>, the Google Play <code>batchexecute</code> review id or <code>androidpublisher</code> <code>reviewId</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">IDs are not comparable across sources</p>
+<p>An <code>id</code> is unique within a <code>(store, source)</code> pair, but not across sources. The two
+providers for a given store read genuinely different identifier spaces, so the same
+real-world review fetched via <code>googleplay_scraper</code> and via <code>googleplay_official</code>
+carries two different ids.</p>
+<p>Key deduplication on <code>(store, source, id)</code>, and use <code>source</code> to tell provenance apart.</p>
+</div>
+<p>For App Store Connect, <code>customerReviewResponses</code> requires a Connect <code>customerReviews.id</code>. RSS ids are numeric (<code>14357217033</code>) and Connect ids are opaque, and Apple exposes no mapping between them: the <code>customerReviews</code> endpoint has no id filter and no legacy-id attribute. So an <code>appstore_scraper</code> id cannot be used to reply.</p>
+<p>Google Play appears to use one identifier space for both providers, so a <code>googleplay_scraper</code> id may be usable with <code>androidpublisher</code> <code>reviews.reply</code>. This package neither implements replies nor tests that, so treat it as unverified.</p>
+<hr />
+<h2 id="fetchresult">FetchResult</h2>
+<p>The return value of <code>client.fetch()</code> / <code>client.afetch()</code>. Contains reviews, any per-country errors, and a per-country breakdown. Iterable: loop directly to get <code>Review</code> objects.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">FetchResult</span>
+</code></pre></div>
+<h3 id="fields">Fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reviews</code></td>
+<td><code>list[Review]</code></td>
+<td>The fetched reviews, merged across countries, filtered and sorted.</td>
+</tr>
+<tr>
+<td><code>errors</code></td>
+<td><code>list[FetchError]</code></td>
+<td>Per-country fetch failures. Derived from <code>outcomes</code>, so it can never disagree with them or be lost by a transform.</td>
+</tr>
+<tr>
+<td><code>outcomes</code></td>
+<td><code>list[CountryOutcome]</code></td>
+<td>One entry per country actually walked. See <a href="#countryoutcome">CountryOutcome</a>.</td>
+</tr>
+<tr>
+<td><code>skipped_reviews</code></td>
+<td><code>int</code></td>
+<td>Total malformed or unusable review rows skipped across all outcomes. Derived from <code>outcomes</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="methods">Methods</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Returns</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>__iter__()</code></td>
+<td><code>Iterator[Review]</code></td>
+<td>Iterate over reviews.</td>
+</tr>
+<tr>
+<td><code>__len__()</code></td>
+<td><code>int</code></td>
+<td>Number of reviews.</td>
+</tr>
+<tr>
+<td><code>__bool__()</code></td>
+<td><code>bool</code></td>
+<td><code>True</code> if there is at least one review.</td>
+</tr>
+<tr>
+<td><code>filter(ratings, since, until)</code></td>
+<td><code>FetchResult</code></td>
+<td>Return a new filtered <code>FetchResult</code>.</td>
+</tr>
+<tr>
+<td><code>sort(order)</code></td>
+<td><code>FetchResult</code></td>
+<td>Return a new sorted <code>FetchResult</code>.</td>
+</tr>
+<tr>
+<td><code>limit(n)</code></td>
+<td><code>FetchResult</code></td>
+<td>Return a new <code>FetchResult</code> truncated to <code>n</code> reviews.</td>
+</tr>
+<tr>
+<td><code>to_dicts(include_raw=False)</code></td>
+<td><code>list[dict]</code></td>
+<td>JSON-serialisable plain dicts: ISO 8601 timestamps, <code>raw</code> omitted unless asked.</td>
+</tr>
+<tr>
+<td><code>to_dict(include_raw=False)</code></td>
+<td><code>dict</code></td>
+<td>Complete JSON-safe envelope containing <code>reviews</code>, <code>outcomes</code>, <code>errors</code>, and <code>skipped_reviews</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>FetchResult.to_dict(include_raw=False)</code> for automation and persistence when
+the difference between an empty success and a failed fetch matters. Use
+<code>to_dicts()</code> only when review rows are sufficient. Passing <code>include_raw=True</code>
+includes provider payloads inside serialized reviews.</p>
+<p>A fetch can partially succeed. Check <code>result.errors</code> to see which countries failed, and <code>result.outcomes</code> for the full per-country picture, including countries that succeeded but stopped early on <code>since</code> or <code>limit</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Errors are more visible than they used to be</p>
+<p>Older versions discarded a country's page error once that country had
+already yielded some reviews, so a non-empty <code>FetchResult</code> could still
+hide a failure. Errors now always reach <code>result.errors</code> and the matching
+<code>CountryOutcome.error</code>.</p>
+</div>
+<hr />
+<h2 id="fetcherror">FetchError</h2>
+<p>A per-country fetch failure.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">FetchError</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>country</code></td>
+<td><code>str \| None</code></td>
+<td>Storefront that failed, or <code>None</code> for a global source.</td>
+</tr>
+<tr>
+<td><code>message</code></td>
+<td><code>str</code></td>
+<td>Error description.</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td><code>ErrorKind</code></td>
+<td>What kind of failure this was. Branch retry policy on this, not <code>message</code>. See <a href="#errorkind">ErrorKind</a>.</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>int \| None</code></td>
+<td>HTTP status code, if the exchange produced one.</td>
+</tr>
+<tr>
+<td><code>retryable</code></td>
+<td><code>bool</code></td>
+<td>Read-only, derived from <code>kind</code>. Prefer deciding policy per <code>kind</code> yourself over trusting this.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="what-each-source-actually-fills">What each source actually fills</h2>
+<p>Measured against the live APIs, not inferred from the schema. A blank cell means
+the source never reports that field, so it is always <code>None</code>, not "sometimes
+missing".</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th><code>appstore_scraper</code></th>
+<th><code>appstore_official</code></th>
+<th><code>googleplay_scraper</code></th>
+<th><code>googleplay_official</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>store</code> / <code>app_id</code> / <code>source</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>rating</code> / <code>body</code> / <code>author_name</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fetched_at</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>created_at</code></td>
+<td>-</td>
+<td>yes</td>
+<td>yes</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>updated_at</code></td>
+<td>yes</td>
+<td>-</td>
+<td>-</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>raw</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>country</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>-</td>
+<td>legacy text only</td>
+</tr>
+<tr>
+<td><code>app_version</code></td>
+<td>yes</td>
+<td>-</td>
+<td>mostly</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>Two things worth planning around:</p>
+<ul>
+<li><strong>The paid API reports less than the free one in places.</strong> App Store Connect
+  sends only <code>body</code>, <code>createdDate</code>, <code>rating</code>, <code>reviewerNickname</code>, <code>territory</code> and
+  <code>title</code>, so <code>app_version</code> is always <code>None</code> on <code>appstore_official</code> while the RSS
+  feed does provide it.</li>
+<li><strong>Only the Google Play Developer API reports language.</strong> Its
+  <code>reviewerLanguage</code> value is a language code, not the reviewer's country.</li>
+<li><strong>No source reports both timestamps.</strong> Exactly one of <code>created_at</code>/<code>updated_at</code>
+  is set for every source this package has, and it is the field that source
+  orders by; read <code>review.dated_at</code> for whichever is present. The model itself
+  only accepts exactly one timestamp. <code>is_edited</code> was removed because no source
+  provides enough information to derive it consistently.</li>
+</ul>
+<p><code>country</code> follows one alphabet everywhere: Connect reports ISO alpha-3
+(<code>"USA"</code>), which is normalised to the alpha-2 form <code>Country</code> uses (<code>"us"</code>).
+Apple's original value stays in <code>raw["attributes"]["territory"]</code>.</p>
+<h2 id="countryoutcome">CountryOutcome</h2>
+<p>What one country's fetch actually did. Part of <code>FetchResult.outcomes</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">CountryOutcome</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>country</code></td>
+<td><code>str \| None</code></td>
+<td>The country walked, or <code>None</code> for a global source.</td>
+</tr>
+<tr>
+<td><code>pages</code></td>
+<td><code>int</code></td>
+<td>Number of pages requested.</td>
+</tr>
+<tr>
+<td><code>reviews_fetched</code></td>
+<td><code>int</code></td>
+<td>Reviews this country's walk pulled off the wire, <strong>before</strong> the cross-country filter/sort/limit. Compare with <code>len(result.reviews)</code>, which is what survived: <code>fetch(ratings=[5])</code> makes them differ, and the gap tells you the filter is working.</td>
+</tr>
+<tr>
+<td><code>stopped_because</code></td>
+<td><code>StopReason</code></td>
+<td>Why the walk ended. See <a href="#stopreason">StopReason</a>.</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>FetchError \| None</code></td>
+<td>Set if the walk ended on an error.</td>
+</tr>
+<tr>
+<td><code>elapsed</code></td>
+<td><code>float</code></td>
+<td>Wall-clock seconds spent on this country.</td>
+</tr>
+<tr>
+<td><code>skipped_reviews</code></td>
+<td><code>int</code></td>
+<td>Malformed or unusable review rows skipped during this walk.</td>
+</tr>
+</tbody>
+</table>
+<p><code>CountryOutcome.to_dict()</code> serializes every field and nests the complete
+<code>FetchError</code> dictionary when an error is present.</p>
+<p><code>stopped_because</code> distinguishes "there is no more data" (<code>"exhausted"</code>) from
+"we stopped asking" (<code>"limit"</code>, <code>"since"</code>), facts that look identical if you
+only see the review count.</p>
+<hr />
+<h2 id="pageresult">PageResult</h2>
+<p>The result of one provider page request, returned by <code>fetch_page()</code> / <code>afetch_page()</code>, and yielded by <code>iter_pages()</code> / <code>aiter_pages()</code>. See <a href="../../guide/paging/">Paging and cursors</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">PageResult</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reviews</code></td>
+<td><code>list[Review]</code></td>
+<td>Reviews on this page.</td>
+</tr>
+<tr>
+<td><code>next_cursor</code></td>
+<td><code>str \| None</code></td>
+<td>Opaque, provider-specific cursor. Persist it verbatim to resume later. <code>None</code> means no more pages.</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>FetchError \| None</code></td>
+<td>Set if this page failed.</td>
+</tr>
+<tr>
+<td><code>stopped_because</code></td>
+<td><code>StopReason \| None</code></td>
+<td>Set only on the final page of an <code>iter_pages()</code>/<code>aiter_pages()</code> walk. Always <code>None</code> on a bare <code>fetch_page()</code> call, which has nothing to stop.</td>
+</tr>
+<tr>
+<td><code>skipped_reviews</code></td>
+<td><code>int</code></td>
+<td>Malformed or unusable review rows skipped while parsing this page.</td>
+</tr>
+</tbody>
+</table>
+<p><code>PageResult.to_dict(include_raw=False)</code> returns a JSON-safe page envelope with
+<code>reviews</code>, <code>skipped_reviews</code>, <code>next_cursor</code>, <code>error</code>, and <code>stopped_because</code>.</p>
+<hr />
+<h2 id="errorkind">ErrorKind</h2>
+<p>A <code>Literal</code> classifying why a fetch failed. Branch retry policy on this rather than on <code>message</code> text or a caught exception type.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">ErrorKind</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"rate_limited"</code></td>
+<td>HTTP 429.</td>
+</tr>
+<tr>
+<td><code>"auth"</code></td>
+<td>HTTP 401 or 403 from a credentialed official API, or credentials that cannot be used.</td>
+</tr>
+<tr>
+<td><code>"not_found"</code></td>
+<td>HTTP 404.</td>
+</tr>
+<tr>
+<td><code>"server"</code></td>
+<td>HTTP 5xx.</td>
+</tr>
+<tr>
+<td><code>"request"</code></td>
+<td>A completed, permanent HTTP 4xx rejection that is not rate limiting, not-found, or credentialed authentication. This includes 401/403 from credential-free public endpoints.</td>
+</tr>
+<tr>
+<td><code>"transport"</code></td>
+<td>Connection failure or timeout.</td>
+</tr>
+<tr>
+<td><code>"parse"</code></td>
+<td>The response body was malformed, not <code>json.JSONDecodeError</code> raised out of the call but a classified error you can inspect.</td>
+</tr>
+</tbody>
+</table>
+<p>On single-request operations, the <code>"request"</code> kind is raised as
+<code>RequestError</code>. It is nonretryable. A public RSS, web, search, or lookup endpoint
+has no caller credentials to repair, so its 401/403 is also a request rejection;
+401/403 is <code>"auth"</code>/<code>AuthError</code> only for an official credentialed endpoint.</p>
+<hr />
+<h2 id="stopreason">StopReason</h2>
+<p>A <code>Literal</code> reporting why a page walk ended. Appears on <code>PageResult.stopped_because</code> (final page only) and <code>CountryOutcome.stopped_because</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">StopReason</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"exhausted"</code></td>
+<td>The provider ran out of pages. There is no more data.</td>
+</tr>
+<tr>
+<td><code>"limit"</code></td>
+<td>The caller's <code>limit</code> was reached. More data may exist.</td>
+</tr>
+<tr>
+<td><code>"since"</code></td>
+<td>A page predated <code>since</code>, so paging stopped early. More data may exist.</td>
+</tr>
+<tr>
+<td><code>"cycle"</code></td>
+<td>The source repeated a cursor, so following it again would not advance. More data may exist, but this walk cannot reach it.</td>
+</tr>
+<tr>
+<td><code>"stalled"</code></td>
+<td>The source kept issuing fresh cursors but returned no reviews for several consecutive pages, so it is not advancing.</td>
+</tr>
+<tr>
+<td><code>"max_pages"</code></td>
+<td>The walk hit its page ceiling. More data may exist; resume from the final page's cursor.</td>
+</tr>
+<tr>
+<td><code>"error"</code></td>
+<td>The walk failed. See the accompanying <code>FetchError</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><code>"exhausted"</code> outranks both <code>"limit"</code> and <code>"since"</code> when they apply together, so
+"there is no more data" is never mislabelled "we stopped asking". <code>"stalled"</code> and
+<code>"max_pages"</code> rank last for the same reason: they mean the walk gave up on a
+source that would not end, so any reason the source or the caller supplied is the
+truer answer.</p>
+<p><code>"cycle"</code>, <code>"stalled"</code> and <code>"max_pages"</code> are the walk's three floors against a
+source that never finishes. Nothing else bounds one: the App Store RSS feed has
+its own page ceiling, but Connect and both Play sources rely on the endpoint to
+stop issuing cursors.</p>
+<ul>
+<li><code>"cycle"</code> catches a repeated page token.</li>
+<li><code>"stalled"</code> catches the harder case, a <em>fresh</em> token every page with no reviews
+  on it. <code>limit</code> and <code>since</code> are both driven by reviews actually seen, so an
+  empty-page source escapes them both: <code>limit=5</code> would otherwise walk forever.</li>
+<li><code>"max_pages"</code> is the backstop for a source that returns data forever, and it
+  also bounds the cursor set the walk retains to detect cycles. Raise
+  the public <code>max_pages=</code> argument on <code>fetch()</code>, <code>afetch()</code>, <code>iter_pages()</code>,
+  <code>aiter_pages()</code>, <code>iter_reviews()</code>, or <code>aiter_reviews()</code> when a bounded job
+  intentionally needs more pages.</li>
+</ul>
+<hr />
+<h2 id="country">Country</h2>
+<p><code>StrEnum</code> with two-letter country codes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">Country</span>
+</code></pre></div>
+<h3 id="region-groups">Region Groups</h3>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Country.ALL</code></td>
+<td>All 155 supported countries.</td>
+</tr>
+<tr>
+<td><code>Country.EUROPE</code></td>
+<td>European countries.</td>
+</tr>
+<tr>
+<td><code>Country.AMERICAS</code></td>
+<td>North and South America.</td>
+</tr>
+<tr>
+<td><code>Country.ASIA_PACIFIC</code></td>
+<td>Asia-Pacific region.</td>
+</tr>
+<tr>
+<td><code>Country.MIDDLE_EAST</code></td>
+<td>Middle East and North Africa.</td>
+</tr>
+<tr>
+<td><code>Country.ENGLISH_SPEAKING</code></td>
+<td>English-speaking countries.</td>
+</tr>
+</tbody>
+</table>
+<p>Plain strings also work for Apple review storefronts:
+<code>countries=["us", "gb"]</code>. An explicit empty or all-blank <code>countries</code>
+collection makes no requests; Google Play review clients reject nonblank
+country selections because their review corpus is global.</p>
+<hr />
+<h2 id="sort">Sort</h2>
+<p>Controls review order.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sort</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Sort.NEWEST</code></td>
+<td>Most recent first (default).</td>
+</tr>
+<tr>
+<td><code>Sort.OLDEST</code></td>
+<td>Oldest first.</td>
+</tr>
+<tr>
+<td><code>Sort.RATING</code></td>
+<td>Highest rated first.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="retryconfig">RetryConfig</h2>
+<p>HTTP retry and timeout settings.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">RetryConfig</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_retries</code></td>
+<td><code>int</code></td>
+<td><code>3</code></td>
+<td>Maximum number of retries per request.</td>
+</tr>
+<tr>
+<td><code>backoff_factor</code></td>
+<td><code>float</code></td>
+<td><code>0.5</code></td>
+<td>Multiplier for wait time between retries.</td>
+</tr>
+<tr>
+<td><code>timeout</code></td>
+<td><code>float</code></td>
+<td><code>30.0</code></td>
+<td>Per-request timeout in seconds.</td>
+</tr>
+<tr>
+<td><code>retry_on</code></td>
+<td><code>tuple[int, ...]</code></td>
+<td><code>(500, 502, 503, 504, 429)</code></td>
+<td>Immutable HTTP status codes that trigger a retry. Any collection passed by the caller is copied to a tuple.</td>
+</tr>
+<tr>
+<td><code>max_backoff</code></td>
+<td><code>float</code></td>
+<td><code>60.0</code></td>
+<td>Ceiling on any single wait, in seconds.</td>
+</tr>
+</tbody>
+</table>
+<p>Waits follow <code>backoff_factor * 2**attempt</code>, capped at <code>max_backoff</code>. A server's
+<code>Retry-After</code> header overrides that schedule when present, because it is the only party
+that knows when it will serve again, and returning sooner than asked is what turns
+throttling into a longer block. Both seconds (<code>Retry-After: 30</code>) and the HTTP-date
+form are read, and both are capped at <code>max_backoff</code> too, so an outsized header
+cannot park a request.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">AppStoreReviews</span><span class="p">,</span> <span class="n">RetryConfig</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">client</span> <span class="o">=</span> <span class="n">AppStoreReviews</span><span class="p">(</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">retry</span><span class="o">=</span><span class="n">RetryConfig</span><span class="p">(</span><span class="n">max_retries</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">backoff_factor</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">retry_on</span><span class="o">=</span><span class="p">(</span><span class="mi">429</span><span class="p">,</span> <span class="mi">503</span><span class="p">))</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="appmetadata">AppMetadata</h2>
+<p>Returned by <code>search()</code> and <code>lookup()</code> on the search clients.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews</span><span class="w"> </span><span class="kn">import</span> <span class="n">AppStoreSearch</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">with</span> <span class="n">AppStoreSearch</span><span class="p">()</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">metadata</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">lookup</span><span class="p">(</span><span class="s2">&quot;123456789&quot;</span><span class="p">)</span>   <span class="c1"># AppMetadata | None</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_id</code></td>
+<td><code>str</code></td>
+<td>App ID or package name.</td>
+</tr>
+<tr>
+<td><code>store</code></td>
+<td><code>"appstore"</code> or <code>"googleplay"</code></td>
+<td>Which store.</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>str</code></td>
+<td>App display name.</td>
+</tr>
+<tr>
+<td><code>developer</code></td>
+<td><code>str</code></td>
+<td>Developer or publisher.</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td><code>str</code></td>
+<td>Primary category.</td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>str</code></td>
+<td>Store-formatted price, <code>"Free"</code>, or <code>"Unknown"</code>.</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td><code>str</code></td>
+<td>Current version, where the store publishes one.</td>
+</tr>
+<tr>
+<td><code>rating</code></td>
+<td><code>float</code></td>
+<td>Average star rating.</td>
+</tr>
+<tr>
+<td><code>rating_count</code></td>
+<td><code>int</code></td>
+<td>Total number of ratings.</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td><code>str</code></td>
+<td>Store page URL.</td>
+</tr>
+<tr>
+<td><code>current_version_release_date</code></td>
+<td><code>datetime \| None</code></td>
+<td>When the current version shipped.</td>
+</tr>
+<tr>
+<td><code>first_release_date</code></td>
+<td><code>datetime \| None</code></td>
+<td>When the app first appeared on the store.</td>
+</tr>
+</tbody>
+</table>
+<p>Text and number fields are non-optional, so a store that does not report one gets
+a stated placeholder rather than <code>None</code>. The two dates are the exception: a date
+has no honest placeholder, and a sentinel would sort, filter and diff as though it
+were real. Precision differs by store: the App Store sends a real timestamp,
+Google Play only the day it renders, so a Play date is midnight UTC on that day.
+Measured against the live stores:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th><code>AppStoreSearch</code></th>
+<th><code>GooglePlaySearch.lookup</code></th>
+<th><code>GooglePlaySearch.search</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code> / <code>developer</code> / <code>category</code> / <code>rating</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>rating_count</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>always <code>0</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>yes</td>
+<td>when the app publishes one</td>
+<td>always <code>"Varies with device"</code></td>
+</tr>
+<tr>
+<td><code>icon_url</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>current_version_release_date</code> / <code>first_release_date</code></td>
+<td>yes, to the second</td>
+<td>yes, to the day</td>
+<td>always <code>None</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Google Play publishes a version for some apps, not all.</strong> <code>lookup()</code> returns
+  the real one when the detail page carries it, and <code>"Varies with device"</code> when it
+  does not, which is what the store itself shows for an app shipping per-device
+  variants. Verified against the <code>us</code> storefront: Firefox publishes <code>153.0.1</code>,
+  while Spotify and Duolingo publish nothing. A regular <em>search</em> hit has no version
+  field at all, so it always reports the placeholder; use <code>lookup()</code> for a real
+  one. Not to be confused with the version string attached to a <em>review</em>, which
+  names the build that reviewer was running rather than the app's current release.</li>
+<li><strong>Play's search layout carries no rating count.</strong> A regular search hit has a
+  rating but no count anywhere in it, so <code>rating_count</code> is <code>0</code>. Two exceptions get
+  a real count: <code>lookup()</code>, and the one <em>featured</em> hit a search returns, because
+  Play embeds a full detail block for it. Use <code>lookup()</code> when you need counts.</li>
+<li><strong><code>price</code> prefers the store's localized formatted price.</strong> For Google Play,
+  the following fallbacks are deterministic. Absent price data and an explicit
+  numeric zero are <code>"Free"</code>. When no localized string is present, a positive
+  numeric amount and a non-empty ISO currency code
+  produce a conservative ISO fallback such as <code>"TRY 109.00"</code>; the client does
+  not guess a currency symbol. Malformed or non-finite amounts are <code>"Unknown"</code>,
+  as are positive amounts with a missing currency. Apple preserves its
+  <code>formattedPrice</code> value and uses <code>"Unknown"</code> when that value is absent or
+  unusable.</li>
+</ul>
+<hr />
+<h2 id="type-aliases">Type Aliases</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">app_reviews.models.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Store</span><span class="p">,</span> <span class="n">Source</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Store</code></td>
+<td><code>"appstore"</code>, <code>"googleplay"</code></td>
+</tr>
+<tr>
+<td><code>Source</code></td>
+<td><code>"appstore_scraper"</code>, <code>"appstore_official"</code>, <code>"googleplay_scraper"</code>, <code>"googleplay_official"</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
