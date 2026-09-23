@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
-import sys
 from typing import Any
 
 import pytest
@@ -244,7 +244,9 @@ def test_release_workflow_rebuilds_wheel_from_sdist_without_isolation() -> None:
     assert "dist-from-sdist" in rebuild
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable mode is unavailable")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX executable mode is unavailable"
+)
 def test_release_scripts_are_checked_in_and_executable() -> None:
     for relative in (
         "scripts/verify_artifacts.py",
