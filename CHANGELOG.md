@@ -4,6 +4,32 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## [1.1.0] - 2026-09-26
+
+A shared rate limit for processes that fetch many apps from one address.
+Backward compatible; omitting the new parameters keeps 1.0.0 behavior.
+
+### Added
+
+- `RateLimiter(rate, burst=1, *, initial_penalty=30.0, max_penalty=900.0)`, a
+  thread-safe and asyncio-safe token bucket one process can share across every
+  client, thread, and task. `penalize(seconds)` pauses every holder.
+- `rate_limiter=` on `HttpClient`, `AppStoreReviews`, `GooglePlayReviews`,
+  `AppStoreSearch`, and `GooglePlaySearch`. Every attempt, retries included,
+  takes a token. A 429, or a 403 from a credential-free request, pauses the
+  limiter for `Retry-After`, else for 30 seconds doubling per consecutive
+  throttled answer, capped at `max_penalty`; a success resets the doubling.
+  Passing it alongside `http=` raises `TypeError`, like `proxy=` and `retry=`.
+
+### Changed
+
+- An App Store RSS 403 is now `FetchError(kind="rate_limited", retryable=True,
+  status=403)` instead of a non-retryable `request` failure. The feed answers
+  403 while it throttles an address. Credentialed endpoints keep 403 as `auth`,
+  and the 403 is not retried inside the package.
+
+See the [v1.1.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.1.0.md).
+
 ## [1.0.0] - 2026-09-22
 
 The first stable API release.
@@ -85,6 +111,7 @@ Corrected initial package behavior and metadata.
 
 Initial release.
 
+[1.1.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.4.0...v0.5.0
