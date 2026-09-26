@@ -66,6 +66,7 @@ client = AppStoreReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RateLimiter | None: request budget shared with other clients
 )
 ```
 
@@ -154,6 +155,7 @@ client = GooglePlayReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RateLimiter | None: request budget shared with other clients
 )
 ```
 
@@ -425,9 +427,47 @@ reviews = AppStoreReviews(http=pool)
 search = AppStoreSearch(http=pool)
 ```
 
-A pool you pass with `http=` already carries its own `proxy` and `retry`, so
-passing either alongside it raises `TypeError` rather than silently ignoring
-what you asked for.
+A pool you pass with `http=` already carries its own `proxy`, `retry` and
+`rate_limiter`, so passing any of them alongside it raises `TypeError` rather
+than silently ignoring what you asked for.
+
+### Sharing a rate limit across fetches
+
+`concurrency=` paces a single fetch. To keep many clients, threads, or tasks
+inside one request budget, give them all the same `RateLimiter`. The search
+clients and `HttpClient` accept `rate_limiter=` too.
+
+```python
+from app_reviews import AppStoreReviews, RateLimiter
+
+limiter = RateLimiter(rate=2.0, burst=4)
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us", "gb", "de"])
+
+retry_later = [e.country for e in result.errors if e.kind == "rate_limited"]
+```
+
+`RateLimiter(rate, burst=1, *, initial_penalty=30.0, max_penalty=900.0)` is a
+token bucket holding at most `burst` tokens and refilling `rate` per second.
+`acquire()` blocks the calling thread and `await aacquire()` sleeps only the
+calling task; both draw from the same bucket. Every attempt, retries included,
+takes one token.
+
+A 429, or a 403 from a request that carried no credential (Apple's RSS feed
+answers 403 while it blocks an address), pauses every holder of the limiter:
+for the server's `Retry-After` if present, else `initial_penalty` seconds,
+doubling on each consecutive throttled answer, both capped at `max_penalty`. A
+successful answer resets the doubling. `limiter.penalize(seconds)` pauses it by
+hand; it only ever extends a pause, never shortens one. The pause is separate
+from `RetryConfig`, whose `max_backoff` still bounds only the waits between
+attempts of one request.
+
+A throttled App Store storefront fails alone with
+`FetchError(kind="rate_limited", retryable=True, status=403)`; the other
+countries keep their reviews. The 403 is not retried inside the package,
+because requests made during a block extend it. Fetch the throttled countries
+again later through the same limiter.
 
 ### Per-country outcomes
 

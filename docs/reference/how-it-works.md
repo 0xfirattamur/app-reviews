@@ -191,15 +191,21 @@ for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
 - **Proxy support** via constructor parameter. Pass your own pool with
   `http=HttpClient(...)` to share one between clients or to set a custom
   transport.
+- **Shared rate limit.** Pass one `RateLimiter` as `rate_limiter=` to every
+  client that talks to a store. Each attempt, retries included, takes a token,
+  and a 429 or a 403 from a credential-free request pauses every holder. See
+  [Sharing a rate limit](../guide/python-api.md#sharing-a-rate-limit-across-fetches).
 - **Classified errors, one vocabulary.** A failed exchange (a bad status, a
   transport failure, or a malformed response body) is classified into an
   `ErrorKind` (`rate_limited`, `auth`, `not_found`, `request`, `server`,
   `transport`, `parse`), so callers branch on `kind` instead of parsing
   exception text. A completed permanent 4xx rejection maps to `request` and
   `RequestError`; it is not retryable. A 401/403 maps to `auth` only when an
-  official endpoint received credentials. Credential-free public RSS, web,
-  search, and lookup endpoints have no credentials to repair, so their 401/403
-  maps to `request` instead. Delivery depends on the layer:
+  official endpoint received credentials. Credential-free public web, search,
+  and lookup endpoints have no credentials to repair, so their 401/403 maps to
+  `request` instead. The App Store RSS feed is the exception: it answers 403
+  while it throttles an address, so its 403 is a retryable `rate_limited`.
+  Delivery depends on the layer:
   `fetch`/`iter_pages` walk many pages
   across many countries where partial success is normal, so they report a
   `FetchError` as data; `search`/`lookup` are single requests with a single

@@ -260,6 +260,44 @@ asyncio.run(main())
 For Apple RSS, multi-country `fetch()` caps default fan-out at eight workers.
 Pass `concurrency=` to choose a smaller or larger explicit limit.
 
+## Sharing a rate limit across fetches
+
+`concurrency=` paces one fetch. When one process fetches many apps, pass the same
+`RateLimiter` to every client instead, so they share one request budget. It is
+thread-safe and asyncio-safe, and every attempt, retries included, takes a token.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+from app_reviews import AppStoreReviews, RateLimiter
+
+limiter = RateLimiter(rate=2.0, burst=4)  # two requests per second, bursts of four
+
+
+def fetch(app_id: str):
+    with AppStoreReviews(rate_limiter=limiter) as client:
+        result = client.fetch(app_id, countries=["us", "gb", "de"], max_pages=2)
+    throttled = [error.country for error in result.errors if error.kind == "rate_limited"]
+    return result, throttled
+
+
+with ThreadPoolExecutor(max_workers=16) as pool:
+    results = list(pool.map(fetch, ["324684580", "310633997"]))
+```
+
+When a store throttles (HTTP 429, or the HTTP 403 Apple's RSS feed answers while
+it blocks an address), the limiter pauses every client sharing it: for the
+server's `Retry-After` if it sent one, else 30 seconds, doubling on each
+consecutive throttled answer up to 15 minutes. A successful answer resets the
+doubling. Tune it with `RateLimiter(rate, burst, initial_penalty=30.0,
+max_penalty=900.0)`, or pause it yourself with `limiter.penalize(seconds)`.
+
+Throttled storefronts fail alone: other countries keep their reviews, and each
+throttled country carries `FetchError(kind="rate_limited", retryable=True)` in
+its `CountryOutcome`. The package does not retry those 403s itself, because
+requests made during a block extend it; fetch the throttled countries again
+later through the same limiter.
+
 ## Official APIs
 
 Pass `AppStoreAuth` to use App Store Connect or `GooglePlayAuth` to use the
