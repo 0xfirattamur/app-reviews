@@ -23,6 +23,7 @@ from app_reviews.core.paging import (
     with_stop_reason,
 )
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.ratelimit import RateLimiter
 from app_reviews.core.validation import require_non_negative, require_positive
 from app_reviews.errors import AppReviewsError, AuthError
 from app_reviews.models.config import RetryConfig
@@ -97,8 +98,9 @@ class BaseReviews(PooledClient, abc.ABC):
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
-        super().__init__(proxy=proxy, retry=retry, http=http)
+        super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._cached_provider: ReviewProvider | None = None
 
     @property

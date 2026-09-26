@@ -28,6 +28,7 @@ from app_reviews.appstore import AppStoreReviews, AppStoreSearch
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.ratelimit import RateLimiter
 from app_reviews.errors import (
     AppReviewsError,
     AuthError,
@@ -80,6 +81,7 @@ __all__ = [
     "PageResult",
     "ParseError",
     "RateLimitError",
+    "RateLimiter",
     "RequestError",
     "RetryConfig",
     "Review",
