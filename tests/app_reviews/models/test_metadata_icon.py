@@ -63,6 +63,7 @@ class TestAppMetadataToDict:
             icon_url="https://example.com/icon.png",
             current_version_release_date=datetime(2025, 1, 2, 12, 30, tzinfo=UTC),
             first_release_date=datetime(2020, 5, 6, tzinfo=UTC),
+            release_notes="Bug fixes.",
         )
 
         serialised = metadata.to_dict()
@@ -81,6 +82,7 @@ class TestAppMetadataToDict:
             "icon_url": "https://example.com/icon.png",
             "current_version_release_date": "2025-01-02T12:30:00+00:00",
             "first_release_date": "2020-05-06T00:00:00+00:00",
+            "release_notes": "Bug fixes.",
         }
         json.dumps(serialised, allow_nan=False)
 

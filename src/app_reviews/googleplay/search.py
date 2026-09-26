@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import math
@@ -113,6 +114,11 @@ class GooglePlaySearch(PooledClient):
     name is in the request's ``hl`` language, which is why ``hl`` is pinned to
     ``en`` on both requests. See ``_display_date``.
     """
+
+    _RELEASE_NOTES = (144, 1, 1)
+    """The "What's new" text, with ``<br>`` for line breaks. See ``_release_notes``."""
+
+    _LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
     # A regular search hit: a smaller block, numbered independently of the detail
     # block above, and carrying no rating count.
@@ -383,7 +389,19 @@ class GooglePlaySearch(PooledClient):
                 self._at(block, self._UPDATED_ON)
             ),
             first_release_date=self._display_date(self._at(block, self._RELEASED_ON)),
+            release_notes=self._release_notes(self._at(block, self._RELEASE_NOTES)),
         )
+
+    def _release_notes(self, value: Any) -> str | None:
+        """Play's "What's new" as plain text, or None if the app shows none.
+
+        Play renders it as HTML, so ``<br>`` becomes a newline and entities are
+        decoded, matching the plain text the App Store sends.
+        """
+        text = scraped_text(value)
+        if text is None:
+            return None
+        return scraped_text(html.unescape(self._LINE_BREAK.sub("\n", text)))
 
     @staticmethod
     def _display_date(value: Any) -> datetime | None:

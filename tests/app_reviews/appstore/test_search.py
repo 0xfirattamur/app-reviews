@@ -640,3 +640,24 @@ class TestReleaseDates:
         ).search("a")
 
         assert results[0].first_release_date == datetime(2020, 1, 2, tzinfo=UTC)
+
+
+class TestReleaseNotes:
+    def test_lookup_maps_release_notes(self):
+        result = {"trackId": 1, "trackName": "A", "releaseNotes": " Bug fixes.\n"}
+        app = _client(lambda _r: httpx.Response(200, text=_payload([result]))).lookup(
+            "1"
+        )
+
+        assert app is not None
+        assert app.release_notes == "Bug fixes."
+
+    @pytest.mark.parametrize("bad", ["", "  ", None, []])
+    def test_absent_or_unusable_notes_are_none(self, bad):
+        result = {"trackId": 1, "trackName": "A", "releaseNotes": bad}
+        app = _client(lambda _r: httpx.Response(200, text=_payload([result]))).lookup(
+            "1"
+        )
+
+        assert app is not None
+        assert app.release_notes is None

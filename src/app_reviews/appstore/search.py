@@ -201,4 +201,5 @@ class AppStoreSearch(PooledClient):
                 result.get("currentVersionReleaseDate")
             ),
             first_release_date=scraped_datetime(result.get("releaseDate")),
+            release_notes=scraped_text(result.get("releaseNotes")),
         )

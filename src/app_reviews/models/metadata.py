@@ -61,6 +61,13 @@ class AppMetadata:
     on a review history: no review of this app predates it.
     """
 
+    release_notes: str | None = None
+    """The store's "What's New" text for the version in ``version``, or None.
+
+    Filled on every App Store result. On Play, only ``lookup()`` and the featured
+    search hit carry it, with Play's ``<br>`` line breaks turned into newlines.
+    """
+
     def __post_init__(self) -> None:
         if isinstance(self.rating, float) and not isfinite(self.rating):
             raise ValueError("rating must be finite")
@@ -88,3 +95,4 @@ class AppMetadata:
                 value.isoformat() if isinstance(value, datetime) else value
             )
         return values
+
