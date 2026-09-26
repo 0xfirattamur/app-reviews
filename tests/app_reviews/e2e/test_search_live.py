@@ -3,6 +3,8 @@
 Run with: uv run python -m pytest -m live tests/app_reviews/e2e/test_search_live.py -v
 """
 
+from datetime import UTC, timedelta
+
 import pytest
 
 from app_reviews.appstore.search import AppStoreSearch
@@ -27,6 +29,16 @@ class TestAppStoreSearchLive:
         assert result is not None
         assert result.name != "Unknown"
         assert result.store == "appstore"
+
+    def test_version_history_of_a_known_app(self):
+        history = AppStoreSearch().version_history("324684580")
+
+        assert len(history) > 1
+        assert all(e.version and not e.version.startswith("Version") for e in history)
+        assert all(e.released_at.utcoffset() == timedelta(0) for e in history)
+        assert history[0].released_at.tzinfo is UTC
+        dates = [e.released_at for e in history]
+        assert dates == sorted(dates, reverse=True)
 
 
 @pytest.mark.live

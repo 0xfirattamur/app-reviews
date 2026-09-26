@@ -8,6 +8,7 @@ EXPECTED = {
     "AppStoreAuth",
     "AppStoreReviews",
     "AppStoreSearch",
+    "AppVersionEntry",
     "AuthError",
     "Country",
     "CountryOutcome",

@@ -48,7 +48,7 @@ from app_reviews.models.config import (
     RetryConfig,
 )
 from app_reviews.models.country import Country
-from app_reviews.models.metadata import AppMetadata
+from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
 from app_reviews.models.review import Review
@@ -64,6 +64,7 @@ __all__ = [
     "AppStoreAuth",
     "AppStoreReviews",
     "AppStoreSearch",
+    "AppVersionEntry",
     "AuthError",
     "ConnectCredentials",
     "Country",

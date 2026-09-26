@@ -96,3 +96,15 @@ class AppMetadata:
             )
         return values
 
+
+@dataclass(frozen=True, slots=True)
+class AppVersionEntry:
+    """One published version from an app's store "Version History".
+
+    ``released_at`` is a timezone-aware UTC timestamp. ``notes`` is that
+    version's "What's New" text, or None when the store shows none.
+    """
+
+    version: str
+    released_at: datetime
+    notes: str | None
