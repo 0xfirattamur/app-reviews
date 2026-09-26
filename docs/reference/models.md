@@ -223,7 +223,7 @@ from app_reviews import ErrorKind
 
 | Value | Meaning |
 |-------|---------|
-| `"rate_limited"` | HTTP 429. |
+| `"rate_limited"` | HTTP 429, or HTTP 403 from the App Store RSS feed, which answers 403 while it throttles an address. Retryable. |
 | `"auth"` | HTTP 401 or 403 from a credentialed official API, or credentials that cannot be used. |
 | `"not_found"` | HTTP 404. |
 | `"server"` | HTTP 5xx. |
@@ -232,9 +232,10 @@ from app_reviews import ErrorKind
 | `"parse"` | The response body was malformed, not `json.JSONDecodeError` raised out of the call but a classified error you can inspect. |
 
 On single-request operations, the `"request"` kind is raised as
-`RequestError`. It is nonretryable. A public RSS, web, search, or lookup endpoint
+`RequestError`. It is nonretryable. A public web, search, or lookup endpoint
 has no caller credentials to repair, so its 401/403 is also a request rejection;
-401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint.
+401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint. The
+credential-free App Store RSS feed reports its 403 as `"rate_limited"` instead.
 
 ---
 

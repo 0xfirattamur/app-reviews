@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app_reviews import AppStoreReviews, RateLimiter, RetryConfig
 from app_reviews.appstore.rss import AppStoreScraperProvider
 from app_reviews.core.http import HttpClient
 from app_reviews.core.reviews import BaseReviews
@@ -177,7 +178,7 @@ class TestErrorClassification:
         ("status", "kind", "retryable"),
         [
             (429, "rate_limited", True),
-            (403, "request", False),
+            (403, "rate_limited", True),
             (404, "not_found", False),
             (503, "server", True),
         ],
@@ -205,14 +206,74 @@ class TestErrorClassification:
         assert "connection refused" in page.error.message
         assert "HTTP 0" not in page.error.message
 
-    def test_public_feed_403_explains_access_blocking_not_credentials(self):
+    def test_public_feed_403_is_retryable_throttling_not_credentials(self):
         page = _provider(lambda request: httpx.Response(403, text="")).fetch_page(
             "12345", "us", None
         )
 
         assert page.error is not None
-        assert page.error.kind == "request"
+        assert page.error.kind == "rate_limited"
+        assert page.error.retryable is True
         assert "access may be blocked or throttled" in page.error.message
+
+    def test_403_is_not_retried_in_package(self, monkeypatch):
+        """Retrying a blocked storefront only extends the block."""
+        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+        attempts = []
+
+        def handler(request):
+            attempts.append(request)
+            return httpx.Response(403, text="")
+
+        client = AppStoreReviews(
+            http=HttpClient(transport=httpx.MockTransport(handler), retry=RetryConfig())
+        )
+        page = client.fetch_page("12345", country="us")
+
+        assert page.error is not None
+        assert page.error.kind == "rate_limited"
+        assert len(attempts) == 1
+
+    def test_blocked_storefront_fails_alone_and_pauses_the_shared_limiter(
+        self, monkeypatch
+    ):
+        now = [0.0]
+        slept: list[float] = []
+
+        def fake_sleep(seconds: float) -> None:
+            slept.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr("app_reviews.core.ratelimit.monotonic", lambda: now[0])
+        monkeypatch.setattr("app_reviews.core.ratelimit.sleep", fake_sleep)
+
+        def handler(request):
+            if "/gb/" in request.url.path:
+                return httpx.Response(403, text="")
+            page_one = "/page=1/" in request.url.path
+            return httpx.Response(200, text=_feed([_rss_entry()] if page_one else []))
+
+        limiter = RateLimiter(rate=100, burst=100)
+        client = AppStoreReviews(
+            http=HttpClient(
+                transport=httpx.MockTransport(handler), rate_limiter=limiter
+            )
+        )
+        result = client.fetch("12345", countries=["us", "gb"], concurrency=1)
+
+        by_country = {outcome.country: outcome for outcome in result.outcomes}
+        assert [review.country for review in result.reviews] == ["us"]
+        assert by_country["us"].error is None
+        gb_error = by_country["gb"].error
+        assert gb_error is not None
+        assert (gb_error.kind, gb_error.retryable, gb_error.status) == (
+            "rate_limited",
+            True,
+            403,
+        )
+
+        limiter.acquire()
+        assert sum(slept) == pytest.approx(30.0)
 
     def test_malformed_json_is_a_parse_error(self):
         def handler(request):

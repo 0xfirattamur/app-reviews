@@ -109,15 +109,24 @@ class AppStoreScraperProvider(PooledClient):
                     credentialed=False,
                 )
             )
+        if response.status == 403:
+            return PageResult(
+                error=FetchError(
+                    country=country,
+                    message=(
+                        "HTTP 403 from the App Store RSS feed; "
+                        "access may be blocked or throttled"
+                    ),
+                    kind="rate_limited",
+                    status=403,
+                )
+            )
         if not response.ok:
-            message = f"HTTP {response.status} from the App Store RSS feed"
-            if response.status == 403:
-                message += "; access may be blocked or throttled"
             return PageResult(
                 error=fetch_error_from_response(
                     country=country,
                     status=response.status,
-                    message=message,
+                    message=f"HTTP {response.status} from the App Store RSS feed",
                     credentialed=False,
                 )
             )
