@@ -15,6 +15,7 @@ thread-pool wrapper.
 | `fetch_page()` | `afetch_page()` |
 | `search()` | `asearch()` |
 | `lookup()` | `alookup()` |
+| `version_history()` | `aversion_history()` |
 | `close()` / `with` | `aclose()` / `async with` |
 
 ```python

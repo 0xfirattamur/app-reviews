@@ -529,6 +529,37 @@ app = client.lookup(
 # returns AppMetadata | None
 ```
 
+#### version_history()
+
+The iTunes APIs report only the current version. `version_history()` reads the
+"Version History" the public App Store product page shows, and returns every
+version it lists, newest first:
+
+```python
+history = client.version_history(
+    "324684580",         # str: numeric track ID (the /id number in a store URL)
+    country=Country.US,  # Country: storefront (default: US)
+)
+# returns list[AppVersionEntry]
+for entry in history:
+    print(entry.version, entry.released_at.isoformat(), entry.notes)
+```
+
+`AppVersionEntry` is a frozen dataclass: `version: str` (for example `"9.1.84"`),
+`released_at: datetime` (timezone-aware UTC, to the second), and
+`notes: str | None` (that version's "What's New" text). `aversion_history()` is
+the async twin. The request goes through the client's own `HttpClient`, so
+`proxy=`, `retry=`, and `rate_limiter=` apply to it like any other call.
+
+- An app the store does not have (HTTP 404) returns `[]`, the way `lookup()`
+  returns `None`, and so does a page that shows no version history.
+- A page whose history cannot be read raises `ParseError` rather than returning
+  a partial list. Other failures raise the usual `HttpError` subclasses.
+- A bundle ID is rejected with `ValueError`: the product page exists only under
+  the numeric track ID. `lookup(bundle_id).app_id` gives you that ID.
+- The store lists a recent window of versions, not necessarily every release
+  the app ever shipped (25 for Spotify when this was written).
+
 ### GooglePlaySearch
 
 ```python
@@ -564,11 +595,16 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 | `icon_url` | `str \| None` | App icon image URL |
 | `current_version_release_date` | `datetime \| None` | When the current version shipped |
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store |
+| `release_notes` | `str \| None` | "What's New" text for the current version |
 
 > **Dates:** both are `None` when the store publishes none, because a date has no
 > honest placeholder. Precision differs: the App Store sends a real timestamp,
 > while Google Play publishes only a day, so a Play date is midnight UTC on that
 > day. A Play *search* hit carries neither; use `lookup()`.
+
+> **Release notes:** every App Store result carries them. On Google Play only
+> `lookup()` (and the one featured search hit) does, with Play's `<br>` line
+> breaks turned into newlines. `None` when the store shows none.
 
 > **Note:** Google Play search results may have `"Unknown"` for `name`,
 > `developer` and `category`, and `0` for `rating_count`, because a regular search hit

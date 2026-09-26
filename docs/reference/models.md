@@ -380,6 +380,7 @@ with AppStoreSearch() as client:
 | `url` | `str` | Store page URL. |
 | `current_version_release_date` | `datetime \| None` | When the current version shipped. |
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store. |
+| `release_notes` | `str \| None` | "What's New" text for the current version. |
 
 Text and number fields are non-optional, so a store that does not report one gets
 a stated placeholder rather than `None`. The two dates are the exception: a date
@@ -395,6 +396,7 @@ Measured against the live stores:
 | `version` | yes | when the app publishes one | always `"Varies with device"` |
 | `icon_url` | yes | yes | yes |
 | `current_version_release_date` / `first_release_date` | yes, to the second | yes, to the day | always `None` |
+| `release_notes` | yes | yes, `<br>` as newlines | always `None` |
 
 - **Google Play publishes a version for some apps, not all.** `lookup()` returns
   the real one when the detail page carries it, and `"Varies with device"` when it
@@ -417,6 +419,26 @@ Measured against the live stores:
   as are positive amounts with a missing currency. Apple preserves its
   `formattedPrice` value and uses `"Unknown"` when that value is absent or
   unusable.
+
+---
+
+## AppVersionEntry
+
+One entry of an app's App Store "Version History", returned newest first by
+`AppStoreSearch.version_history()` / `aversion_history()`.
+
+```python
+from app_reviews import AppStoreSearch
+
+with AppStoreSearch() as client:
+    history = client.version_history("324684580")   # list[AppVersionEntry]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | `str` | Version string, such as `"9.1.84"`. |
+| `released_at` | `datetime` | When that version shipped: timezone-aware UTC, to the second. |
+| `notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. |
 
 ---
 

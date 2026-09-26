@@ -6,8 +6,9 @@ recent versions are also kept in
 
 ## [1.1.0] - 2026-09-26
 
-A shared rate limit for processes that fetch many apps from one address.
-Backward compatible; omitting the new parameters keeps 1.0.0 behavior.
+A shared rate limit for processes that fetch many apps from one address, and
+App Store release history with exact dates. Backward compatible; omitting the
+new parameters keeps 1.0.0 behavior.
 
 ### Added
 
@@ -20,6 +21,17 @@ Backward compatible; omitting the new parameters keeps 1.0.0 behavior.
   limiter for `Retry-After`, else for 30 seconds doubling per consecutive
   throttled answer, capped at `max_penalty`; a success resets the doubling.
   Passing it alongside `http=` raises `TypeError`, like `proxy=` and `retry=`.
+- `AppStoreSearch.version_history(app_id, *, country="us")` and
+  `aversion_history()`, returning the app's App Store "Version History" as
+  `list[AppVersionEntry]`, newest first. Read from the public product page
+  through the client's `HttpClient`, so `proxy=`, `retry=`, and `rate_limiter=`
+  apply. An unknown app (HTTP 404) or a page without a history returns `[]`; a
+  history that cannot be read raises `ParseError`.
+- `AppVersionEntry(version, released_at, notes)`, a frozen dataclass exported
+  from `app_reviews`. `released_at` is timezone-aware UTC.
+- `AppMetadata.release_notes`, the current version's "What's New" text: from
+  iTunes `releaseNotes` on every App Store result, and from the Google Play
+  detail page on `lookup()` and the featured search hit. `None` when absent.
 
 ### Changed
 

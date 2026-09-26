@@ -144,6 +144,27 @@ print([app.name for app in ios_apps + android_apps])
 ```
 
 Search returns `list[AppMetadata]`; lookup returns `AppMetadata | None`.
+`AppMetadata.release_notes` carries the current version's "What's New" text: on
+every App Store result, and from Google Play `lookup()`.
+
+### App Store version history
+
+The iTunes APIs report only the current version. `version_history()` reads the
+"Version History" from the public App Store product page instead, newest first:
+
+```python
+from app_reviews import AppStoreSearch
+
+with AppStoreSearch() as apple:
+    for entry in apple.version_history("324684580"):
+        print(entry.version, entry.released_at.isoformat(), entry.notes)
+```
+
+Each `AppVersionEntry` has `version`, `released_at` (timezone-aware UTC), and
+`notes`. It takes the numeric app ID and goes through the client's `proxy=`,
+`retry=`, and `rate_limiter=` settings. An app the store does not have, or a
+page with no history, returns `[]`; a history that cannot be read raises
+`ParseError`. `aversion_history()` is the async twin.
 
 ## Results and errors
 
