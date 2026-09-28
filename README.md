@@ -192,6 +192,11 @@ such as `limit`, `since`, and `max_pages` mean the client stopped while more dat
 may exist. Malformed records that can be isolated are counted as
 `skipped_reviews`; malformed page envelopes are parse errors.
 
+Apple's RSS JSON feed sometimes answers with no entries while its XML feed for
+the same page has them. The package then reads the XML feed, through the same
+client and settings, and records it: `outcome.feed_format` is `"xml"` (else
+`"json"`, and `None` for other sources). Both empty is a normal `"exhausted"`.
+
 `fetch()` retains partial failures as data. Search and lookup are single-request
 operations and raise typed exceptions such as `RateLimitError`, `RequestError`,
 `NotFoundError`, and `ParseError`.

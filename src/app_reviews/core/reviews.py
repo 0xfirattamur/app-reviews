@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import dataclasses
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -844,13 +845,7 @@ class BaseReviews(PooledClient, abc.ABC):
             return page, qualified
         retained = [review for review in page.reviews if qualifying(review)]
         qualified += len(retained)
-        page = PageResult(
-            reviews=retained,
-            next_cursor=page.next_cursor,
-            error=page.error,
-            stopped_because=page.stopped_because,
-            skipped_reviews=page.skipped_reviews,
-        )
+        page = dataclasses.replace(page, reviews=retained)
         if qualifying_limit is not None and qualified >= qualifying_limit:
             page = with_stop_reason(
                 page, prefer_stop_reason(page.stopped_because, "limit")

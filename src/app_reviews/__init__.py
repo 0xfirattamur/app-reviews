@@ -52,7 +52,14 @@ from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
 from app_reviews.models.review import Review
-from app_reviews.models.types import ErrorKind, Sort, Source, StopReason, Store
+from app_reviews.models.types import (
+    ErrorKind,
+    FeedFormat,
+    Sort,
+    Source,
+    StopReason,
+    Store,
+)
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -70,6 +77,7 @@ __all__ = [
     "Country",
     "CountryOutcome",
     "ErrorKind",
+    "FeedFormat",
     "FetchError",
     "FetchResult",
     "GooglePlayAuth",

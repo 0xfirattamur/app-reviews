@@ -40,7 +40,7 @@ from app_reviews import Review
 | `language` | `str` or `None` | `None` | Review language. |
 | `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `fetched_at` | `datetime` or `None` | `None` | When the review was fetched. |
-| `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. |
+| `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. An App Store RSS review read from the XML fallback carries its entry converted to the JSON feed's shape. |
 
 Rows are in field order, which is also the positional-constructor order,
 though `Review` is far easier to get right with keywords.
@@ -182,6 +182,7 @@ from app_reviews import CountryOutcome
 | `error` | `FetchError \| None` | Set if the walk ended on an error. |
 | `elapsed` | `float` | Wall-clock seconds spent on this country. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped during this walk. |
+| `feed_format` | `FeedFormat \| None` | App Store RSS only: `"xml"` if any page of this walk came from the XML fallback, `"json"` if every answered page came from the JSON feed. `None` for other sources, or when no feed answered. See [FeedFormat](#feedformat). |
 
 `CountryOutcome.to_dict()` serializes every field and nests the complete
 `FetchError` dictionary when an error is present.
@@ -207,9 +208,40 @@ from app_reviews import PageResult
 | `error` | `FetchError \| None` | Set if this page failed. |
 | `stopped_because` | `StopReason \| None` | Set only on the final page of an `iter_pages()`/`aiter_pages()` walk. Always `None` on a bare `fetch_page()` call, which has nothing to stop. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped while parsing this page. |
+| `feed_format` | `FeedFormat \| None` | Which App Store RSS feed this page came from: `"json"`, or `"xml"` for the fallback. `None` for other sources and for a failed page. |
 
 `PageResult.to_dict(include_raw=False)` returns a JSON-safe page envelope with
-`reviews`, `skipped_reviews`, `next_cursor`, `error`, and `stopped_because`.
+`reviews`, `skipped_reviews`, `next_cursor`, `error`, `stopped_because`, and
+`feed_format`.
+
+---
+
+## FeedFormat
+
+A `Literal` naming the App Store RSS feed that answered a page:
+`"json"` or `"xml"`. Appears on `PageResult.feed_format` and
+`CountryOutcome.feed_format`.
+
+```python
+from app_reviews import FeedFormat
+```
+
+The package asks the JSON feed first. Apple's JSON feed sometimes answers 200
+with no entries, or with a body that cannot be parsed, while the XML (Atom) feed
+for the same page has the reviews. Such a page is asked again as XML, through
+the same client, so `retry=`, `proxy=`, and `rate_limiter=` apply, and the XML
+entries are used if there are any: `feed_format` is then `"xml"`. Reviews from
+either feed have the same fields; only `raw` differs, since an XML entry is
+converted into the JSON feed's shape.
+
+- The XML request is made on page 1, and on a later page unless the page
+  before it was short of Apple's 50 entries (then an empty page is the feed's
+  real end). A walk resumed from a persisted cursor may cost one XML request at
+  its end.
+- Both feeds empty is a normal `"exhausted"`, with `feed_format="json"`.
+- An unreadable XML body leaves the JSON feed's answer standing. A failed XML
+  request (a 403, 5xx, or transport failure) is reported as the page's
+  `FetchError`, since the empty JSON answer is the one in doubt.
 
 ---
 

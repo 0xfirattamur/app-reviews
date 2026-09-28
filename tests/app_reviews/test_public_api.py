@@ -14,6 +14,7 @@ EXPECTED = {
     "CountryOutcome",
     "ConnectCredentials",
     "ErrorKind",
+    "FeedFormat",
     "FetchError",
     "FetchResult",
     "GooglePlayAuth",

@@ -1,0 +1,218 @@
+{
+ "feed": {
+  "author": {
+   "name": {
+    "label": "iTunes Store"
+   },
+   "uri": {
+    "label": "http://www.apple.com/itunes/"
+   }
+  },
+  "entry": [
+   {
+    "author": {
+     "uri": {
+      "label": "https://itunes.apple.com/us/reviews/id100000001"
+     },
+     "name": {
+      "label": "Reviewer 1"
+     },
+     "label": ""
+    },
+    "updated": {
+     "label": "2026-09-26T16:52:44-07:00"
+    },
+    "im:rating": {
+     "label": "5"
+    },
+    "im:version": {
+     "label": "7.141.1"
+    },
+    "id": {
+     "label": "14597479246"
+    },
+    "title": {
+     "label": "5 stars"
+    },
+    "content": {
+     "label": "This helped me learn Japanese fast",
+     "attributes": {
+      "type": "text"
+     }
+    },
+    "link": {
+     "attributes": {
+      "rel": "related",
+      "href": "https://itunes.apple.com/us/review?id=570060128&type=Purple%20Software"
+     }
+    },
+    "im:voteSum": {
+     "label": "0"
+    },
+    "im:contentType": {
+     "attributes": {
+      "term": "Application",
+      "label": "Application"
+     }
+    },
+    "im:voteCount": {
+     "label": "0"
+    }
+   },
+   {
+    "author": {
+     "uri": {
+      "label": "https://itunes.apple.com/us/reviews/id100000002"
+     },
+     "name": {
+      "label": "Reviewer 2"
+     },
+     "label": ""
+    },
+    "updated": {
+     "label": "2026-09-26T16:48:04-07:00"
+    },
+    "im:rating": {
+     "label": "4"
+    },
+    "im:version": {
+     "label": "7.141.1"
+    },
+    "id": {
+     "label": "14597468062"
+    },
+    "title": {
+     "label": "Duoling"
+    },
+    "content": {
+     "label": "Hello, now that I understand Duolingo and don’t write like a second grader, here is my report as a 7th grader with a college reading level and straight A’s for 4 years….\n     Duolingo is truly helpful, I always thought a cutesy app with a green owl wouldn’t do diddly-squat for me. Boy was I wrong, it does do a lot for you, from explaining your mistakes. To even giving you helpful boosts during learning time. However, I dislike how Super Duolingo is $10 a month! I am a child, so I have no idea how bad this economy is, but I ain’t tryna pay that!! If I’m 4.2x more likely to finish a course with super, give me it!! Overall, great app, I will never understand this…I am using it for my Japan trip next year, overall, get it, be prepared to spend money as you don’t need a pass to learn….GET RID OF THE BATTERY SYSTEM,I WANNA LEARN ALL DAY!",
+     "attributes": {
+      "type": "text"
+     }
+    },
+    "link": {
+     "attributes": {
+      "rel": "related",
+      "href": "https://itunes.apple.com/us/review?id=570060128&type=Purple%20Software"
+     }
+    },
+    "im:voteSum": {
+     "label": "0"
+    },
+    "im:contentType": {
+     "attributes": {
+      "term": "Application",
+      "label": "Application"
+     }
+    },
+    "im:voteCount": {
+     "label": "0"
+    }
+   },
+   {
+    "author": {
+     "uri": {
+      "label": "https://itunes.apple.com/us/reviews/id100000003"
+     },
+     "name": {
+      "label": "Reviewer 3"
+     },
+     "label": ""
+    },
+    "updated": {
+     "label": "2026-09-26T16:47:24-07:00"
+    },
+    "im:rating": {
+     "label": "5"
+    },
+    "im:version": {
+     "label": "7.141.1"
+    },
+    "id": {
+     "label": "14597466478"
+    },
+    "title": {
+     "label": "Great app"
+    },
+    "content": {
+     "label": "I’ve had previous experiences learning Spanish and this app has helped me grow from there but I have more notifications from this app than my own friends 🤦‍♀️🫩",
+     "attributes": {
+      "type": "text"
+     }
+    },
+    "link": {
+     "attributes": {
+      "rel": "related",
+      "href": "https://itunes.apple.com/us/review?id=570060128&type=Purple%20Software"
+     }
+    },
+    "im:voteSum": {
+     "label": "0"
+    },
+    "im:contentType": {
+     "attributes": {
+      "term": "Application",
+      "label": "Application"
+     }
+    },
+    "im:voteCount": {
+     "label": "0"
+    }
+   }
+  ],
+  "updated": {
+   "label": "2026-09-27T21:29:45-07:00"
+  },
+  "rights": {
+   "label": "Copyright 2008 Apple Inc."
+  },
+  "title": {
+   "label": "iTunes Store: Customer Reviews"
+  },
+  "icon": {
+   "label": "http://itunes.apple.com/favicon.ico"
+  },
+  "link": [
+   {
+    "attributes": {
+     "rel": "alternate",
+     "type": "text/html",
+     "href": "https://music.apple.com/WebObjects/MZStore.woa/wa/viewGrouping?cc=us&id=1"
+    }
+   },
+   {
+    "attributes": {
+     "rel": "self",
+     "href": "https://itunes.apple.com/us/rss/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+    }
+   },
+   {
+    "attributes": {
+     "rel": "first",
+     "href": "https://itunes.apple.com/us/rss/customerreviews/page=1/id=570060128/sortby=mostrecent/xml?urlDesc=/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+    }
+   },
+   {
+    "attributes": {
+     "rel": "last",
+     "href": "https://itunes.apple.com/us/rss/customerreviews/page=10/id=570060128/sortby=mostrecent/xml?urlDesc=/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+    }
+   },
+   {
+    "attributes": {
+     "rel": "previous",
+     "href": "https://itunes.apple.com/us/rss/customerreviews/page=1/id=570060128/sortby=mostrecent/xml?urlDesc=/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+    }
+   },
+   {
+    "attributes": {
+     "rel": "next",
+     "href": "https://itunes.apple.com/us/rss/customerreviews/page=2/id=570060128/sortby=mostrecent/xml?urlDesc=/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+    }
+   }
+  ],
+  "id": {
+   "label": "https://itunes.apple.com/us/rss/customerreviews/id=570060128/sortBy=mostRecent/page=1/json"
+  }
+ }
+}

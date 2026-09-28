@@ -119,7 +119,9 @@ reprocessed, so a mapping bug found later has nothing to go back to.
 Prior to 0.6.0 the Play scraper set `raw=None` while the other three populated
 it. Its shape differs by source: Apple and the official Play API send JSON
 objects, while Play's web endpoint sends positional arrays, so `raw` is
-`dict | list | None`.
+`dict | list | None`. An App Store RSS review read from the XML fallback (see
+`PageResult.feed_format`) carries its Atom entry converted into the JSON feed's
+shape, since XML is not JSON.
 
 `to_dicts()` omits it unless you ask: `result.to_dicts(include_raw=True)`. It is
 off by default because the payload routinely dwarfs the review around it.

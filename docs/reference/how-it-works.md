@@ -19,7 +19,8 @@ below, so there is exactly one page-walk implementation:
    fact is recorded; providers do not also answer it. See
    [Source capabilities](capabilities.md).
 2. **Walk each country's pages.** One request per page, following the
-   provider's opaque cursor.
+   provider's opaque cursor. An App Store RSS page whose JSON came back empty
+   or unreadable costs a second request, to the same page's XML feed.
 3. **Stop.** On an exhausted cursor, on `limit`, on a page older than `since`,
    on a cursor the source repeated (`"cycle"`), on a run of review-less pages from
    a source still issuing cursors (`"stalled"`), on the page ceiling
@@ -83,9 +84,14 @@ country handling, history depth) are captured as data in
 
 ### Apple App Store: RSS Feed (Scraper)
 
-Public JSON feed. No authentication.
+Public JSON feed, with its XML (Atom) twin as a fallback. No authentication.
 
 **Endpoint:** `https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/page={page}/json`
+
+**Fallback:** the same URL ending in `/xml`, asked when the JSON page answers
+200 with no entries or an unreadable body. Its entries are used if it has any,
+and `feed_format` on the page and the country's outcome says so. See
+[FeedFormat](models.md#feedformat).
 
 - Up to 50 reviews per page, paginates through all available pages.
 - Returns: review ID, rating, title, body, author, app version, timestamps.

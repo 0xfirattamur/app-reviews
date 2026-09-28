@@ -9,7 +9,13 @@ from math import isfinite
 from typing import Any
 
 from app_reviews.models.review import Review
-from app_reviews.models.types import RETRYABLE_KINDS, ErrorKind, Sort, StopReason
+from app_reviews.models.types import (
+    RETRYABLE_KINDS,
+    ErrorKind,
+    FeedFormat,
+    Sort,
+    StopReason,
+)
 
 
 def _validate_non_negative_int(value: object, field_name: str) -> None:
@@ -56,6 +62,10 @@ class CountryOutcome:
 
     ``reviews_fetched`` is what this country's walk pulled off the wire, before
     filtering, so it can exceed ``len(result.reviews)``.
+
+    ``feed_format`` is ``"xml"`` if any App Store RSS page of this walk came
+    from the XML fallback, ``"json"`` if every page a feed answered came from
+    the JSON feed, and None for other sources or a walk no feed answered.
     """
 
     country: str | None
@@ -65,6 +75,7 @@ class CountryOutcome:
     elapsed: float
     error: FetchError | None = None
     skipped_reviews: int = 0
+    feed_format: FeedFormat | None = None
 
     def __post_init__(self) -> None:
         if not isfinite(self.elapsed) or self.elapsed < 0:
@@ -81,6 +92,7 @@ class CountryOutcome:
             "stopped_because": self.stopped_because,
             "elapsed": self.elapsed,
             "error": self.error.to_dict() if self.error is not None else None,
+            "feed_format": self.feed_format,
         }
 
 

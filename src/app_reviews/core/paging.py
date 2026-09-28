@@ -13,6 +13,7 @@ code, so it is answered in ``docs/reference/capabilities.md``.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from datetime import date, datetime
@@ -20,7 +21,7 @@ from datetime import date, datetime
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import CountryOutcome, FetchError, to_aware_datetime
 from app_reviews.models.review import Review
-from app_reviews.models.types import Source, StopReason
+from app_reviews.models.types import FeedFormat, Source, StopReason
 
 _LOG = logging.getLogger(__name__)
 
@@ -66,13 +67,7 @@ def with_stop_reason(page: PageResult, reason: StopReason | None) -> PageResult:
     """Return the page, stamped with a stop reason if the walk ended on it."""
     if reason is None:
         return page
-    return PageResult(
-        reviews=page.reviews,
-        next_cursor=page.next_cursor,
-        error=page.error,
-        stopped_because=reason,
-        skipped_reviews=page.skipped_reviews,
-    )
+    return dataclasses.replace(page, stopped_because=reason)
 
 
 class CountryCollector:
@@ -90,6 +85,7 @@ class CountryCollector:
         self._error: FetchError | None = None
         self._skipped_reviews = 0
         self._reviews_fetched = 0
+        self._feed_format: FeedFormat | None = None
 
     def add(self, page: PageResult, *, reviews_fetched: int | None = None) -> None:
         """Fold one page in, retaining wire-row accounting after filtering.
@@ -104,6 +100,8 @@ class CountryCollector:
             len(page.reviews) if reviews_fetched is None else reviews_fetched
         )
         self._skipped_reviews += page.skipped_reviews
+        if self._feed_format != "xml" and page.feed_format is not None:
+            self._feed_format = page.feed_format
         if page.stopped_because is not None:
             self._reason = page.stopped_because
             self._error = page.error
@@ -118,6 +116,7 @@ class CountryCollector:
             error=self._error,
             elapsed=time.monotonic() - self._started,
             skipped_reviews=self._skipped_reviews,
+            feed_format=self._feed_format,
         )
 
 

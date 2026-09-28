@@ -643,20 +643,23 @@ class TestPathSegmentsAreNotInjectable:
     is still a request whose empty result means nothing.
     """
 
-    def _url_for(self, app_id, country):
-        seen = {}
+    def _urls_for(self, app_id, country):
+        """Both URLs an empty page requests: the JSON feed, then the XML one."""
+        seen = []
 
         def handler(request):
-            seen["url"] = str(request.url)
+            seen.append(str(request.url))
             return httpx.Response(200, text=json.dumps({"feed": {"entry": []}}))
 
         _provider(handler).fetch_page(app_id, country, None)
-        return seen["url"]
+        return seen
 
     def test_a_normal_request_is_untouched(self):
-        url = self._url_for("389801252", "us")
+        json_url, xml_url = self._urls_for("389801252", "us")
+        path = "/us/rss/customerreviews/id=389801252/sortBy=mostRecent/page=1"
 
-        assert "/us/rss/customerreviews/id=389801252/" in url
+        assert json_url.endswith(f"{path}/json")
+        assert xml_url.endswith(f"{path}/xml")
 
     @pytest.mark.parametrize(
         ("app_id", "country"),
@@ -667,11 +670,12 @@ class TestPathSegmentsAreNotInjectable:
         ],
     )
     def test_traversal_cannot_leave_the_feed_path(self, app_id, country):
-        url = self._url_for(app_id, country)
+        json_url, xml_url = self._urls_for(app_id, country)
 
-        assert "/rss/customerreviews/id=" in url
-        assert url.endswith("/json")
-        assert "/evil" not in url
+        for url, suffix in ((json_url, "/json"), (xml_url, "/xml")):
+            assert "/rss/customerreviews/id=" in url
+            assert url.endswith(suffix)
+            assert "/evil" not in url
 
 
 class TestAPageOfUnusableEntriesDoesNotEndTheWalk:
@@ -779,7 +783,7 @@ class TestTheAsyncWalkRequestsTheSamePage:
 
         assert "/page=4/" in seen["url"]
 
-    async def test_the_async_url_matches_the_sync_one(self):
+    async def test_the_async_urls_match_the_sync_ones(self):
         urls = []
 
         def handler(request):
@@ -789,7 +793,8 @@ class TestTheAsyncWalkRequestsTheSamePage:
         _provider(handler).fetch_page("123", "us", "3")
         await _provider(handler).afetch_page("123", "us", "3")
 
-        assert urls[0] == urls[1]
+        assert len(urls) == 4
+        assert urls[:2] == urls[2:]
 
 
 class TestTheStorefrontIsUsedVerbatimInLowercase:

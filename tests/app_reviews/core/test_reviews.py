@@ -366,8 +366,7 @@ class TestClientOwnsOnePool:
         )
         client.fetch("324684580", countries=["us"])
 
-        assert len(seen) == 1
-        assert "/page=1/" in seen[0]
+        assert [url.rsplit("/page=", 1)[1] for url in seen] == ["1/json", "1/xml"]
 
     def test_a_multi_page_walk_builds_only_one_pool(self):
         def handler(request):

@@ -520,6 +520,12 @@ walk stopped asking, `"cycle"`, `"stalled"` and `"max_pages"` because it gave up
 a source that would not end, and `"error"`.
 See [Models](../reference/models.md#countryoutcome).
 
+For the App Store RSS feed, `outcome.feed_format` also says which feed
+answered. Apple's JSON feed sometimes answers 200 with no entries while the
+XML feed for the same page has them; the package then reads the XML feed, and
+reports `feed_format="xml"`. See
+[FeedFormat](../reference/models.md#feedformat).
+
 ---
 
 ## App Search & Lookup
