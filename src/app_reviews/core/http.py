@@ -85,11 +85,15 @@ class HttpResponse:
     ``status`` is 0 and ``transport_error`` is set when the exchange never
     completed, such as a connection failure or timeout. In that case ``body`` is
     empty and ``transport_error`` holds the real exception text.
+
+    ``retry_after`` is the raw ``Retry-After`` header of the final attempt, so a
+    caller that gives up on a 429 can say how long the store asked it to wait.
     """
 
     status: int
     body: str
     transport_error: str | None = None
+    retry_after: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -187,12 +191,17 @@ class HttpClient:
         body: str,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Perform a POST on the shared pool.
 
         Pass ``follow_redirects=False`` when the body carries a credential. httpx
         drops ``Authorization`` when the origin changes, but a 307/308 re-sends
         the *body* verbatim to the next host, and an OAuth assertion lives there.
+
+        Pass ``retryable=False`` for a write that must not happen twice: the one
+        attempt's outcome is returned whatever it was, and the retry policy is
+        not consulted.
         """
         pool = self._pool()
         return self._execute(
@@ -206,6 +215,24 @@ class HttpClient:
                 follow_redirects=follow_redirects,
             ),
             credentialed=not follow_redirects or _carries_credential(headers),
+            retryable=retryable,
+        )
+
+    def delete(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        retryable: bool = True,
+    ) -> HttpResponse:
+        """Perform a DELETE on the shared pool. ``retryable`` is as for ``post``."""
+        pool = self._pool()
+        return self._execute(
+            "DELETE",
+            url,
+            send=lambda: pool.stream("DELETE", url, headers=self._headers(headers)),
+            credentialed=_carries_credential(headers),
+            retryable=retryable,
         )
 
     async def aget(
@@ -233,6 +260,7 @@ class HttpClient:
         body: str,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Async equivalent of ``post``."""
         pool = self._apool()
@@ -247,6 +275,24 @@ class HttpClient:
                 follow_redirects=follow_redirects,
             ),
             credentialed=not follow_redirects or _carries_credential(headers),
+            retryable=retryable,
+        )
+
+    async def adelete(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        retryable: bool = True,
+    ) -> HttpResponse:
+        """Async equivalent of ``delete``."""
+        pool = self._apool()
+        return await self._aexecute(
+            "DELETE",
+            url,
+            send=lambda: pool.stream("DELETE", url, headers=self._headers(headers)),
+            credentialed=_carries_credential(headers),
+            retryable=retryable,
         )
 
     def _pool(self) -> httpx.Client:
@@ -286,6 +332,7 @@ class HttpClient:
         *,
         send: Callable[[], AbstractContextManager[httpx.Response]],
         credentialed: bool,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Run one request, retrying on this client's policy.
 
@@ -305,7 +352,8 @@ class HttpClient:
             self._record(response, retry_after, credentialed)
 
             if (
-                not permanent
+                retryable
+                and not permanent
                 and self._policy
                 and self._policy.should_retry(attempt, response.status)
             ):
@@ -325,6 +373,7 @@ class HttpClient:
         *,
         send: Callable[[], AbstractAsyncContextManager[httpx.Response]],
         credentialed: bool,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Async twin of ``_execute``: same policy, ``asyncio.sleep`` for backoff."""
         attempt = 0
@@ -337,7 +386,8 @@ class HttpClient:
             self._record(response, retry_after, credentialed)
 
             if (
-                not permanent
+                retryable
+                and not permanent
                 and self._policy
                 and self._policy.should_retry(attempt, response.status)
             ):
@@ -365,8 +415,8 @@ class HttpClient:
     ) -> tuple[HttpResponse, str | None, bool]:
         """One exchange, plus the ``Retry-After`` it asked for, if any.
 
-        The header is read here rather than carried on ``HttpResponse``: it is a
-        retry input, spent before anything downstream sees the response.
+        The header is returned separately as well as on ``HttpResponse``: it is a
+        retry input first, spent before the caller sees the final response.
 
         The deadline starts before the stream opens, so it covers connecting as
         well as reading. ``_BodyTooLarge`` and ``_AttemptTooSlow`` are permanent:
@@ -377,9 +427,12 @@ class HttpClient:
         try:
             with send() as raw:
                 body = self._read(raw.iter_bytes(), raw, deadline)
+                retry_after = raw.headers.get("Retry-After")
                 return (
-                    HttpResponse(status=raw.status_code, body=body),
-                    raw.headers.get("Retry-After"),
+                    HttpResponse(
+                        status=raw.status_code, body=body, retry_after=retry_after
+                    ),
+                    retry_after,
                     False,
                 )
         except (_BodyTooLarge, _AttemptTooSlow) as exc:
@@ -397,9 +450,12 @@ class HttpClient:
         try:
             async with send() as raw:
                 body = await self._aread(raw, deadline)
+                retry_after = raw.headers.get("Retry-After")
                 return (
-                    HttpResponse(status=raw.status_code, body=body),
-                    raw.headers.get("Retry-After"),
+                    HttpResponse(
+                        status=raw.status_code, body=body, retry_after=retry_after
+                    ),
+                    retry_after,
                     False,
                 )
         except (_BodyTooLarge, _AttemptTooSlow) as exc:

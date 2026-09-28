@@ -37,6 +37,20 @@ raises them for a seconds value outside the platform's range, and neither is a
 """
 
 
+def protobuf_timestamp(value: Any) -> datetime:
+    """Read a protobuf ``Timestamp`` (``{seconds, nanos}``) as one instant.
+
+    ``nanos`` is sub-second precision for that same instant, not a second
+    timestamp. ``seconds`` deliberately has no default: defaulting it to 0
+    dated a review the API sent no timestamp for to 1970-01-01, and
+    ``updated_at`` is the only date this source reports, so ``sort``, ``since``
+    and ``until`` all read it, so a wrong one is worse than a dropped review.
+    """
+    seconds = int(value["seconds"])
+    nanos = int(value.get("nanos", 0))
+    return datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=nanos // 1000)
+
+
 class GooglePlayOfficialProvider(PooledClient):
     """Fetches one page from the Google Play Developer API v3.
 
@@ -200,7 +214,7 @@ class GooglePlayOfficialProvider(PooledClient):
                     comment.get("reviewerLanguage"), "reviewerLanguage"
                 ),
                 # The API reports lastModified only; there is no creation date.
-                updated_at=self._timestamp(comment["lastModified"]),
+                updated_at=protobuf_timestamp(comment["lastModified"]),
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
@@ -256,18 +270,3 @@ class GooglePlayOfficialProvider(PooledClient):
         warning line.
         """
         return entry.get("reviewId") if isinstance(entry, dict) else None
-
-    def _timestamp(self, value: Any) -> datetime:
-        """Read a protobuf ``Timestamp`` (``{seconds, nanos}``) as one instant.
-
-        ``nanos`` is sub-second precision for that same instant, not a second
-        timestamp. ``seconds`` deliberately has no default: defaulting it to 0
-        dated a review the API sent no timestamp for to 1970-01-01, and
-        ``updated_at`` is the only date this source reports, so ``sort``, ``since``
-        and ``until`` all read it, so a wrong one is worse than a dropped review.
-        """
-        seconds = int(value["seconds"])
-        nanos = int(value.get("nanos", 0))
-        return datetime.fromtimestamp(seconds, tz=UTC).replace(
-            microsecond=nanos // 1000
-        )

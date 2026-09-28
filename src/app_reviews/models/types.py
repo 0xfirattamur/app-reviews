@@ -41,6 +41,11 @@ StopReason = Literal[
     "error",  # the walk failed
 ]
 
+ReplyState = Literal[
+    "published",  # visible on the store
+    "pending",  # accepted, not yet shown; Apple can take up to 24 hours
+]
+
 RETRYABLE_KINDS: frozenset[ErrorKind] = frozenset(
     {"rate_limited", "server", "transport"}
 )

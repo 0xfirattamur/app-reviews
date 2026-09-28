@@ -8,6 +8,9 @@ Five roles, the same five ``app_reviews.appstore`` has:
 - ``reviews``: the reviews client, which picks a provider from the credentials
 - ``search``: search and lookup by scraping the store pages
 
+Plus ``replies``, for the Developer API's review replies; its client is exported
+from ``app_reviews``.
+
 The machinery all of this plugs into lives in ``app_reviews.core``.
 
 The two clients are re-exported for symmetry, but import those from
