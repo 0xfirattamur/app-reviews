@@ -54,6 +54,13 @@ and pass credentials without a key file. Backward compatible.
 - `GoogleAuth` also takes `service_account_info=`; `service_account_path` (by
   position or keyword) works as before, and exactly one of the two is required.
 
+### Fixed
+
+- A service-account file that is truncated or not UTF-8 no longer leaves its
+  contents, private key included, in the frames of the raised `AuthError`. A
+  `.p8` or service-account file that is not UTF-8 raises `AuthError` instead
+  of `UnicodeDecodeError`.
+
 See the [v1.2.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.2.0.md).
 
 ## [1.1.0] - 2026-09-28

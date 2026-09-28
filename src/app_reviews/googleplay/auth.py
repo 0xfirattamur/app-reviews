@@ -159,6 +159,7 @@ class GoogleAuth(PooledClient):
             document: Any = auth.service_account_info
         else:
             origin = f"The Google service account key at {path!r}"
+            invalid: str | None = None
             try:
                 with open(path, encoding="utf-8") as handle:
                     document = json.load(handle)
@@ -166,8 +167,11 @@ class GoogleAuth(PooledClient):
                 raise AuthError(
                     f"Cannot read the Google service account key at {path!r}: {exc}"
                 ) from exc
-            except json.JSONDecodeError as exc:
-                raise AuthError(f"{origin} is not valid JSON: {exc}") from exc
+            except ValueError as exc:  # JSONDecodeError, UnicodeDecodeError
+                invalid = str(exc)
+            # Raised outside the except: the decoder's frames hold the document.
+            if invalid is not None:
+                raise AuthError(f"{origin} is not valid JSON: {invalid}")
 
         if not isinstance(document, Mapping):
             del document

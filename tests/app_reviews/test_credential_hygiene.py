@@ -74,6 +74,17 @@ class TestTheAppStoreKeyDoesNotReachATraceback:
 
         assert _frames_holding(caught.value, SECRET) == []
 
+    def test_a_p8_that_is_not_utf8_is_an_auth_error_without_the_key(self, tmp_path):
+        key_path = tmp_path / "key.p8"
+        key_path.write_bytes(f"{SECRET}\xff".encode("latin-1"))
+
+        with pytest.raises(AuthError, match="not UTF-8") as caught:
+            load_connect_credentials(
+                AppStoreAuth(key_id="k", issuer_id="i", key_path=str(key_path))
+            )
+
+        assert _frames_holding(caught.value, SECRET) == []
+
     def test_an_empty_key_id_does_not_carry_the_key_either(self, tmp_path):
         """The key is valid-shaped here; a *different* field is what fails, and the
         key must still not travel."""
@@ -136,6 +147,25 @@ class TestTheGoogleKeyDoesNotReachATraceback:
         path.write_text(
             json.dumps({"client_email": "", "private_key": SECRET}), encoding="utf-8"
         )
+
+        with pytest.raises(AuthError) as caught:
+            GoogleAuth(str(path))
+
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_a_truncated_key_file_fails_without_carrying_it(self, tmp_path):
+        """The JSON decoder's frames bind the whole document being parsed."""
+        path = tmp_path / "sa.json"
+        path.write_text(f'{{"private_key": "{SECRET}", ', encoding="utf-8")
+
+        with pytest.raises(AuthError, match="not valid JSON") as caught:
+            GoogleAuth(str(path))
+
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_a_key_file_that_is_not_utf8_is_an_auth_error_without_it(self, tmp_path):
+        path = tmp_path / "sa.json"
+        path.write_bytes(f'{{"private_key": "{SECRET}\xff"}}'.encode("latin-1"))
 
         with pytest.raises(AuthError) as caught:
             GoogleAuth(str(path))

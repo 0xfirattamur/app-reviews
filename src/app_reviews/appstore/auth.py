@@ -35,6 +35,7 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
     no ``__context__`` points at the dataclass frame that holds it. Pinned by
     ``tests/app_reviews/test_credential_hygiene.py``.
     """
+    private_key: str | None
     if auth.key_path is None:
         origin = "The App Store Connect private_key"
         private_key = auth.private_key or ""
@@ -46,6 +47,10 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
             raise AuthError(
                 f"Cannot read the App Store Connect key at {auth.key_path!r}: {exc}"
             ) from exc
+        except UnicodeDecodeError:
+            private_key = None  # raised below: inside the except, the bytes ride along
+        if private_key is None:
+            raise AuthError(f"{origin} is not UTF-8 text")
 
     credentials: ConnectCredentials | None = None
     reason: str | None = None
