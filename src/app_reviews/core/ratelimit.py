@@ -2,12 +2,47 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 from asyncio import sleep as asleep
+from collections.abc import Awaitable
 from time import monotonic, sleep
+from typing import Protocol
 
-__all__ = ["RateLimiter"]
+__all__ = ["RateLimiter", "RequestLimiter"]
+
+_LOG = logging.getLogger(__name__)
+
+
+class RequestLimiter(Protocol):
+    """What ``HttpClient`` needs from a limiter; ``RateLimiter`` is the default.
+
+    Any object with these three methods can be passed as ``rate_limiter=``, such
+    as a limiter coordinated across processes. ``fetch`` runs countries on
+    several threads, so all three must be safe to call concurrently.
+
+    ``acquire`` (sync requests) or ``aacquire`` (async requests) is called before
+    every attempt, retries included, and returns when the attempt may be sent.
+    ``record`` is then called once for the response that attempt got, with its
+    HTTP status and the server's ``Retry-After`` in seconds: never negative or
+    NaN, and None when the header was absent or unreadable. Two exceptions: an
+    attempt that got no response at all (connection failure, timeout) is not
+    recorded, and neither is a 403 on a request that carried a credential, which
+    is an authorization refusal rather than throttling.
+    """
+
+    def acquire(self) -> None:
+        """Block the calling thread until one request may be sent."""
+        ...
+
+    def aacquire(self) -> Awaitable[None]:
+        """Wait, without blocking the event loop, until one request may be sent."""
+        ...
+
+    def record(self, status: int, retry_after: float | None) -> None:
+        """Learn from one response: its status and ``Retry-After`` seconds."""
+        ...
 
 
 def _positive(value: object, name: str) -> float:
@@ -21,21 +56,22 @@ def _positive(value: object, name: str) -> float:
 class RateLimiter:
     """A token bucket: ``rate`` tokens per second, holding at most ``burst``.
 
-    Every request takes one token first, so one instance shared by every client
-    that talks to a host keeps them all inside one budget, however many threads
-    or tasks run them. ``acquire`` blocks the calling thread; ``aacquire`` sleeps
-    only the calling task. Both draw from the same bucket.
+    The default ``RequestLimiter``. Every request takes one token first, so one
+    instance shared by every client that talks to a host keeps them all inside
+    one budget, however many threads or tasks run them. ``acquire`` blocks the
+    calling thread; ``aacquire`` sleeps only the calling task. Both draw from the
+    same bucket.
 
     ``penalize`` is the brake for a host that has started refusing: it pauses
     every holder, not only the one that saw the refusal, because the host
     throttles the address, and a sibling request is what would extend the block.
 
-    ``initial_penalty`` and ``max_penalty`` shape the pause an ``HttpClient``
-    imposes when a request through this limiter is throttled: the server's
-    ``Retry-After`` if it sent one, else ``initial_penalty`` doubled for each
-    consecutive throttled answer; either capped at ``max_penalty``. They belong
-    here rather than on ``RetryConfig`` because a store's block outlasts any
-    wait worth spending inside one request.
+    ``record`` applies it: a 429 or 403 is a throttled answer, and pauses the
+    bucket for the server's ``Retry-After`` if it sent one, else for
+    ``initial_penalty`` doubled for each consecutive throttled answer; either
+    capped at ``max_penalty``. A 2xx ends the streak. The schedule belongs here
+    rather than on ``RetryConfig`` because a store's block outlasts any wait worth
+    spending inside one request.
 
     The bucket starts full. Waiters are not queued in arrival order: whoever
     re-checks first after a token appears takes it.
@@ -89,13 +125,20 @@ class RateLimiter:
         with self._lock:
             self._paused_until = max(self._paused_until, monotonic() + seconds)
 
-    def _throttled(self, retry_after: float | None) -> float:
-        """Record one throttled answer, pause every holder, and return the pause.
+    def record(self, status: int, retry_after: float | None) -> None:
+        """Pause every holder on a 429 or 403; end the throttled streak on a 2xx.
 
         The server's ``Retry-After`` wins when it sent one. Otherwise the pause
         starts at ``initial_penalty`` and doubles for each consecutive throttled
-        answer this limiter has seen. Either is capped at ``max_penalty``.
+        answer this limiter has seen. Either is capped at ``max_penalty``. Other
+        statuses leave the limiter as it was.
         """
+        if 200 <= status < 300:
+            with self._lock:
+                self._throttle_streak = 0
+            return
+        if status not in (403, 429):
+            return
         with self._lock:
             streak = self._throttle_streak
             self._throttle_streak += 1
@@ -105,12 +148,11 @@ class RateLimiter:
             doubled = self._initial_penalty * 2.0 ** min(streak, 64)
             delay = min(doubled, self._max_penalty)
         self.penalize(delay)
-        return delay
-
-    def _succeeded(self) -> None:
-        """A usable answer ends the throttled streak."""
-        with self._lock:
-            self._throttle_streak = 0
+        _LOG.warning(
+            "A throttled answer (status %d) paused the shared rate limiter for %.1fs",
+            status,
+            delay,
+        )
 
     def _take(self) -> float:
         """Take a token and return 0, or return how long until one may be taken."""

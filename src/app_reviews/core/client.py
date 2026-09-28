@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Self
 
 from app_reviews.core.http import HttpClient
-from app_reviews.core.ratelimit import RateLimiter
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.models.config import RetryConfig
 
 __all__ = ["PooledClient"]
@@ -34,7 +34,7 @@ class PooledClient:
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
-        rate_limiter: RateLimiter | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
         """Build a client that owns, or borrows, one connection pool.
 

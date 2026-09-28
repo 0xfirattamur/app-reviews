@@ -27,6 +27,7 @@ EXPECTED = {
     "RateLimitError",
     "RateLimiter",
     "RequestError",
+    "RequestLimiter",
     "PageResult",
     "RetryConfig",
     "Review",

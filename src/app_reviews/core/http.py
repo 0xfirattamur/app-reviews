@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from app_reviews.core.ratelimit import RateLimiter
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.retry import RetryPolicy, retry_after_seconds
 from app_reviews.models.config import RetryConfig
 
@@ -113,13 +113,15 @@ class HttpClient:
     rather than per-call arguments: they describe how this client talks to a
     host, not what any one request wants.
 
-    With a ``rate_limiter``, every attempt (retries included) first takes one of
-    its tokens. A throttled answer, meaning a 429 or a 403 from a request that
-    carried no credential, pauses the limiter for everyone sharing it, on the
-    limiter's own penalty schedule; ``retry`` keeps governing only the waits
-    between attempts of one request. A request carries a credential when it
-    sends ``Authorization``, or is a POST with ``follow_redirects=False``, the
-    form a credential in the body uses. A successful answer ends the streak.
+    With a ``rate_limiter``, every attempt (retries included) first calls its
+    ``acquire``/``aacquire``, and every response is then passed to its
+    ``record``, which is where a throttled answer pauses everyone sharing it;
+    ``retry`` keeps governing only the waits between attempts of one request.
+    Any ``RequestLimiter`` works; ``RateLimiter`` is the default implementation.
+    A 403 on a request that carried a credential is an authorization refusal,
+    not throttling, so it is not recorded. A request carries a credential when
+    it sends ``Authorization``, or is a POST with ``follow_redirects=False``, the
+    form a credential in the body uses.
 
     Both pools are lazy and independent, so a sync-only caller never constructs
     an ``AsyncClient`` (which would want a running loop) and vice versa. Building
@@ -146,7 +148,7 @@ class HttpClient:
         transport: Any = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
         max_duration: float = DEFAULT_MAX_DURATION,
-        rate_limiter: RateLimiter | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
         self._timeout = timeout
         self._max_bytes = max_bytes
@@ -300,7 +302,7 @@ class HttpClient:
                 self._limiter.acquire()
             _LOG.debug("%s %s (attempt %d)", method, url, attempt + 1)
             response, retry_after, permanent = self._attempt(send)
-            self._report_to_limiter(method, url, response, retry_after, credentialed)
+            self._record(response, retry_after, credentialed)
 
             if (
                 not permanent
@@ -332,7 +334,7 @@ class HttpClient:
                 await self._limiter.aacquire()
             _LOG.debug("%s %s (attempt %d)", method, url, attempt + 1)
             response, retry_after, permanent = await self._aattempt(send)
-            self._report_to_limiter(method, url, response, retry_after, credentialed)
+            self._record(response, retry_after, credentialed)
 
             if (
                 not permanent
@@ -348,34 +350,15 @@ class HttpClient:
             self._log_failure(method, url, response)
             return response
 
-    def _report_to_limiter(
-        self,
-        method: str,
-        url: str,
-        response: HttpResponse,
-        retry_after: str | None,
-        credentialed: bool,
+    def _record(
+        self, response: HttpResponse, retry_after: str | None, credentialed: bool
     ) -> None:
-        """Pause the shared limiter on a throttled answer; end the streak on success."""
-        if self._limiter is None:
+        """Report one response to the limiter, as ``RequestLimiter`` specifies."""
+        if self._limiter is None or response.transport_error is not None:
             return
-        if response.ok:
-            self._limiter._succeeded()
+        if response.status == 403 and credentialed:
             return
-        throttled = response.status == 429 or (
-            response.status == 403 and not credentialed
-        )
-        if not throttled:
-            return
-        delay = self._limiter._throttled(retry_after_seconds(retry_after))
-        _LOG.warning(
-            "%s %s was throttled with status %d; pausing the shared rate limiter "
-            "for %.1fs",
-            method,
-            url,
-            response.status,
-            delay,
-        )
+        self._limiter.record(response.status, retry_after_seconds(retry_after))
 
     def _attempt(
         self, send: Callable[[], AbstractContextManager[httpx.Response]]

@@ -10,7 +10,7 @@ from app_reviews.appstore.connect import AppStoreOfficialProvider
 from app_reviews.appstore.rss import AppStoreScraperProvider
 from app_reviews.core.http import HttpClient
 from app_reviews.core.provider import ReviewProvider
-from app_reviews.core.ratelimit import RateLimiter
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.reviews import BaseReviews
 from app_reviews.errors import AuthError
 from app_reviews.models.config import AppStoreAuth, ConnectCredentials, RetryConfig
@@ -29,7 +29,7 @@ class AppStoreReviews(BaseReviews):
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
-        rate_limiter: RateLimiter | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
         super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._auth = auth

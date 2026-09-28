@@ -313,6 +313,10 @@ consecutive throttled answer up to 15 minutes. A successful answer resets the
 doubling. Tune it with `RateLimiter(rate, burst, initial_penalty=30.0,
 max_penalty=900.0)`, or pause it yourself with `limiter.penalize(seconds)`.
 
+Any object with `acquire()`, `aacquire()`, and `record(status, retry_after)`
+satisfies the `RequestLimiter` protocol and can be passed instead, for a budget
+shared across processes. `record` runs once per response.
+
 Throttled storefronts fail alone: other countries keep their reviews, and each
 throttled country carries `FetchError(kind="rate_limited", retryable=True)` in
 its `CountryOutcome`. The package does not retry those 403s itself, because

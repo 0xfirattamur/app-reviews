@@ -21,6 +21,11 @@ new parameters keeps 1.0.0 behavior.
   limiter for `Retry-After`, else for 30 seconds doubling per consecutive
   throttled answer, capped at `max_penalty`; a success resets the doubling.
   Passing it alongside `http=` raises `TypeError`, like `proxy=` and `retry=`.
+- `RequestLimiter`, the protocol `rate_limiter=` accepts: `acquire()`,
+  `aacquire()`, and `record(status, retry_after)`, which `HttpClient` calls once
+  per response (not for a transport failure, nor for a 403 on a credentialed
+  request). `RateLimiter` implements it; any other object with those methods,
+  such as a limiter shared across processes, can be passed instead.
 - `AppStoreSearch.version_history(app_id, *, country="us")` and
   `aversion_history()`, returning the app's App Store "Version History" as
   `list[AppVersionEntry]`, newest first. Read from the public product page

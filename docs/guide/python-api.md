@@ -66,7 +66,7 @@ client = AppStoreReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RateLimiter | None: request budget shared with other clients
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 
@@ -155,7 +155,7 @@ client = GooglePlayReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RateLimiter | None: request budget shared with other clients
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 
@@ -468,6 +468,38 @@ A throttled App Store storefront fails alone with
 countries keep their reviews. The 403 is not retried inside the package,
 because requests made during a block extend it. Fetch the throttled countries
 again later through the same limiter.
+
+#### Bringing your own limiter
+
+`rate_limiter=` accepts any object with the three methods of the
+`RequestLimiter` protocol, so a budget can live outside the process, in a
+store every worker shares. `RateLimiter` is the default implementation.
+
+```python
+from app_reviews import AppStoreReviews, RequestLimiter
+
+
+class SharedLimiter:
+    def acquire(self) -> None: ...          # block until one request may go
+    async def aacquire(self) -> None: ...   # the same, for async requests
+    def record(self, status: int, retry_after: float | None) -> None: ...
+
+
+limiter: RequestLimiter = SharedLimiter()
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us"])
+```
+
+`acquire()` or `aacquire()` runs before every attempt, retries included.
+`record(status, retry_after)` runs once for each response, with its HTTP status
+and the server's `Retry-After` in seconds (`None` when absent or unreadable;
+never negative). Deciding what counts as throttling is the limiter's job:
+`RateLimiter` pauses on 429 and 403 and resets its doubling on a 2xx. Two
+exceptions keep that decision honest: an attempt that got no response
+(connection failure, timeout) is not recorded, and neither is a 403 on a request
+that carried a credential, which is an authorization refusal. `fetch()` calls
+the limiter from several threads, so all three methods must be thread-safe.
 
 ### Per-country outcomes
 

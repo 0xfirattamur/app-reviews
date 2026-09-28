@@ -193,7 +193,10 @@ for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
   transport.
 - **Shared rate limit.** Pass one `RateLimiter` as `rate_limiter=` to every
   client that talks to a store. Each attempt, retries included, takes a token,
-  and a 429 or a 403 from a credential-free request pauses every holder. See
+  and a 429 or a 403 from a credential-free request pauses every holder. Any
+  `RequestLimiter` works in its place: `HttpClient` calls `acquire()` or
+  `aacquire()` before each attempt and `record(status, retry_after)` after each
+  response. See
   [Sharing a rate limit](../guide/python-api.md#sharing-a-rate-limit-across-fetches).
 - **Classified errors, one vocabulary.** A failed exchange (a bad status, a
   transport failure, or a malformed response body) is classified into an

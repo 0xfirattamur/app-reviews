@@ -331,6 +331,116 @@ class TestHttpClientWithLimiter:
         await http.aclose()
 
 
+class _RecordingLimiter:
+    """A ``RequestLimiter`` that is not a ``RateLimiter``: it only takes notes."""
+
+    def __init__(self) -> None:
+        self.acquired = 0
+        self.recorded: list[tuple[int, float | None]] = []
+
+    def acquire(self) -> None:
+        self.acquired += 1
+
+    async def aacquire(self) -> None:
+        self.acquired += 1
+
+    def record(self, status: int, retry_after: float | None) -> None:
+        self.recorded.append((status, retry_after))
+
+
+class TestACustomLimiter:
+    def test_is_asked_before_each_attempt_and_told_each_response(self, monkeypatch):
+        answers = [
+            httpx.Response(503, text=""),
+            httpx.Response(429, text="", headers={"Retry-After": "7"}),
+            httpx.Response(200, text=""),
+        ]
+        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+        limiter = _RecordingLimiter()
+        http = _http(
+            lambda _request: answers.pop(0),
+            limiter,
+            retry=RetryConfig(max_retries=2, retry_on=(503, 429)),
+        )
+
+        response = http.get("https://example.test/x")
+
+        assert response.status == 200
+        assert limiter.acquired == 3
+        assert limiter.recorded == [(503, None), (429, 7.0), (200, None)]
+
+    def test_a_429_reports_its_retry_after_in_seconds(self):
+        limiter = _RecordingLimiter()
+        http = _http(_answer(429, headers={"Retry-After": "120"}), limiter)
+
+        response = http.get("https://example.test/x")
+
+        assert response.status == 429
+        assert limiter.recorded == [(429, 120.0)]
+
+    def test_a_missing_or_unreadable_retry_after_is_none(self):
+        limiter = _RecordingLimiter()
+        _http(_answer(429), limiter).get("https://example.test/x")
+        _http(_answer(429, headers={"Retry-After": "soon"}), limiter).get(
+            "https://example.test/x"
+        )
+
+        assert limiter.recorded == [(429, None), (429, None)]
+
+    async def test_async_requests_await_aacquire_and_record(self):
+        limiter = _RecordingLimiter()
+        http = _http(_answer(429, headers={"Retry-After": "3"}), limiter)
+
+        await http.aget("https://example.test/x")
+        await http.apost("https://example.test/y", body="")
+        await http.aclose()
+
+        assert limiter.acquired == 2
+        assert limiter.recorded == [(429, 3.0), (200, 3.0)]
+
+    def test_no_response_and_a_credentialed_403_are_not_recorded(self):
+        def handler(request):
+            if request.url.path == "/down":
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(403, text="")
+
+        limiter = _RecordingLimiter()
+        http = _http(handler, limiter)
+
+        http.get("https://example.test/down")
+        http.get("https://example.test/x", headers={"Authorization": "Bearer t"})
+        http.get("https://example.test/x")
+
+        assert limiter.acquired == 3
+        assert limiter.recorded == [(403, None)]
+
+    @pytest.mark.parametrize(
+        "client_cls",
+        [AppStoreReviews, GooglePlayReviews, AppStoreSearch, GooglePlaySearch],
+    )
+    def test_every_client_hands_it_the_throttled_response(
+        self, monkeypatch, client_cls
+    ):
+        def throttled(_transport, request):
+            return httpx.Response(
+                429, text="", headers={"Retry-After": "60"}, request=request
+            )
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", throttled)
+        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+        limiter = _RecordingLimiter()
+
+        with (
+            client_cls(rate_limiter=limiter) as client,
+            contextlib.suppress(AppReviewsError),
+        ):
+            _request(client)
+
+        assert limiter.recorded
+        assert limiter.acquired == len(limiter.recorded)
+        assert set(limiter.recorded) == {(429, 60.0)}
+
+
 def _request(client):
     if isinstance(client, AppStoreReviews):
         return client.fetch_page("123", country="us")
