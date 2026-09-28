@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from datetime import UTC, datetime
 from typing import Any
 
+from app_reviews.appstore.product_page import parse_version_history
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -43,18 +42,6 @@ class AppStoreSearch(PooledClient):
         "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
     )
     """Sent for the product page, which is built for browsers rather than clients."""
-
-    _SERVER_DATA = re.compile(
-        r'<script[^>]*\bid="serialized-server-data"[^>]*>(.*?)</script>', re.DOTALL
-    )
-    """The JSON the product page embeds to hydrate itself."""
-
-    _VERSION_LABEL = re.compile(r"^Version(?:\s+|$)")
-    """The prefix some storefronts render before the number: ``Version 9.1.84``."""
-
-    _RELEASED_AT_FORMAT = "%a %b %d %Y %H:%M:%S GMT%z"
-    """A version's date as the page renders it, minus the trailing zone name:
-    ``Fri Sep 18 2026 06:25:38 GMT+0000 (Coordinated Universal Time)``."""
 
     def search(
         self,
@@ -131,18 +118,15 @@ class AppStoreSearch(PooledClient):
         ``lookup()`` returns None, and so does a page with no version history.
         A history this cannot read raises ``ParseError``.
 
-        This is a scraped source: the iTunes APIs report only the current
-        version, so the history is read from the data the public App Store
-        product page embeds for browsers. It is best-effort, App Store only, and
-        may break whenever Apple changes that page. ``AppStoreVersions`` reads the
-        official App Store Connect versions, but those carry no release date, so
-        this stays the source for dates.
+        Scraped from the public product page, since the iTunes APIs report only
+        the current version: best-effort, and may break when Apple changes it.
+        ``AppStoreVersions`` has the official versions, but without dates.
         """
         return get_and_parse(
             self._http,
             self._product_page_url(app_id, country),
             {},
-            self._parse_version_history,
+            parse_version_history,
             headers={"User-Agent": self.USER_AGENT},
         )
 
@@ -157,7 +141,7 @@ class AppStoreSearch(PooledClient):
             self._http,
             self._product_page_url(app_id, country),
             {},
-            self._parse_version_history,
+            parse_version_history,
             headers={"User-Agent": self.USER_AGENT},
         )
 
@@ -278,108 +262,3 @@ class AppStoreSearch(PooledClient):
             first_release_date=scraped_datetime(result.get("releaseDate")),
             release_notes=scraped_text(result.get("releaseNotes")),
         )
-
-    def _parse_version_history(self, response: HttpResponse) -> list[AppVersionEntry]:
-        """The page's version history, or ``[]`` for no such app or no history.
-
-        Readable page data without a history block is an app with nothing to
-        list. A page whose embedded data is missing or unreadable, or whose
-        history holds an entry this cannot read, raises instead: a partial or
-        empty answer would pass for a real history.
-        """
-        if response.status == 404:
-            return []
-        api = "App Store product page"
-        raise_for_http_failure(response, api, credentialed=False)
-        match = self._SERVER_DATA.search(response.body)
-        if match is None:
-            raise ParseError(
-                f"{api} carried no embedded page data", status=response.status
-            )
-        try:
-            data = json.loads(match.group(1))
-        except json.JSONDecodeError as exc:
-            raise ParseError(
-                f"Unreadable page data from {api}: {exc}", status=response.status
-            ) from exc
-
-        action = self._version_history_action(data)
-        if action is None:
-            return []
-        entries = [
-            self._version_entry(item, response.status)
-            for item in self._version_items(action["pageData"], response.status)
-        ]
-        entries.sort(key=lambda entry: entry.released_at, reverse=True)
-        return entries
-
-    @staticmethod
-    def _version_history_action(data: Any) -> dict[str, Any] | None:
-        """The action that opens "Version History", which carries its ``pageData``.
-
-        Found by what it is rather than where it sits, since the path to it is
-        undocumented page structure.
-        """
-        stack = [data]
-        while stack:
-            node = stack.pop()
-            if isinstance(node, dict):
-                if node.get("page") == "versionHistory" and "pageData" in node:
-                    return node
-                stack.extend(node.values())
-            elif isinstance(node, list):
-                stack.extend(node)
-        return None
-
-    @staticmethod
-    def _version_items(page_data: Any, status: int) -> list[Any]:
-        shelves = page_data.get("shelves") if isinstance(page_data, dict) else None
-        if not isinstance(shelves, list):
-            raise ParseError(
-                "App Store version history has no list of shelves", status=status
-            )
-        items: list[Any] = []
-        for shelf in shelves:
-            shelf_items = shelf.get("items") if isinstance(shelf, dict) else None
-            if not isinstance(shelf_items, list):
-                raise ParseError(
-                    "App Store version history has a shelf without items",
-                    status=status,
-                )
-            items.extend(shelf_items)
-        return items
-
-    def _version_entry(self, item: Any, status: int) -> AppVersionEntry:
-        """One history entry. Anything missing a version or a date is fatal."""
-        if not isinstance(item, dict):
-            raise ParseError(
-                f"App Store version history entry is {type(item).__name__}, "
-                "expected an object",
-                status=status,
-            )
-        label = scraped_text(item.get("primarySubtitle"))
-        version = self._VERSION_LABEL.sub("", label) if label else None
-        if not version:
-            raise ParseError(
-                "App Store version history entry has no version", status=status
-            )
-        released_at = self._released_at(scraped_text(item.get("secondarySubtitle")))
-        if released_at is None:
-            raise ParseError(
-                f"App Store version history entry {version} has no readable date",
-                status=status,
-            )
-        return AppVersionEntry(
-            version=version,
-            released_at=released_at,
-            release_notes=scraped_text(item.get("text")),
-        )
-
-    def _released_at(self, text: str | None) -> datetime | None:
-        if text is None:
-            return None
-        try:
-            parsed = datetime.strptime(text.split(" (", 1)[0], self._RELEASED_AT_FORMAT)
-        except ValueError:
-            return None
-        return parsed.astimezone(UTC)

@@ -117,15 +117,9 @@ class HttpClient:
     rather than per-call arguments: they describe how this client talks to a
     host, not what any one request wants.
 
-    With a ``rate_limiter``, every attempt (retries included) first calls its
-    ``acquire``/``aacquire``, and every response is then passed to its
-    ``record``, which is where a throttled answer pauses everyone sharing it;
-    ``retry`` keeps governing only the waits between attempts of one request.
-    Any ``RequestLimiter`` works; ``RateLimiter`` is the default implementation.
-    A 403 on a request that carried a credential is an authorization refusal,
-    not throttling, so it is not recorded. A request carries a credential when
-    it sends ``Authorization``, or is a POST with ``follow_redirects=False``, the
-    form a credential in the body uses.
+    With a ``rate_limiter``, every attempt (retries included) takes a token first
+    and reports its response to the limiter afterwards; ``retry`` still governs
+    only the waits between attempts of one request.
 
     Both pools are lazy and independent, so a sync-only caller never constructs
     an ``AsyncClient`` (which would want a running loop) and vice versa. Building
@@ -420,7 +414,13 @@ class HttpClient:
     def _record(
         self, response: HttpResponse, retry_after: str | None, credentialed: bool
     ) -> None:
-        """Report one response to the limiter, as ``RequestLimiter`` specifies."""
+        """Report one response to the limiter.
+
+        Skipped for a transport failure (there is no response), and for a 403 on
+        a credentialed request, which is a refused credential, not throttling.
+        A credential travels in ``Authorization``, or in the body of a POST sent
+        with ``follow_redirects=False``.
+        """
         if self._limiter is None or response.transport_error is not None:
             return
         if response.status == 403 and credentialed:
