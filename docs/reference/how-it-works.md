@@ -118,7 +118,8 @@ The public web page `AppStoreSearch.version_history()` reads. No authentication.
 - Returns: version, release timestamp, and "What's New" text for the versions
   the page lists.
 - **Scraped, best-effort, App Store only**: can break whenever Apple changes the
-  page. An official source from App Store Connect is planned for 1.2.0.
+  page. `AppStoreVersions` reads the official App Store Connect versions, which
+  carry no release date, so this stays the source for dates.
 
 ### Google Play: Web Scraper
 

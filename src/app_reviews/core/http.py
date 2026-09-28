@@ -85,11 +85,15 @@ class HttpResponse:
     ``status`` is 0 and ``transport_error`` is set when the exchange never
     completed, such as a connection failure or timeout. In that case ``body`` is
     empty and ``transport_error`` holds the real exception text.
+
+    ``retry_after`` is the raw ``Retry-After`` header of the final attempt, so a
+    caller that gives up on a 429 can say how long the store asked it to wait.
     """
 
     status: int
     body: str
     transport_error: str | None = None
+    retry_after: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -202,6 +206,34 @@ class HttpClient:
             credentialed=not follow_redirects or _carries_credential(headers),
         )
 
+    def send_once(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse:
+        """Send one attempt, never retried and never redirected, for a write.
+
+        A retry, or a followed 307/308 (which re-sends the body), could apply
+        the write twice. The one attempt's outcome is returned, whatever it was.
+        """
+        pool = self._pool()
+        return self._execute(
+            method,
+            url,
+            send=lambda: pool.stream(
+                method,
+                url,
+                content=body,
+                headers=self._headers(headers),
+                follow_redirects=False,
+            ),
+            credentialed=_carries_credential(headers),
+            retryable=False,
+        )
+
     async def aget(
         self,
         url: str,
@@ -243,6 +275,30 @@ class HttpClient:
             credentialed=not follow_redirects or _carries_credential(headers),
         )
 
+    async def asend_once(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse:
+        """Async equivalent of ``send_once``."""
+        pool = self._apool()
+        return await self._aexecute(
+            method,
+            url,
+            send=lambda: pool.stream(
+                method,
+                url,
+                content=body,
+                headers=self._headers(headers),
+                follow_redirects=False,
+            ),
+            credentialed=_carries_credential(headers),
+            retryable=False,
+        )
+
     def _pool(self) -> httpx.Client:
         if self._sync_pool is None:
             with self._pool_lock:
@@ -280,6 +336,7 @@ class HttpClient:
         *,
         send: Callable[[], AbstractContextManager[httpx.Response]],
         credentialed: bool,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Run one request, retrying on this client's policy.
 
@@ -299,7 +356,8 @@ class HttpClient:
             self._record(response, retry_after, credentialed)
 
             if (
-                not permanent
+                retryable
+                and not permanent
                 and self._policy
                 and self._policy.should_retry(attempt, response.status)
             ):
@@ -319,6 +377,7 @@ class HttpClient:
         *,
         send: Callable[[], AbstractAsyncContextManager[httpx.Response]],
         credentialed: bool,
+        retryable: bool = True,
     ) -> HttpResponse:
         """Async twin of ``_execute``: same policy, ``asyncio.sleep`` for backoff."""
         attempt = 0
@@ -331,7 +390,8 @@ class HttpClient:
             self._record(response, retry_after, credentialed)
 
             if (
-                not permanent
+                retryable
+                and not permanent
                 and self._policy
                 and self._policy.should_retry(attempt, response.status)
             ):
@@ -365,8 +425,8 @@ class HttpClient:
     ) -> tuple[HttpResponse, str | None, bool]:
         """One exchange, plus the ``Retry-After`` it asked for, if any.
 
-        The header is read here rather than carried on ``HttpResponse``: it is a
-        retry input, spent before anything downstream sees the response.
+        The header is returned separately as well as on ``HttpResponse``: it is a
+        retry input first, spent before the caller sees the final response.
 
         The deadline starts before the stream opens, so it covers connecting as
         well as reading. ``_BodyTooLarge`` and ``_AttemptTooSlow`` are permanent:
@@ -377,9 +437,12 @@ class HttpClient:
         try:
             with send() as raw:
                 body = self._read(raw.iter_bytes(), raw, deadline)
+                retry_after = raw.headers.get("Retry-After")
                 return (
-                    HttpResponse(status=raw.status_code, body=body),
-                    raw.headers.get("Retry-After"),
+                    HttpResponse(
+                        status=raw.status_code, body=body, retry_after=retry_after
+                    ),
+                    retry_after,
                     False,
                 )
         except (_BodyTooLarge, _AttemptTooSlow) as exc:
@@ -397,9 +460,12 @@ class HttpClient:
         try:
             async with send() as raw:
                 body = await self._aread(raw, deadline)
+                retry_after = raw.headers.get("Retry-After")
                 return (
-                    HttpResponse(status=raw.status_code, body=body),
-                    raw.headers.get("Retry-After"),
+                    HttpResponse(
+                        status=raw.status_code, body=body, retry_after=retry_after
+                    ),
+                    retry_after,
                     False,
                 )
         except (_BodyTooLarge, _AttemptTooSlow) as exc:

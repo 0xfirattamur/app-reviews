@@ -128,10 +128,11 @@ off by default because the payload routinely dwarfs the review around it.
 
 ## Replies
 
-Neither store's reply API is implemented here. If you build replies yourself,
-note that they only accept identifiers the store's own list endpoint minted, so a
-scraper-sourced review id will not work. This package does not verify that
-claim, so treat it as a starting point rather than a fact.
+`AppStoreReplies` and `GooglePlayReplies` write the developer reply through each
+store's official API (see the [Python API guide](../guide/python-api.md#replies)).
+Both take the official API's review id, which is `Review.id` on reviews fetched
+with `auth=`; a scraper-sourced id is not one the reply endpoints accept.
+Deleting a reply exists on the App Store only, because Play has no delete API.
 
 ---
 

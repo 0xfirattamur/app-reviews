@@ -5,8 +5,9 @@ same kind of thing (inputs you build before a fetch, as opposed to the results
 you get back), so they share a module.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlsplit
 
 GOOGLE_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "sts.googleapis.com"})
@@ -48,20 +49,70 @@ class RetryConfig:
             raise ValueError("max_backoff must be > 0")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class AppStoreAuth:
-    """Apple App Store Connect API credentials."""
+    """Apple App Store Connect API credentials.
+
+    Give the ``.p8`` key either as a file (``key_path``) or as its PEM text
+    (``private_key``), for keys held in a secret manager or an environment
+    variable. Exactly one of the two.
+
+    ``__init__`` is written out rather than generated so it can unbind the key
+    before refusing a bad combination: the generated one binds ``private_key`` as
+    a parameter, where an error reporter capturing frame locals would find it.
+    """
 
     key_id: str
     issuer_id: str
-    key_path: str
+    key_path: str | None
+    private_key: str | None = field(repr=False)
+    """The ``.p8`` contents. Kept out of ``repr``; see
+    ``ConnectCredentials.private_key``."""
+
+    def __init__(
+        self,
+        key_id: str,
+        issuer_id: str,
+        key_path: str | None = None,
+        private_key: str | None = None,
+    ) -> None:
+        ambiguous = (key_path is None) == (private_key is None)
+        object.__setattr__(self, "key_id", key_id)
+        object.__setattr__(self, "issuer_id", issuer_id)
+        object.__setattr__(self, "key_path", key_path)
+        object.__setattr__(self, "private_key", private_key)
+        del private_key
+        if ambiguous:
+            raise ValueError("Pass exactly one of key_path or private_key.")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class GooglePlayAuth:
-    """Google Play Developer API credentials."""
+    """Google Play Developer API credentials.
 
-    service_account_path: str
+    Give the service-account key either as a file (``service_account_path``) or
+    as its already-parsed JSON object (``service_account_info``). Exactly one of
+    the two. ``__init__`` is written out for the reason ``AppStoreAuth`` gives.
+    """
+
+    service_account_path: str | None
+    service_account_info: Mapping[str, Any] | None = field(repr=False, hash=False)
+    """The parsed service-account JSON. Kept out of ``repr`` because it holds the
+    private key, and out of the hash because a mapping has none."""
+
+    def __init__(
+        self,
+        service_account_path: str | None = None,
+        service_account_info: Mapping[str, Any] | None = None,
+    ) -> None:
+        ambiguous = (service_account_path is None) == (service_account_info is None)
+        object.__setattr__(self, "service_account_path", service_account_path)
+        object.__setattr__(self, "service_account_info", service_account_info)
+        del service_account_info
+        if ambiguous:
+            raise ValueError(
+                "Pass exactly one of service_account_path or service_account_info."
+            )
 
 
 @dataclass(frozen=True, slots=True)

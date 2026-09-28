@@ -115,7 +115,11 @@ class TestGoogleAuthCaches:
         from unittest.mock import mock_open, patch
 
         with patch("builtins.open", mock_open(read_data=data)):
-            return GoogleAuth("/fake.json", http=_token_pool(handler), **kw)
+            return GoogleAuth(
+                "/fake.json",
+                http=_token_pool(handler),
+                **kw,
+            )
 
     def test_one_exchange_serves_repeated_calls(self, monkeypatch):
         monkeypatch.setattr("app_reviews.googleplay.auth.time.time", _Clock())

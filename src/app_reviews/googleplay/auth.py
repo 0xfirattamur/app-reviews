@@ -10,18 +10,19 @@ import asyncio
 import json
 import time
 import urllib.parse
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from app_reviews.core.classify import error_for
+from app_reviews.core.classify import error_for, http_error
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
 from app_reviews.errors import AuthError, ParseError
-from app_reviews.models.config import ServiceAccountCredentials
+from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
 
 
 class GoogleAuth(PooledClient):
@@ -29,6 +30,11 @@ class GoogleAuth(PooledClient):
 
     Satisfies ``core.auth.TokenSource``, so a provider can ask per request, and
     keeps one token until it nears expiry.
+
+    Give the key as ``service_account_path`` (the JSON file) or as
+    ``service_account_info`` (the parsed JSON mapping); exactly one of the two,
+    as for ``GooglePlayAuth``. The mapping is unbound before anything can raise,
+    so no frame of a failure holds it.
 
     ``http`` is the pooled client the exchange runs on. Callers pass their own so
     it inherits the proxy and retry policy they configured; otherwise a proxied
@@ -58,11 +64,24 @@ class GoogleAuth(PooledClient):
 
     def __init__(
         self,
-        service_account_path: str,
+        service_account_path: str | None = None,
         *,
+        service_account_info: Mapping[str, Any] | None = None,
         http: HttpClient | None = None,
     ) -> None:
-        self._credentials = self._load(service_account_path)
+        ambiguous = (service_account_path is None) == (service_account_info is None)
+        auth = None
+        if not ambiguous:
+            auth = GooglePlayAuth(
+                service_account_path=service_account_path,
+                service_account_info=service_account_info,
+            )
+        del service_account_info
+        if auth is None:
+            raise ValueError(
+                "Pass exactly one of service_account_path or service_account_info."
+            )
+        self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
         self._header: str | None = None
@@ -113,13 +132,14 @@ class GoogleAuth(PooledClient):
         )
         return self._store(*self._read_token(response))
 
-    def _load(self, path: str) -> ServiceAccountCredentials:
+    def _load(self, auth: GooglePlayAuth) -> ServiceAccountCredentials:
         """Read and validate the service-account JSON, as ``AuthError`` if unusable.
 
-        Everything here fails as a stdlib exception otherwise (a missing file is
-        ``FileNotFoundError``, a truncated one a ``json.JSONDecodeError``), and a
-        caller cannot be expected to catch those alongside the package's own
-        errors.
+        The document comes from ``service_account_path`` or, already parsed,
+        from ``service_account_info``. Everything here fails as a stdlib
+        exception otherwise (a missing file is ``FileNotFoundError``, a truncated
+        one a ``json.JSONDecodeError``), and a caller cannot be expected to catch
+        those alongside the package's own errors.
 
         No failure path leaves key material reachable from the raised error. What
         is at stake here is larger than one field: ``document`` is the whole
@@ -133,22 +153,29 @@ class GoogleAuth(PooledClient):
         still travels; only the frames are dropped. See
         ``tests/app_reviews/test_credential_hygiene.py``.
         """
-        try:
-            with open(path, encoding="utf-8") as handle:
-                document = json.load(handle)
-        except OSError as exc:
-            raise AuthError(
-                f"Cannot read the Google service account key at {path!r}: {exc}"
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise AuthError(
-                f"The Google service account key at {path!r} is not valid JSON: {exc}"
-            ) from exc
+        path = auth.service_account_path
+        if path is None:
+            origin = "The Google service_account_info"
+            document: Any = auth.service_account_info
+        else:
+            origin = f"The Google service account key at {path!r}"
+            invalid: str | None = None
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    document = json.load(handle)
+            except OSError as exc:
+                raise AuthError(
+                    f"Cannot read the Google service account key at {path!r}: {exc}"
+                ) from exc
+            except ValueError as exc:  # JSONDecodeError, UnicodeDecodeError
+                invalid = str(exc)
+            # Raised outside the except: the decoder's frames hold the document.
+            if invalid is not None:
+                raise AuthError(f"{origin} is not valid JSON: {invalid}")
 
-        if not isinstance(document, dict):
-            raise AuthError(
-                f"The Google service account key at {path!r} is not a JSON object"
-            )
+        if not isinstance(document, Mapping):
+            del document
+            raise AuthError(f"{origin} is not a JSON object")
 
         client_email = document.get("client_email", "")
         private_key_pem = document.get("private_key", "")
@@ -168,9 +195,7 @@ class GoogleAuth(PooledClient):
         del private_key_pem
 
         if credentials is None:
-            raise AuthError(
-                f"The Google service account key at {path!r} is unusable: {reason}"
-            )
+            raise AuthError(f"{origin} is unusable: {reason}")
         return credentials
 
     def _load_key(self) -> RSAPrivateKey:
@@ -273,10 +298,10 @@ class GoogleAuth(PooledClient):
         if not response.ok:
             # Truncated: the body is remote content and ends up in an exception
             # message that the walk logs at WARNING.
-            raise error_for(response.status)(
+            raise http_error(
+                response,
                 f"Google token exchange failed (HTTP {response.status}): "
                 f"{response.body[: self.ERROR_BODY_CHARS]}",
-                status=response.status,
             )
 
         try:

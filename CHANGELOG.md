@@ -4,6 +4,65 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## [1.2.0] - 2026-09-28
+
+Reply to reviews on both stores, list App Store versions from App Store Connect,
+and pass credentials without a key file. Backward compatible.
+
+### Added
+
+- `AppStoreAuth(key_id, issuer_id, key_path=None, private_key=None)` takes the
+  `.p8` either as a path or as PEM text, and `GooglePlayAuth(
+  service_account_path=None, service_account_info=None)` takes the service
+  account either as a path or as the parsed JSON mapping. Each needs exactly one
+  of its two sources (`ValueError` otherwise); neither shows the key in `repr`
+  or in the frames of a validation error.
+- `AppStoreReplies(auth)` with `reply()`, `get_reply()`, and `delete_reply()`,
+  and `GooglePlayReplies(auth)` with `reply(..., package_name=)` and
+  `get_reply(..., package_name=)`, each with an async twin. They create or
+  replace, read, and (App Store only) delete the developer reply through App
+  Store Connect `customerReviewResponses` and the Play Developer API
+  `reviews.reply` / `reviews.get`.
+- `ReviewReply(review_id, reply_id, text, state, updated_at)` and
+  `ReplyState = Literal["published", "pending"]`. Apple can keep a reply
+  `"pending"` for up to 24 hours.
+- `ReplyRejectedError(reason)`, a `RequestError`: the store refused the reply,
+  or a Play reply was over 350 characters (`reason="too_long"`, raised before
+  sending). `ReplyOutcomeUnknownError`, an `HttpError`: a write timed out, lost
+  its connection, or got a 5xx, so it may or may not have taken effect.
+- `RateLimitError.retry_after`, the wait in seconds a 429 asked for, on reads and
+  writes alike.
+- `AppStoreVersions(auth).versions(app_id)` / `aversions()`, returning
+  `list[AppStoreVersion]` from App Store Connect `appStoreVersions`, with
+  `whatsNew` per locale in `release_notes`. The official API has no release
+  date: `created_at` (`createdDate`) and `earliest_release_date`
+  (`earliestReleaseDate`) are named for what they are, `state` is
+  `appVersionState`, and `AppStoreSearch.version_history()` remains the source
+  for release dates.
+- `HttpClient.send_once(method, url, body=, headers=)` / `asend_once()`: one
+  attempt, never retried and never redirected, for a request that must not be
+  applied twice. `HttpResponse.retry_after` carries the final attempt's
+  `Retry-After`.
+
+### Changed
+
+- Reply writes are never retried, whatever `RetryConfig` says, and never follow
+  a redirect, since following a 307/308 re-sends the write; a 3xx raises
+  `ReplyOutcomeUnknownError`. Reads, token exchanges, and every other request
+  keep the normal retry policy.
+- A 429 from the Google token exchange now carries `RateLimitError.retry_after`.
+- `GoogleAuth` also takes `service_account_info=`; `service_account_path` (by
+  position or keyword) works as before, and exactly one of the two is required.
+
+### Fixed
+
+- A service-account file that is truncated or not UTF-8 no longer leaves its
+  contents, private key included, in the frames of the raised `AuthError`. A
+  `.p8` or service-account file that is not UTF-8 raises `AuthError` instead
+  of `UnicodeDecodeError`.
+
+See the [v1.2.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.2.0.md).
+
 ## [1.1.0] - 2026-09-28
 
 A shared rate limit for processes that fetch many apps from one address, App
@@ -150,6 +209,7 @@ Corrected initial package behavior and metadata.
 
 Initial release.
 
+[1.2.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.5.0...v0.6.0

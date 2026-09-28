@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any, Self
 
 from cryptography.hazmat.primitives import hashes
@@ -16,7 +17,7 @@ from app_reviews.core.jwt import (
     load_ec_private_key_from_pem,
 )
 from app_reviews.errors import AuthError
-from app_reviews.models.config import ConnectCredentials
+from app_reviews.models.config import AppStoreAuth, ConnectCredentials
 
 TOKEN_EXPIRY_SECONDS = 20 * 60
 """Apple's cap. A Connect token minted for longer than 20 minutes is rejected."""
@@ -24,6 +25,48 @@ TOKEN_EXPIRY_SECONDS = 20 * 60
 REFRESH_MARGIN_SECONDS = 60
 """Re-sign this long before expiry, so a request that starts just under the wire
 does not arrive with a token that has already died."""
+
+
+def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
+    """Read and validate the .p8 key; any failure is an ``AuthError``.
+
+    No failure may leave the PEM reachable from the error: the key is unbound
+    before raising, and the ``ValueError`` is re-raised outside its ``except`` so
+    no ``__context__`` points at the dataclass frame that holds it. Pinned by
+    ``tests/app_reviews/test_credential_hygiene.py``.
+    """
+    private_key: str | None
+    if auth.key_path is None:
+        origin = "The App Store Connect private_key"
+        private_key = auth.private_key or ""
+    else:
+        origin = f"The App Store Connect key at {auth.key_path!r}"
+        try:
+            private_key = Path(auth.key_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AuthError(
+                f"Cannot read the App Store Connect key at {auth.key_path!r}: {exc}"
+            ) from exc
+        except UnicodeDecodeError:
+            private_key = None  # raised below: inside the except, the bytes ride along
+        if private_key is None:
+            raise AuthError(f"{origin} is not UTF-8 text")
+
+    credentials: ConnectCredentials | None = None
+    reason: str | None = None
+    try:
+        credentials = ConnectCredentials(
+            key_id=auth.key_id,
+            issuer_id=auth.issuer_id,
+            private_key=private_key,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+    del private_key
+
+    if credentials is None:
+        raise AuthError(f"{origin} is unusable: {reason}")
+    return credentials
 
 
 class ConnectAuth:

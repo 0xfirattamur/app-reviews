@@ -1,6 +1,8 @@
 """Tests for Google Play service account authentication."""
 
+import base64
 import json
+import urllib.parse
 from pathlib import Path
 from unittest.mock import mock_open, patch
 
@@ -14,6 +16,7 @@ from app_reviews.errors import (
     AppReviewsError,
     AuthError,
     ParseError,
+    RateLimitError,
     ServerError,
     TransportError,
 )
@@ -72,6 +75,32 @@ class TestGoogleAuthInit:
         with patch("builtins.open", mock_open(read_data=data)):
             auth = GoogleAuth("/fake/path.json")
         assert auth._credentials.client_email == "test@test.iam.gserviceaccount.com"
+
+    def test_the_1_1_keyword_still_loads_the_file(self, tmp_path):
+        """1.0 and 1.1 documented ``service_account_path=``; 1.2 is a minor release."""
+        key_file = str(_write_service_account(tmp_path))
+
+        for auth in (
+            GoogleAuth(key_file),
+            GoogleAuth(service_account_path=key_file),
+        ):
+            assert (
+                auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+            )
+
+    def test_service_account_info_needs_no_file(self):
+        with patch("builtins.open", side_effect=AssertionError("file read")):
+            auth = GoogleAuth(service_account_info=_SERVICE_ACCOUNT_JSON)
+
+        assert auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+
+    @pytest.mark.parametrize(
+        "sources",
+        [{}, {"service_account_path": "sa.json", "service_account_info": {}}],
+    )
+    def test_exactly_one_source_is_required(self, sources):
+        with pytest.raises(ValueError, match="exactly one"):
+            GoogleAuth(**sources)
 
     def test_a_key_file_missing_client_email_is_an_auth_error(self):
         data = json.dumps({"private_key": _TEST_RSA_KEY})
@@ -261,6 +290,15 @@ class TestTokenExchangeFailuresAreClassified:
 
         assert exc.value.status == 500
 
+    def test_a_throttled_exchange_reports_the_asked_wait(self):
+        def handler(_request):
+            return httpx.Response(429, headers={"Retry-After": "45"})
+
+        with pytest.raises(RateLimitError) as exc:
+            _auth_on(handler).authorization_header()
+
+        assert (exc.value.status, exc.value.retry_after) == (429, 45.0)
+
     def test_a_token_less_success_is_a_parse_error(self):
         def handler(_request):
             return httpx.Response(200, json={"expires_in": 3600})
@@ -367,6 +405,35 @@ class TestTheReviewClientSharesItsPool:
 
         assert calls[0] == "https://oauth2.googleapis.com/token"
 
+    def test_in_memory_service_account_info_needs_no_file(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            if "oauth2" in str(request.url):
+                return httpx.Response(200, json={"access_token": "tok"})
+            return httpx.Response(200, text=json.dumps({"reviews": []}))
+
+        with patch("builtins.open", side_effect=AssertionError("file read")):
+            client = GooglePlayReviews(
+                auth=GooglePlayAuth(service_account_info=dict(_SERVICE_ACCOUNT_JSON)),
+                http=HttpClient(transport=httpx.MockTransport(handler)),
+            )
+            client.fetch("com.example.app")
+
+        assertion = urllib.parse.parse_qs(seen[0].content.decode())["assertion"][0]
+        claims = json.loads(base64.urlsafe_b64decode(assertion.split(".")[1] + "=="))
+        assert claims["iss"] == _SERVICE_ACCOUNT_JSON["client_email"]
+        assert seen[1].headers["authorization"] == "Bearer tok"
+
+    @pytest.mark.parametrize(
+        "sources",
+        [{}, {"service_account_path": "sa.json", "service_account_info": {}}],
+    )
+    def test_exactly_one_key_source_is_required(self, sources):
+        with pytest.raises(ValueError, match="exactly one"):
+            GooglePlayAuth(**sources)
+
 
 def _sa(**overrides) -> str:
     """A service-account document as JSON text, with fields overridden."""
@@ -378,7 +445,10 @@ def _auth_from(text: str, handler=None) -> GoogleAuth:
     """Build a GoogleAuth from raw key-file text, on a mocked pool."""
     transport = httpx.MockTransport(handler or _token())
     with patch("builtins.open", mock_open(read_data=text)):
-        return GoogleAuth("/fake/path.json", http=HttpClient(transport=transport))
+        return GoogleAuth(
+            "/fake/path.json",
+            http=HttpClient(transport=transport),
+        )
 
 
 class TestCredentialFailuresAreAuthErrors:

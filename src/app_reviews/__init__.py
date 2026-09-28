@@ -24,7 +24,10 @@ The imports below are grouped by role; ``__all__`` stays alphabetical.
 import logging
 from importlib.metadata import version
 
-from app_reviews.appstore import AppStoreReviews, AppStoreSearch
+from app_reviews.appstore.replies import AppStoreReplies
+from app_reviews.appstore.reviews import AppStoreReviews
+from app_reviews.appstore.search import AppStoreSearch
+from app_reviews.appstore.versions import AppStoreVersions
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.provider import ReviewProvider
@@ -36,11 +39,15 @@ from app_reviews.errors import (
     NotFoundError,
     ParseError,
     RateLimitError,
+    ReplyOutcomeUnknownError,
+    ReplyRejectedError,
     RequestError,
     ServerError,
     TransportError,
 )
-from app_reviews.googleplay import GooglePlayReviews, GooglePlaySearch
+from app_reviews.googleplay.replies import GooglePlayReplies
+from app_reviews.googleplay.reviews import GooglePlayReviews
+from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import (
     AppStoreAuth,
     ConnectCredentials,
@@ -50,16 +57,19 @@ from app_reviews.models.config import (
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 from app_reviews.models.page import PageResult
+from app_reviews.models.reply import ReviewReply
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
 from app_reviews.models.review import Review
 from app_reviews.models.types import (
     ErrorKind,
     FeedFormat,
+    ReplyState,
     Sort,
     Source,
     StopReason,
     Store,
 )
+from app_reviews.models.version import AppStoreVersion
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -69,8 +79,11 @@ __all__ = [
     "AppMetadata",
     "AppReviewsError",
     "AppStoreAuth",
+    "AppStoreReplies",
     "AppStoreReviews",
     "AppStoreSearch",
+    "AppStoreVersion",
+    "AppStoreVersions",
     "AppVersionEntry",
     "AuthError",
     "ConnectCredentials",
@@ -81,6 +94,7 @@ __all__ = [
     "FetchError",
     "FetchResult",
     "GooglePlayAuth",
+    "GooglePlayReplies",
     "GooglePlayReviews",
     "GooglePlaySearch",
     "HttpClient",
@@ -91,11 +105,15 @@ __all__ = [
     "ParseError",
     "RateLimitError",
     "RateLimiter",
+    "ReplyOutcomeUnknownError",
+    "ReplyRejectedError",
+    "ReplyState",
     "RequestError",
     "RequestLimiter",
     "RetryConfig",
     "Review",
     "ReviewProvider",
+    "ReviewReply",
     "ServerError",
     "Sort",
     "Source",

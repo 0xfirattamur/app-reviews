@@ -46,10 +46,10 @@ class GooglePlayReviews(BaseReviews):
         )
 
     async def _abuild_provider(self) -> ReviewProvider:
-        """Async construction: keeps the key-file read off the event loop.
+        """Async construction: keeps a key-file read off the event loop.
 
-        ``_build_provider`` reads the service-account JSON from disk, which blocks
-        and has no async equivalent to await. Signing is not done here;
+        ``_build_provider`` may read the service-account JSON from disk, which
+        blocks and has no async equivalent to await. Signing is not done here;
         ``GoogleAuth`` exchanges lazily, per request, so it can refresh an
         expiring token.
         """
@@ -61,7 +61,11 @@ class GooglePlayReviews(BaseReviews):
         Sharing the pool is what keeps the token exchange on the same proxy and
         retry policy as the review requests, and lets it reuse the connection.
         """
-        return GoogleAuth(auth.service_account_path, http=self._http)
+        return GoogleAuth(
+            auth.service_account_path,
+            service_account_info=auth.service_account_info,
+            http=self._http,
+        )
 
     def _validate_country_argument(self, country: Country | str | None) -> None:
         if normalise_country(country, warn_unknown=False) is not None:

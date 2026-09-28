@@ -20,7 +20,7 @@ def _project() -> dict[str, object]:
 def test_v1_metadata_is_stable_and_discoverable() -> None:
     project = _project()
 
-    assert project["version"] == "1.1.0"
+    assert project["version"] == "1.2.0"
     assert project["description"] == (
         "Typed sync and async Python client for App Store and Google Play "
         "reviews, app search, metadata, and resumable cursors"
@@ -47,7 +47,7 @@ def test_v1_metadata_is_stable_and_discoverable() -> None:
 def test_lockfile_carries_the_root_v1_version() -> None:
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     package = next(item for item in lock["package"] if item["name"] == "app-reviews")
-    assert package["version"] == "1.1.0"
+    assert package["version"] == "1.2.0"
 
 
 def test_public_text_has_no_stale_owner_links() -> None:
@@ -219,7 +219,7 @@ def test_citation_metadata_is_present_and_versioned() -> None:
     citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     assert "cff-version: 1.2.0" in citation
     assert "title: app-reviews" in citation
-    assert 'version: "1.1.0"' in citation
+    assert 'version: "1.2.0"' in citation
     assert "repository-code: https://github.com/0xfirattamur/app-reviews" in citation
 
 

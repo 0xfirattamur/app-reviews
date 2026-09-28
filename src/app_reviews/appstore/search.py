@@ -120,6 +120,7 @@ class AppStoreSearch(PooledClient):
 
         Scraped from the public product page, since the iTunes APIs report only
         the current version: best-effort, and may break when Apple changes it.
+        ``AppStoreVersions`` has the official versions, but without dates.
         """
         return get_and_parse(
             self._http,

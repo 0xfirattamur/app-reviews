@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import TYPE_CHECKING
 
+from app_reviews.core.retry import retry_after_seconds
 from app_reviews.errors import (
     AppReviewsError,
     AuthError,
@@ -178,6 +179,23 @@ def raise_for_http_failure(
             status=response.status or None,
         )
     if not response.ok:
-        raise error_for(response.status, credentialed=credentialed)(
-            f"HTTP {response.status} from {api}", status=response.status
+        raise http_error(
+            response, f"HTTP {response.status} from {api}", credentialed=credentialed
         )
+
+
+def http_error(
+    response: HttpResponse, message: str, *, credentialed: bool = True
+) -> AppReviewsError:
+    """The classified exception for a completed, failed response.
+
+    A ``RateLimitError`` carries the ``Retry-After`` the store sent.
+    """
+    cls = error_for(response.status, credentialed=credentialed)
+    if cls is RateLimitError:
+        return RateLimitError(
+            message,
+            status=response.status,
+            retry_after=retry_after_seconds(response.retry_after),
+        )
+    return cls(message, status=response.status)
