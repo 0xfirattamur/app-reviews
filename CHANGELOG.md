@@ -39,10 +39,10 @@ and pass credentials without a key file. Backward compatible.
   (`earliestReleaseDate`) are named for what they are, `state` is
   `appVersionState`, and `AppStoreSearch.version_history()` remains the source
   for release dates.
-- `HttpClient.delete()` / `adelete()` (with `follow_redirects=`), and
-  `retryable=False` on `post()` / `apost()` / `delete()` / `adelete()` for a
-  request that must be sent once.
-  `HttpResponse.retry_after` carries the final attempt's `Retry-After`.
+- `HttpClient.send_once(method, url, body=, headers=)` / `asend_once()`: one
+  attempt, never retried and never redirected, for a request that must not be
+  applied twice. `HttpResponse.retry_after` carries the final attempt's
+  `Retry-After`.
 
 ### Changed
 

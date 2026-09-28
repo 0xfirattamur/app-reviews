@@ -7,9 +7,8 @@ status table, so the two deliveries of a failure can never classify it different
 
 from __future__ import annotations
 
-import json
 from collections.abc import Collection
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app_reviews.core.retry import retry_after_seconds
 from app_reviews.errors import (
@@ -18,8 +17,6 @@ from app_reviews.errors import (
     NotFoundError,
     ParseError,
     RateLimitError,
-    ReplyOutcomeUnknownError,
-    ReplyRejectedError,
     RequestError,
     ServerError,
     TransportError,
@@ -182,96 +179,23 @@ def raise_for_http_failure(
             status=response.status or None,
         )
     if not response.ok:
-        cls = error_for(response.status, credentialed=credentialed)
-        message = f"HTTP {response.status} from {api}"
-        if cls is RateLimitError:
-            raise RateLimitError(
-                message,
-                status=response.status,
-                retry_after=retry_after_seconds(response.retry_after),
-            )
-        raise cls(message, status=response.status)
+        raise http_error(
+            response, f"HTTP {response.status} from {api}", credentialed=credentialed
+        )
 
 
-STORE_ERROR_CHARS = 200
-"""How much of a store's error text reaches an exception message."""
+def http_error(
+    response: HttpResponse, message: str, *, credentialed: bool = True
+) -> AppReviewsError:
+    """The classified exception for a completed, failed response.
 
-
-def raise_for_write_failure(response: HttpResponse, api: str) -> None:
-    """Raise for a write the store did not accept, sorted by what the caller knows.
-
-    A write is sent once and never retried (see ``HttpClient.post``), so the
-    one question that matters is whether it may have taken effect:
-
-    - no complete answer (``transport_error``), a 3xx or a 5xx: it may have, so
-      ``ReplyOutcomeUnknownError``. Writes do not follow redirects, since httpx
-      re-sends the body on a 307/308, so a 3xx arrives here unfollowed;
-    - 429: ``RateLimitError`` with the ``retry_after`` the store asked for;
-    - 401/403: ``AuthError``, the credential cannot write here;
-    - any other 4xx: ``ReplyRejectedError``, refused and not applied, with the
-      store's error code as ``reason``.
-
-    Every class but the first means nothing was published.
+    A ``RateLimitError`` carries the ``Retry-After`` the store sent.
     """
-    if response.transport_error is not None:
-        raise ReplyOutcomeUnknownError(
-            f"{api} write may or may not have been applied: "
-            f"{response.transport_error}. Check get_reply() before sending again."
-        )
-    if response.ok:
-        return
-    status = response.status
-    code, detail = _store_error(response.body)
-    message = f"HTTP {status} from {api}" + (f": {detail}" if detail else "")
-    if 300 <= status < 400:
-        raise ReplyOutcomeUnknownError(
-            f"{message}: the write was redirected, and redirects are not followed "
-            f"for writes because following one re-sends it. Check get_reply() "
-            f"before sending again.",
-            status=status,
-        )
-    if status >= 500:
-        raise ReplyOutcomeUnknownError(
-            f"{message}. The write may or may not have been applied; check "
-            f"get_reply() before sending again.",
-            status=status,
-        )
-    if status == 429:
-        raise RateLimitError(
+    cls = error_for(response.status, credentialed=credentialed)
+    if cls is RateLimitError:
+        return RateLimitError(
             message,
-            status=status,
+            status=response.status,
             retry_after=retry_after_seconds(response.retry_after),
         )
-    if status in {401, 403}:
-        raise AuthError(message, status=status)
-    raise ReplyRejectedError(message, reason=code or f"http_{status}", status=status)
-
-
-def _store_error(body: str) -> tuple[str | None, str | None]:
-    """The ``(code, detail)`` of a store's JSON error body, where it has them.
-
-    App Store Connect answers ``{"errors": [{"code", "detail"}]}`` and Google
-    ``{"error": {"status", "message"}}``. Anything else yields ``(None, None)``;
-    the status alone still classifies the failure. The detail is truncated
-    because it is remote text bound for an exception message.
-    """
-    try:
-        data = json.loads(body)
-    except ValueError:
-        return None, None
-    if not isinstance(data, dict):
-        return None, None
-    entry: Any = None
-    if isinstance(errors := data.get("errors"), list) and errors:
-        entry = errors[0]
-        code_key, detail_key = "code", "detail"
-    elif isinstance(data.get("error"), dict):
-        entry = data["error"]
-        code_key, detail_key = "status", "message"
-    if not isinstance(entry, dict):
-        return None, None
-    code, detail = entry.get(code_key), entry.get(detail_key)
-    return (
-        code if isinstance(code, str) and code else None,
-        detail[:STORE_ERROR_CHARS] if isinstance(detail, str) and detail else None,
-    )
+    return cls(message, status=response.status)

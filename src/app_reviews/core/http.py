@@ -185,17 +185,12 @@ class HttpClient:
         body: str,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
-        retryable: bool = True,
     ) -> HttpResponse:
         """Perform a POST on the shared pool.
 
         Pass ``follow_redirects=False`` when the body carries a credential. httpx
         drops ``Authorization`` when the origin changes, but a 307/308 re-sends
         the *body* verbatim to the next host, and an OAuth assertion lives there.
-
-        Pass ``retryable=False`` for a write that must not happen twice: the one
-        attempt's outcome is returned whatever it was, and the retry policy is
-        not consulted.
         """
         pool = self._pool()
         return self._execute(
@@ -209,35 +204,34 @@ class HttpClient:
                 follow_redirects=follow_redirects,
             ),
             credentialed=not follow_redirects or _carries_credential(headers),
-            retryable=retryable,
         )
 
-    def delete(
+    def send_once(
         self,
+        method: str,
         url: str,
         *,
+        body: str | None = None,
         headers: dict[str, str] | None = None,
-        follow_redirects: bool = True,
-        retryable: bool = True,
     ) -> HttpResponse:
-        """Perform a DELETE on the shared pool.
+        """Send one attempt, never retried and never redirected, for a write.
 
-        ``follow_redirects`` and ``retryable`` are as for ``post``: a write that
-        must happen at most once wants both False, since httpx re-sends a DELETE
-        (and a POST, on 307/308) to the redirect target.
+        A retry, or a followed 307/308 (which re-sends the body), could apply
+        the write twice. The one attempt's outcome is returned, whatever it was.
         """
         pool = self._pool()
         return self._execute(
-            "DELETE",
+            method,
             url,
             send=lambda: pool.stream(
-                "DELETE",
+                method,
                 url,
+                content=body,
                 headers=self._headers(headers),
-                follow_redirects=follow_redirects,
+                follow_redirects=False,
             ),
             credentialed=_carries_credential(headers),
-            retryable=retryable,
+            retryable=False,
         )
 
     async def aget(
@@ -265,7 +259,6 @@ class HttpClient:
         body: str,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
-        retryable: bool = True,
     ) -> HttpResponse:
         """Async equivalent of ``post``."""
         pool = self._apool()
@@ -280,30 +273,30 @@ class HttpClient:
                 follow_redirects=follow_redirects,
             ),
             credentialed=not follow_redirects or _carries_credential(headers),
-            retryable=retryable,
         )
 
-    async def adelete(
+    async def asend_once(
         self,
+        method: str,
         url: str,
         *,
+        body: str | None = None,
         headers: dict[str, str] | None = None,
-        follow_redirects: bool = True,
-        retryable: bool = True,
     ) -> HttpResponse:
-        """Async equivalent of ``delete``."""
+        """Async equivalent of ``send_once``."""
         pool = self._apool()
         return await self._aexecute(
-            "DELETE",
+            method,
             url,
             send=lambda: pool.stream(
-                "DELETE",
+                method,
                 url,
+                content=body,
                 headers=self._headers(headers),
-                follow_redirects=follow_redirects,
+                follow_redirects=False,
             ),
             credentialed=_carries_credential(headers),
-            retryable=retryable,
+            retryable=False,
         )
 
     def _pool(self) -> httpx.Client:

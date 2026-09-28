@@ -17,12 +17,11 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from app_reviews.core.classify import error_for
+from app_reviews.core.classify import error_for, http_error
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
-from app_reviews.core.retry import retry_after_seconds
-from app_reviews.errors import AuthError, ParseError, RateLimitError
+from app_reviews.errors import AuthError, ParseError
 from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
 
 
@@ -295,18 +294,11 @@ class GoogleAuth(PooledClient):
         if not response.ok:
             # Truncated: the body is remote content and ends up in an exception
             # message that the walk logs at WARNING.
-            message = (
+            raise http_error(
+                response,
                 f"Google token exchange failed (HTTP {response.status}): "
-                f"{response.body[: self.ERROR_BODY_CHARS]}"
+                f"{response.body[: self.ERROR_BODY_CHARS]}",
             )
-            cls = error_for(response.status)
-            if cls is RateLimitError:
-                raise RateLimitError(
-                    message,
-                    status=response.status,
-                    retry_after=retry_after_seconds(response.retry_after),
-                )
-            raise cls(message, status=response.status)
 
         try:
             body = response.json()
