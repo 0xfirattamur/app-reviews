@@ -10,6 +10,7 @@ import asyncio
 import json
 import time
 import urllib.parse
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -21,7 +22,7 @@ from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
 from app_reviews.errors import AuthError, ParseError
-from app_reviews.models.config import ServiceAccountCredentials
+from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
 
 
 class GoogleAuth(PooledClient):
@@ -29,6 +30,9 @@ class GoogleAuth(PooledClient):
 
     Satisfies ``core.auth.TokenSource``, so a provider can ask per request, and
     keeps one token until it nears expiry.
+
+    ``auth`` is the ``GooglePlayAuth`` to load. A plain path, as 1.0 and 1.1
+    took, still means ``GooglePlayAuth(service_account_path=path)``.
 
     ``http`` is the pooled client the exchange runs on. Callers pass their own so
     it inherits the proxy and retry policy they configured; otherwise a proxied
@@ -58,11 +62,13 @@ class GoogleAuth(PooledClient):
 
     def __init__(
         self,
-        service_account_path: str,
+        auth: GooglePlayAuth | str,
         *,
         http: HttpClient | None = None,
     ) -> None:
-        self._credentials = self._load(service_account_path)
+        if isinstance(auth, str):
+            auth = GooglePlayAuth(service_account_path=auth)
+        self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
         self._header: str | None = None
@@ -113,13 +119,14 @@ class GoogleAuth(PooledClient):
         )
         return self._store(*self._read_token(response))
 
-    def _load(self, path: str) -> ServiceAccountCredentials:
+    def _load(self, auth: GooglePlayAuth) -> ServiceAccountCredentials:
         """Read and validate the service-account JSON, as ``AuthError`` if unusable.
 
-        Everything here fails as a stdlib exception otherwise (a missing file is
-        ``FileNotFoundError``, a truncated one a ``json.JSONDecodeError``), and a
-        caller cannot be expected to catch those alongside the package's own
-        errors.
+        The document comes from ``service_account_path`` or, already parsed,
+        from ``service_account_info``. Everything here fails as a stdlib
+        exception otherwise (a missing file is ``FileNotFoundError``, a truncated
+        one a ``json.JSONDecodeError``), and a caller cannot be expected to catch
+        those alongside the package's own errors.
 
         No failure path leaves key material reachable from the raised error. What
         is at stake here is larger than one field: ``document`` is the whole
@@ -133,22 +140,25 @@ class GoogleAuth(PooledClient):
         still travels; only the frames are dropped. See
         ``tests/app_reviews/test_credential_hygiene.py``.
         """
-        try:
-            with open(path, encoding="utf-8") as handle:
-                document = json.load(handle)
-        except OSError as exc:
-            raise AuthError(
-                f"Cannot read the Google service account key at {path!r}: {exc}"
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise AuthError(
-                f"The Google service account key at {path!r} is not valid JSON: {exc}"
-            ) from exc
+        path = auth.service_account_path
+        if path is None:
+            origin = "The Google service_account_info"
+            document: Any = auth.service_account_info
+        else:
+            origin = f"The Google service account key at {path!r}"
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    document = json.load(handle)
+            except OSError as exc:
+                raise AuthError(
+                    f"Cannot read the Google service account key at {path!r}: {exc}"
+                ) from exc
+            except json.JSONDecodeError as exc:
+                raise AuthError(f"{origin} is not valid JSON: {exc}") from exc
 
-        if not isinstance(document, dict):
-            raise AuthError(
-                f"The Google service account key at {path!r} is not a JSON object"
-            )
+        if not isinstance(document, Mapping):
+            del document
+            raise AuthError(f"{origin} is not a JSON object")
 
         client_email = document.get("client_email", "")
         private_key_pem = document.get("private_key", "")
@@ -168,9 +178,7 @@ class GoogleAuth(PooledClient):
         del private_key_pem
 
         if credentials is None:
-            raise AuthError(
-                f"The Google service account key at {path!r} is unusable: {reason}"
-            )
+            raise AuthError(f"{origin} is unusable: {reason}")
         return credentials
 
     def _load_key(self) -> RSAPrivateKey:

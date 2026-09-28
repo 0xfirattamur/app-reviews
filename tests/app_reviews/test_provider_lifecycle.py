@@ -14,6 +14,7 @@ from app_reviews.googleplay import (
     GooglePlayOfficialProvider,
     GooglePlayScraperProvider,
 )
+from app_reviews.models.config import GooglePlayAuth
 from tests.app_reviews.appstore.test_auth import _make_credentials
 from tests.app_reviews.factories import StaticToken
 from tests.app_reviews.googleplay.test_auth import _SERVICE_ACCOUNT_JSON
@@ -73,7 +74,9 @@ class TestGoogleAuthLifecycle:
 
         data = json.dumps(_SERVICE_ACCOUNT_JSON)
         with patch("builtins.open", mock_open(read_data=data)):
-            return GoogleAuth("/fake/key.json", http=http)
+            return GoogleAuth(
+                GooglePlayAuth(service_account_path="/fake/key.json"), http=http
+            )
 
     def test_context_manager_closes_owned_http_and_clears_cached_secrets(self):
         auth = self._auth()

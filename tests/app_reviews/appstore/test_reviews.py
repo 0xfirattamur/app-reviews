@@ -6,14 +6,23 @@ typed-error hierarchy. ``AuthError``'s own docstring names this case as the reas
 it does not subclass ``HttpError``.
 """
 
+import base64
+import json
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app_reviews import AppReviewsError, AppStoreAuth, AppStoreReviews, AuthError
+from app_reviews import (
+    AppReviewsError,
+    AppStoreAuth,
+    AppStoreReviews,
+    AuthError,
+    HttpClient,
+)
 
 
 def _client(key_path: str) -> AppStoreReviews:
@@ -114,3 +123,41 @@ class TestUsableKeyFile:
         path.unlink()  # gone now; a second read would fail
 
         assert client.source == "appstore_official"
+
+
+class TestInMemoryKey:
+    def test_a_pem_string_signs_connect_requests_without_a_file(self):
+        from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+
+        seen = []
+
+        def handler(request):
+            seen.append(request.headers["authorization"])
+            return httpx.Response(200, json={"data": []})
+
+        client = AppStoreReviews(
+            auth=AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY),
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+        )
+        result = client.fetch("123")
+
+        assert result.errors == []
+        token = seen[0].removeprefix("Bearer ")
+        header = json.loads(base64.urlsafe_b64decode(token.split(".")[0] + "=="))
+        assert header["kid"] == "K"
+
+    def test_an_unusable_pem_string_is_an_auth_error_that_names_no_path(self):
+        client = AppStoreReviews(
+            auth=AppStoreAuth(key_id="K", issuer_id="I", private_key="not a key")
+        )
+
+        with pytest.raises(AuthError, match="private_key is unusable"):
+            client.fetch("123")
+
+    @pytest.mark.parametrize(
+        "sources",
+        [{}, {"key_path": "k.p8", "private_key": "-----BEGIN PRIVATE KEY-----"}],
+    )
+    def test_exactly_one_key_source_is_required(self, sources):
+        with pytest.raises(ValueError, match="exactly one"):
+            AppStoreAuth(key_id="K", issuer_id="I", **sources)

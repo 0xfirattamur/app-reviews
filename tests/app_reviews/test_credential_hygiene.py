@@ -17,13 +17,22 @@ import json
 
 import pytest
 
-from app_reviews.appstore.reviews import AppStoreReviews
+from app_reviews.appstore.auth import ConnectAuth, load_connect_credentials
 from app_reviews.core.jwt import load_ec_private_key_from_pem
 from app_reviews.errors import AuthError
 from app_reviews.googleplay.auth import GoogleAuth
-from app_reviews.models.config import AppStoreAuth
+from app_reviews.models.config import AppStoreAuth, GooglePlayAuth
 
 SECRET = "SUPER-SECRET-KEY-MATERIAL-DO-NOT-LEAK"
+_PEM_SHAPED = f"-----BEGIN PRIVATE KEY-----\n{SECRET}\n"
+_BAD_SERVICE_ACCOUNT_INFO = {
+    "empty_client_email": {"client_email": "", "private_key": SECRET},
+    "foreign_token_uri": {
+        "client_email": "a@b.iam.gserviceaccount.com",
+        "private_key": _PEM_SHAPED,
+        "token_uri": "https://evil.test/token",
+    },
+}
 
 
 def _frames_holding(exc: BaseException, needle: str) -> list[str]:
@@ -59,7 +68,7 @@ class TestTheAppStoreKeyDoesNotReachATraceback:
         key_path.write_text(SECRET, encoding="utf-8")
 
         with pytest.raises(AuthError) as caught:
-            AppStoreReviews()._credentials(
+            load_connect_credentials(
                 AppStoreAuth(key_id="k", issuer_id="i", key_path=str(key_path))
             )
 
@@ -74,11 +83,49 @@ class TestTheAppStoreKeyDoesNotReachATraceback:
         )
 
         with pytest.raises(AuthError) as caught:
-            AppStoreReviews()._credentials(
+            load_connect_credentials(
                 AppStoreAuth(key_id="", issuer_id="i", key_path=str(key_path))
             )
 
         assert _frames_holding(caught.value, SECRET) == []
+
+    @pytest.mark.parametrize("case", ["not_pem", "empty_key_id"])
+    def test_an_unusable_in_memory_key_fails_without_carrying_it(self, case):
+        """Looked up by name, so the test's own frame never binds the key."""
+        with pytest.raises(AuthError) as caught:
+            load_connect_credentials(
+                AppStoreAuth(
+                    key_id="" if case == "empty_key_id" else "k",
+                    issuer_id="i",
+                    private_key=_PEM_SHAPED if case == "empty_key_id" else SECRET,
+                )
+            )
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_an_in_memory_pem_that_does_not_parse_fails_at_signing_without_it(self):
+        credentials = load_connect_credentials(
+            AppStoreAuth(key_id="k", issuer_id="i", private_key=_PEM_SHAPED)
+        )
+
+        with pytest.raises(AuthError) as caught:
+            ConnectAuth(credentials).authorization_header()
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_passing_both_sources_fails_without_carrying_the_key(self):
+        with pytest.raises(ValueError) as caught:
+            AppStoreAuth(key_id="k", issuer_id="i", key_path="k.p8", private_key=SECRET)
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_repr_never_shows_the_in_memory_key(self):
+        auth = AppStoreAuth(key_id="k", issuer_id="i", private_key=SECRET)
+
+        assert SECRET not in repr(auth)
 
 
 class TestTheGoogleKeyDoesNotReachATraceback:
@@ -91,7 +138,7 @@ class TestTheGoogleKeyDoesNotReachATraceback:
         )
 
         with pytest.raises(AuthError) as caught:
-            GoogleAuth(str(path))._load(str(path))
+            GoogleAuth(GooglePlayAuth(service_account_path=str(path)))
 
         assert _frames_holding(caught.value, SECRET) == []
 
@@ -111,9 +158,35 @@ class TestTheGoogleKeyDoesNotReachATraceback:
         )
 
         with pytest.raises(AuthError) as caught:
-            GoogleAuth(str(path))._load(str(path))
+            GoogleAuth(GooglePlayAuth(service_account_path=str(path)))
 
         assert _frames_holding(caught.value, SECRET) == []
+
+    @pytest.mark.parametrize("case", sorted(_BAD_SERVICE_ACCOUNT_INFO))
+    def test_unusable_service_account_info_fails_without_carrying_it(self, case):
+        """Looked up by name, so the test's own frame never binds the key."""
+        with pytest.raises(AuthError) as caught:
+            GoogleAuth(
+                GooglePlayAuth(service_account_info=_BAD_SERVICE_ACCOUNT_INFO[case])
+            )
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_passing_both_sources_fails_without_carrying_the_key(self):
+        with pytest.raises(ValueError) as caught:
+            GooglePlayAuth(
+                service_account_path="sa.json",
+                service_account_info={"private_key": SECRET},
+            )
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_repr_never_shows_the_service_account_info(self):
+        auth = GooglePlayAuth(service_account_info={"private_key": SECRET})
+
+        assert SECRET not in repr(auth)
 
 
 class TestTheJwtLoaderDoesNotReachATraceback:

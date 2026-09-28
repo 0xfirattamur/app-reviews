@@ -19,7 +19,7 @@ from app_reviews.appstore.connect import AppStoreOfficialProvider
 from app_reviews.core.http import HttpClient
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
-from app_reviews.models.config import ConnectCredentials
+from app_reviews.models.config import ConnectCredentials, GooglePlayAuth
 from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
 
 
@@ -115,7 +115,11 @@ class TestGoogleAuthCaches:
         from unittest.mock import mock_open, patch
 
         with patch("builtins.open", mock_open(read_data=data)):
-            return GoogleAuth("/fake.json", http=_token_pool(handler), **kw)
+            return GoogleAuth(
+                GooglePlayAuth(service_account_path="/fake.json"),
+                http=_token_pool(handler),
+                **kw,
+            )
 
     def test_one_exchange_serves_repeated_calls(self, monkeypatch):
         monkeypatch.setattr("app_reviews.googleplay.auth.time.time", _Clock())
