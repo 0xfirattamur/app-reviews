@@ -239,7 +239,7 @@ published reply cannot be taken back. Reads retry as usual.
 
 | Raised | When | Published? |
 |---|---|---|
-| `ReplyOutcomeUnknownError` | timeout, dropped connection, or 5xx on a write | unknown: check `get_reply()` |
+| `ReplyOutcomeUnknownError` | timeout, dropped connection, 5xx, or an unfollowed redirect on a write | unknown: check `get_reply()` |
 | `ReplyRejectedError(reason)` | a 4xx refusal; `reason` is the store's error code or `http_<status>` | no |
 | `ReplyRejectedError(reason="too_long")` | a Play reply over 350 characters, before sending | no |
 | `RateLimitError` | HTTP 429; `retry_after` is the asked wait in seconds | no |
@@ -648,8 +648,9 @@ version it lists, newest first.
 !!! warning "Scraped source"
     `version_history()` parses the data the public product page embeds for
     browsers; it is not an API. It is best-effort and App Store only, and it
-    may break whenever Apple changes the page. An official source, from App
-    Store Connect, is planned for 1.2.0.
+    may break whenever Apple changes the page. [`AppStoreVersions`](#appstoreversions)
+    reads versions from App Store Connect, but that API has no release date, so
+    this stays the source for dates.
 
 ```python
 history = client.version_history(

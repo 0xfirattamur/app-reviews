@@ -134,8 +134,9 @@ class AppStoreSearch(PooledClient):
         This is a scraped source: the iTunes APIs report only the current
         version, so the history is read from the data the public App Store
         product page embeds for browsers. It is best-effort, App Store only, and
-        may break whenever Apple changes that page. An official source, from App
-        Store Connect, is planned for 1.2.0.
+        may break whenever Apple changes that page. ``AppStoreVersions`` reads the
+        official App Store Connect versions, but those carry no release date, so
+        this stays the source for dates.
         """
         return get_and_parse(
             self._http,

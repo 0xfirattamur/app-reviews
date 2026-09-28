@@ -39,15 +39,20 @@ and pass credentials without a key file. Backward compatible.
   (`earliestReleaseDate`) are named for what they are, `state` is
   `appVersionState`, and `AppStoreSearch.version_history()` remains the source
   for release dates.
-- `HttpClient.delete()` / `adelete()`, and `retryable=False` on `post()` /
-  `apost()` / `delete()` / `adelete()` for a request that must be sent once.
+- `HttpClient.delete()` / `adelete()` (with `follow_redirects=`), and
+  `retryable=False` on `post()` / `apost()` / `delete()` / `adelete()` for a
+  request that must be sent once.
   `HttpResponse.retry_after` carries the final attempt's `Retry-After`.
 
 ### Changed
 
-- Reply writes are never retried, whatever `RetryConfig` says. Reads, token
-  exchanges, and every other request keep the normal retry policy.
-- `GoogleAuth` takes a `GooglePlayAuth`; a bare path still works as before.
+- Reply writes are never retried, whatever `RetryConfig` says, and never follow
+  a redirect, since following a 307/308 re-sends the write; a 3xx raises
+  `ReplyOutcomeUnknownError`. Reads, token exchanges, and every other request
+  keep the normal retry policy.
+- A 429 from the Google token exchange now carries `RateLimitError.retry_after`.
+- `GoogleAuth` also takes `service_account_info=`; `service_account_path` (by
+  position or keyword) works as before, and exactly one of the two is required.
 
 See the [v1.2.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.2.0.md).
 

@@ -459,8 +459,9 @@ Measured against the live stores:
 One entry of an app's App Store "Version History", returned newest first by
 `AppStoreSearch.version_history()` / `aversion_history()`. The history is
 scraped from the public App Store product page: best-effort, App Store only,
-and liable to break when Apple changes the page. An official source from App
-Store Connect is planned for 1.2.0.
+and liable to break when Apple changes the page. [`AppStoreVersion`](#appstoreversion)
+comes from the official App Store Connect API, which has no release date, so this
+stays the source for dates.
 
 ```python
 from app_reviews import AppStoreSearch

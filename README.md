@@ -168,8 +168,9 @@ raises `ParseError`. `aversion_history()` is the async twin.
 
 > **Scraped source.** `version_history()` reads the public product page, not an
 > API. It is best-effort and App Store only, and it may break when Apple
-> changes the page. An official source from App Store Connect is planned for
-> 1.2.0.
+> changes the page. `AppStoreVersions` reads versions from the official App Store
+> Connect API, but that API has no release date, so this stays the source for
+> dates.
 
 ## Results and errors
 
@@ -395,8 +396,9 @@ Writes are sent exactly once, whatever `retry=` says, because a public reply
 cannot be taken back. Check `get_reply()` before replying again after any
 failure:
 
-- `ReplyOutcomeUnknownError`: a timeout, dropped connection, or 5xx after the
-  request was sent. The reply may or may not be live.
+- `ReplyOutcomeUnknownError`: a timeout, dropped connection, 5xx, or redirect
+  after the request was sent (writes never follow redirects, which would re-send
+  them). The reply may or may not be live.
 - `ReplyRejectedError(reason)`: the store refused it, and nothing was published.
   A Play reply over 350 characters raises `reason="too_long"` before anything is
   sent.
