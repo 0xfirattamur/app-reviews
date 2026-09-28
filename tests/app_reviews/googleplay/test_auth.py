@@ -16,6 +16,7 @@ from app_reviews.errors import (
     AppReviewsError,
     AuthError,
     ParseError,
+    RateLimitError,
     ServerError,
     TransportError,
 )
@@ -72,14 +73,34 @@ class TestGoogleAuthInit:
     def test_loads_service_account_from_file(self):
         data = json.dumps(_SERVICE_ACCOUNT_JSON)
         with patch("builtins.open", mock_open(read_data=data)):
-            auth = GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            auth = GoogleAuth("/fake/path.json")
         assert auth._credentials.client_email == "test@test.iam.gserviceaccount.com"
 
-    def test_a_bare_path_still_loads_the_file(self, tmp_path):
-        """1.0 and 1.1 took the path itself; 1.2 is a minor release."""
-        auth = GoogleAuth(str(_write_service_account(tmp_path)))
+    def test_the_1_1_keyword_still_loads_the_file(self, tmp_path):
+        """1.0 and 1.1 documented ``service_account_path=``; 1.2 is a minor release."""
+        key_file = str(_write_service_account(tmp_path))
+
+        for auth in (
+            GoogleAuth(key_file),
+            GoogleAuth(service_account_path=key_file),
+        ):
+            assert (
+                auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+            )
+
+    def test_service_account_info_needs_no_file(self):
+        with patch("builtins.open", side_effect=AssertionError("file read")):
+            auth = GoogleAuth(service_account_info=_SERVICE_ACCOUNT_JSON)
 
         assert auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+
+    @pytest.mark.parametrize(
+        "sources",
+        [{}, {"service_account_path": "sa.json", "service_account_info": {}}],
+    )
+    def test_exactly_one_source_is_required(self, sources):
+        with pytest.raises(ValueError, match="exactly one"):
+            GoogleAuth(**sources)
 
     def test_a_key_file_missing_client_email_is_an_auth_error(self):
         data = json.dumps({"private_key": _TEST_RSA_KEY})
@@ -87,14 +108,14 @@ class TestGoogleAuthInit:
             patch("builtins.open", mock_open(read_data=data)),
             pytest.raises(AuthError, match="client_email"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
 
 class TestGoogleAuthBuildJwt:
     def _make_auth(self):
         data = json.dumps(_SERVICE_ACCOUNT_JSON)
         with patch("builtins.open", mock_open(read_data=data)):
-            return GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            return GoogleAuth("/fake/path.json")
 
     def test_jwt_has_three_parts(self):
         auth = self._make_auth()
@@ -132,7 +153,7 @@ def _auth_on(handler):
     data = json.dumps(_SERVICE_ACCOUNT_JSON)
     with patch("builtins.open", mock_open(read_data=data)):
         return GoogleAuth(
-            GooglePlayAuth(service_account_path="/fake/path.json"),
+            "/fake/path.json",
             http=HttpClient(transport=httpx.MockTransport(handler)),
         )
 
@@ -223,7 +244,7 @@ class TestGoogleAuthAuthorizationHeader:
         data = json.dumps(_SERVICE_ACCOUNT_JSON)
         with patch("builtins.open", mock_open(read_data=data)):
             auth = GoogleAuth(
-                GooglePlayAuth(service_account_path="/fake/path.json"),
+                "/fake/path.json",
                 http=HttpClient(
                     transport=httpx.MockTransport(handler),
                     retry=RetryConfig(max_retries=2, backoff_factor=0),
@@ -268,6 +289,15 @@ class TestTokenExchangeFailuresAreClassified:
             _auth_on(handler).authorization_header()
 
         assert exc.value.status == 500
+
+    def test_a_throttled_exchange_reports_the_asked_wait(self):
+        def handler(_request):
+            return httpx.Response(429, headers={"Retry-After": "45"})
+
+        with pytest.raises(RateLimitError) as exc:
+            _auth_on(handler).authorization_header()
+
+        assert (exc.value.status, exc.value.retry_after) == (429, 45.0)
 
     def test_a_token_less_success_is_a_parse_error(self):
         def handler(_request):
@@ -416,7 +446,7 @@ def _auth_from(text: str, handler=None) -> GoogleAuth:
     transport = httpx.MockTransport(handler or _token())
     with patch("builtins.open", mock_open(read_data=text)):
         return GoogleAuth(
-            GooglePlayAuth(service_account_path="/fake/path.json"),
+            "/fake/path.json",
             http=HttpClient(transport=transport),
         )
 
@@ -431,32 +461,32 @@ class TestCredentialFailuresAreAuthErrors:
 
     def test_a_missing_file_is_an_auth_error(self, tmp_path):
         with pytest.raises(AuthError, match="Cannot read"):
-            GoogleAuth(GooglePlayAuth(service_account_path=str(tmp_path / "nope.json")))
+            GoogleAuth(str(tmp_path / "nope.json"))
 
     def test_a_directory_instead_of_a_file_is_an_auth_error(self, tmp_path):
         with pytest.raises(AuthError, match="Cannot read"):
-            GoogleAuth(GooglePlayAuth(service_account_path=str(tmp_path)))
+            GoogleAuth(str(tmp_path))
 
     def test_unreadable_json_is_an_auth_error(self):
         with (
             patch("builtins.open", mock_open(read_data="{not json")),
             pytest.raises(AuthError, match="not valid JSON"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
     def test_a_json_document_that_is_not_an_object_is_an_auth_error(self):
         with (
             patch("builtins.open", mock_open(read_data="[1, 2, 3]")),
             pytest.raises(AuthError, match="not a JSON object"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
     def test_a_key_that_is_not_pem_is_an_auth_error(self):
         with (
             patch("builtins.open", mock_open(read_data=_sa(private_key="oops"))),
             pytest.raises(AuthError, match="unusable"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
     def test_an_unparseable_pem_is_an_auth_error_at_signing(self):
         """``ServiceAccountCredentials`` only checks the PEM markers, so a key
@@ -513,7 +543,7 @@ class TestTokenUriIsValidated:
             ),
             pytest.raises(AuthError, match="non-HTTPS"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
     @pytest.mark.parametrize(
         "uri",
@@ -528,7 +558,7 @@ class TestTokenUriIsValidated:
             patch("builtins.open", mock_open(read_data=_sa(token_uri=uri))),
             pytest.raises(AuthError, match="not a Google token endpoint"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
 
 class TestTheKeyIsParsedOnce:
@@ -677,7 +707,7 @@ class TestTheTokenHostAllowlistIsExact:
             patch("builtins.open", mock_open(read_data=_sa(token_uri=uri))),
             pytest.raises(AuthError, match="not a Google token endpoint"),
         ):
-            GoogleAuth(GooglePlayAuth(service_account_path="/fake/path.json"))
+            GoogleAuth("/fake/path.json")
 
     @pytest.mark.parametrize(
         "uri",

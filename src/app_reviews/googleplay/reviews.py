@@ -61,7 +61,11 @@ class GooglePlayReviews(BaseReviews):
         Sharing the pool is what keeps the token exchange on the same proxy and
         retry policy as the review requests, and lets it reuse the connection.
         """
-        return GoogleAuth(auth, http=self._http)
+        return GoogleAuth(
+            auth.service_account_path,
+            service_account_info=auth.service_account_info,
+            http=self._http,
+        )
 
     def _validate_country_argument(self, country: Country | str | None) -> None:
         if normalise_country(country, warn_unknown=False) is not None:

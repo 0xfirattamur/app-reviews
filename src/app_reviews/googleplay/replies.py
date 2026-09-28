@@ -89,6 +89,7 @@ class GooglePlayReplies(PooledClient):
             self._url(package_name, review_id) + ":reply",
             body=json.dumps({"replyText": text}),
             headers=self._headers() | _JSON_HEADERS,
+            follow_redirects=False,
             retryable=False,
         )
         return self._written(response, review_id)
@@ -102,6 +103,7 @@ class GooglePlayReplies(PooledClient):
             self._url(package_name, review_id) + ":reply",
             body=json.dumps({"replyText": text}),
             headers=await self._aheaders() | _JSON_HEADERS,
+            follow_redirects=False,
             retryable=False,
         )
         return self._written(response, review_id)
@@ -169,7 +171,11 @@ class GooglePlayReplies(PooledClient):
         if self._token is None:
             with self._token_lock:
                 if self._token is None:
-                    self._token = GoogleAuth(self._auth, http=self._http)
+                    self._token = GoogleAuth(
+                        self._auth.service_account_path,
+                        service_account_info=self._auth.service_account_info,
+                        http=self._http,
+                    )
         return self._token
 
     def _written(self, response: HttpResponse, review_id: str) -> ReviewReply:

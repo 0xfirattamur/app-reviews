@@ -262,8 +262,10 @@ class _SyncTrapGoogleAuth:
     if the async ladder ever calls it; the async path returns a real token.
     """
 
-    def __init__(self, auth, *, http=None) -> None:
-        self.auth = auth
+    def __init__(
+        self, service_account_path=None, *, service_account_info=None, http=None
+    ) -> None:
+        self.service_account_path = service_account_path
         self.http = http
 
     def authorization_header(self) -> str:
@@ -320,7 +322,9 @@ class TestGooglePlayThreadsItsPoolToAuth:
             mock_google_auth.return_value.authorization_header.return_value = "Bearer x"
             client._build_provider()
 
-        mock_google_auth.assert_called_once_with(auth, http=client._http)
+        mock_google_auth.assert_called_once_with(
+            "sa.json", service_account_info=None, http=client._http
+        )
 
     def test_the_pool_carries_the_configured_proxy_and_retry(self):
         retry = RetryConfig(max_retries=6)

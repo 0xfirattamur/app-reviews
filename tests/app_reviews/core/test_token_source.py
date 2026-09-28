@@ -19,7 +19,7 @@ from app_reviews.appstore.connect import AppStoreOfficialProvider
 from app_reviews.core.http import HttpClient
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
-from app_reviews.models.config import ConnectCredentials, GooglePlayAuth
+from app_reviews.models.config import ConnectCredentials
 from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
 
 
@@ -116,7 +116,7 @@ class TestGoogleAuthCaches:
 
         with patch("builtins.open", mock_open(read_data=data)):
             return GoogleAuth(
-                GooglePlayAuth(service_account_path="/fake.json"),
+                "/fake.json",
                 http=_token_pool(handler),
                 **kw,
             )

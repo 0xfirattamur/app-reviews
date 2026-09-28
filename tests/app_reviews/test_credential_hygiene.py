@@ -138,7 +138,7 @@ class TestTheGoogleKeyDoesNotReachATraceback:
         )
 
         with pytest.raises(AuthError) as caught:
-            GoogleAuth(GooglePlayAuth(service_account_path=str(path)))
+            GoogleAuth(str(path))
 
         assert _frames_holding(caught.value, SECRET) == []
 
@@ -158,7 +158,7 @@ class TestTheGoogleKeyDoesNotReachATraceback:
         )
 
         with pytest.raises(AuthError) as caught:
-            GoogleAuth(GooglePlayAuth(service_account_path=str(path)))
+            GoogleAuth(str(path))
 
         assert _frames_holding(caught.value, SECRET) == []
 
@@ -166,11 +166,18 @@ class TestTheGoogleKeyDoesNotReachATraceback:
     def test_unusable_service_account_info_fails_without_carrying_it(self, case):
         """Looked up by name, so the test's own frame never binds the key."""
         with pytest.raises(AuthError) as caught:
-            GoogleAuth(
-                GooglePlayAuth(service_account_info=_BAD_SERVICE_ACCOUNT_INFO[case])
-            )
+            GoogleAuth(service_account_info=_BAD_SERVICE_ACCOUNT_INFO[case])
 
         assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
+    def test_google_auth_given_both_sources_fails_without_carrying_the_key(self):
+        with pytest.raises(ValueError) as caught:
+            GoogleAuth(
+                service_account_path="sa.json",
+                service_account_info=_BAD_SERVICE_ACCOUNT_INFO["empty_client_email"],
+            )
+
         assert _frames_holding(caught.value, SECRET) == []
 
     def test_passing_both_sources_fails_without_carrying_the_key(self):

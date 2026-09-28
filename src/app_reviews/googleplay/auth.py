@@ -21,7 +21,8 @@ from app_reviews.core.classify import error_for
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
-from app_reviews.errors import AuthError, ParseError
+from app_reviews.core.retry import retry_after_seconds
+from app_reviews.errors import AuthError, ParseError, RateLimitError
 from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
 
 
@@ -31,8 +32,10 @@ class GoogleAuth(PooledClient):
     Satisfies ``core.auth.TokenSource``, so a provider can ask per request, and
     keeps one token until it nears expiry.
 
-    ``auth`` is the ``GooglePlayAuth`` to load. A plain path, as 1.0 and 1.1
-    took, still means ``GooglePlayAuth(service_account_path=path)``.
+    Give the key as ``service_account_path`` (the JSON file) or as
+    ``service_account_info`` (the parsed JSON mapping); exactly one of the two,
+    as for ``GooglePlayAuth``. The mapping is unbound before anything can raise,
+    so no frame of a failure holds it.
 
     ``http`` is the pooled client the exchange runs on. Callers pass their own so
     it inherits the proxy and retry policy they configured; otherwise a proxied
@@ -62,12 +65,23 @@ class GoogleAuth(PooledClient):
 
     def __init__(
         self,
-        auth: GooglePlayAuth | str,
+        service_account_path: str | None = None,
         *,
+        service_account_info: Mapping[str, Any] | None = None,
         http: HttpClient | None = None,
     ) -> None:
-        if isinstance(auth, str):
-            auth = GooglePlayAuth(service_account_path=auth)
+        ambiguous = (service_account_path is None) == (service_account_info is None)
+        auth = None
+        if not ambiguous:
+            auth = GooglePlayAuth(
+                service_account_path=service_account_path,
+                service_account_info=service_account_info,
+            )
+        del service_account_info
+        if auth is None:
+            raise ValueError(
+                "Pass exactly one of service_account_path or service_account_info."
+            )
         self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
@@ -281,11 +295,18 @@ class GoogleAuth(PooledClient):
         if not response.ok:
             # Truncated: the body is remote content and ends up in an exception
             # message that the walk logs at WARNING.
-            raise error_for(response.status)(
+            message = (
                 f"Google token exchange failed (HTTP {response.status}): "
-                f"{response.body[: self.ERROR_BODY_CHARS]}",
-                status=response.status,
+                f"{response.body[: self.ERROR_BODY_CHARS]}"
             )
+            cls = error_for(response.status)
+            if cls is RateLimitError:
+                raise RateLimitError(
+                    message,
+                    status=response.status,
+                    retry_after=retry_after_seconds(response.retry_after),
+                )
+            raise cls(message, status=response.status)
 
         try:
             body = response.json()
