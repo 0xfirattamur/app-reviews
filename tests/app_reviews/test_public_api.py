@@ -7,6 +7,8 @@ EXPECTED = {
     "AppReviewsError",
     "AppStoreAuth",
     "AppStoreReplies",
+    "AppStoreVersion",
+    "AppStoreVersions",
     "AppStoreReviews",
     "AppStoreSearch",
     "AppVersionEntry",

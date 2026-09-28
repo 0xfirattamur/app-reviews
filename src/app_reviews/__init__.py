@@ -27,6 +27,7 @@ from importlib.metadata import version
 from app_reviews.appstore.replies import AppStoreReplies
 from app_reviews.appstore.reviews import AppStoreReviews
 from app_reviews.appstore.search import AppStoreSearch
+from app_reviews.appstore.versions import AppStoreVersions
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.provider import ReviewProvider
@@ -68,6 +69,7 @@ from app_reviews.models.types import (
     StopReason,
     Store,
 )
+from app_reviews.models.version import AppStoreVersion
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -80,6 +82,8 @@ __all__ = [
     "AppStoreReplies",
     "AppStoreReviews",
     "AppStoreSearch",
+    "AppStoreVersion",
+    "AppStoreVersions",
     "AppVersionEntry",
     "AuthError",
     "ConnectCredentials",
