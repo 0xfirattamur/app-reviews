@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Self
 
 from app_reviews.core.http import HttpClient
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.models.config import RetryConfig
 
 __all__ = ["PooledClient"]
@@ -20,10 +21,11 @@ class PooledClient:
     """Shared plumbing for the clients that own a connection pool.
 
     Deliberately not an interface: it declares nothing abstract, and nothing
-    dispatches on it. It exists so that building the pool from ``proxy`` and
-    ``retry`` (and closing it again) is written once instead of in every
-    client. The *interfaces* in this package are Protocols (``ReviewProvider``,
-    ``SearchClient``); this is only the behaviour they'd otherwise duplicate.
+    dispatches on it. It exists so that building the pool from ``proxy``,
+    ``retry`` and ``rate_limiter`` (and closing it again) is written once
+    instead of in every client. The *interfaces* in this package are Protocols
+    (``ReviewProvider``, ``SearchClient``); this is only the behaviour they'd
+    otherwise duplicate.
     """
 
     def __init__(
@@ -32,18 +34,24 @@ class PooledClient:
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
         """Build a client that owns, or borrows, one connection pool.
 
-        ``proxy`` and ``retry`` configure a pool built here. Pass ``http`` to
-        supply the pool yourself (to share one between clients, or to inject a
-        transport in tests), in which case those settings already belong to it,
-        so passing them alongside ``http`` raises rather than being dropped.
+        ``proxy``, ``retry`` and ``rate_limiter`` configure a pool built here.
+        Pass ``http`` to supply the pool yourself (to share one between clients,
+        or to inject a transport in tests), in which case those settings already
+        belong to it, so passing them alongside ``http`` raises rather than being
+        dropped.
         """
         if http is not None:
             conflicting = [
                 name
-                for name, value in (("proxy", proxy), ("retry", retry))
+                for name, value in (
+                    ("proxy", proxy),
+                    ("retry", retry),
+                    ("rate_limiter", rate_limiter),
+                )
                 if value is not None
             ]
             if conflicting:
@@ -56,7 +64,10 @@ class PooledClient:
         self._retry = retry or RetryConfig()
         self._owns_http = http is None
         self._http = http or HttpClient(
-            timeout=self._retry.timeout, proxy=proxy, retry=self._retry
+            timeout=self._retry.timeout,
+            proxy=proxy,
+            retry=self._retry,
+            rate_limiter=rate_limiter,
         )
 
     def close(self) -> None:

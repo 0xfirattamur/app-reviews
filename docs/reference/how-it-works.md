@@ -19,7 +19,8 @@ below, so there is exactly one page-walk implementation:
    fact is recorded; providers do not also answer it. See
    [Source capabilities](capabilities.md).
 2. **Walk each country's pages.** One request per page, following the
-   provider's opaque cursor.
+   provider's opaque cursor. An App Store RSS page whose JSON came back empty
+   or unreadable costs a second request, to the same page's XML feed.
 3. **Stop.** On an exhausted cursor, on `limit`, on a page older than `since`,
    on a cursor the source repeated (`"cycle"`), on a run of review-less pages from
    a source still issuing cursors (`"stalled"`), on the page ceiling
@@ -83,9 +84,14 @@ country handling, history depth) are captured as data in
 
 ### Apple App Store: RSS Feed (Scraper)
 
-Public JSON feed. No authentication.
+Public JSON feed, with its XML (Atom) twin as a fallback. No authentication.
 
 **Endpoint:** `https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/page={page}/json`
+
+**Fallback:** the same URL ending in `/xml`, asked when the JSON page answers
+200 with no entries or an unreadable body. Its entries are used if it has any,
+and `feed_format` on the page and the country's outcome says so. See
+[FeedFormat](models.md#feedformat).
 
 - Up to 50 reviews per page, paginates through all available pages.
 - Returns: review ID, rating, title, body, author, app version, timestamps.
@@ -101,6 +107,18 @@ Authenticated REST API for app developers.
 - Signs a JWT using your `.p8` private key (ES256).
 - You can only access reviews for apps you own.
 - Requires Apple Developer Program membership ($99/year).
+
+### Apple App Store: Product Page (Version History)
+
+The public web page `AppStoreSearch.version_history()` reads. No authentication.
+
+**Endpoint:** `https://apps.apple.com/{country}/app/id{app_id}`
+
+- Parses the JSON the page embeds for browsers (`serialized-server-data`).
+- Returns: version, release timestamp, and "What's New" text for the versions
+  the page lists.
+- **Scraped, best-effort, App Store only**: can break whenever Apple changes the
+  page. An official source from App Store Connect is planned for 1.2.0.
 
 ### Google Play: Web Scraper
 
@@ -191,15 +209,24 @@ for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
 - **Proxy support** via constructor parameter. Pass your own pool with
   `http=HttpClient(...)` to share one between clients or to set a custom
   transport.
+- **Shared rate limit.** Pass one `RateLimiter` as `rate_limiter=` to every
+  client that talks to a store. Each attempt, retries included, takes a token,
+  and a 429 or a 403 from a credential-free request pauses every holder. Any
+  `RequestLimiter` works in its place: `HttpClient` calls `acquire()` or
+  `aacquire()` before each attempt and `record(status, retry_after)` after each
+  response. See
+  [Sharing a rate limit](../guide/python-api.md#sharing-a-rate-limit-across-fetches).
 - **Classified errors, one vocabulary.** A failed exchange (a bad status, a
   transport failure, or a malformed response body) is classified into an
   `ErrorKind` (`rate_limited`, `auth`, `not_found`, `request`, `server`,
   `transport`, `parse`), so callers branch on `kind` instead of parsing
   exception text. A completed permanent 4xx rejection maps to `request` and
   `RequestError`; it is not retryable. A 401/403 maps to `auth` only when an
-  official endpoint received credentials. Credential-free public RSS, web,
-  search, and lookup endpoints have no credentials to repair, so their 401/403
-  maps to `request` instead. Delivery depends on the layer:
+  official endpoint received credentials. Credential-free public web, search,
+  and lookup endpoints have no credentials to repair, so their 401/403 maps to
+  `request` instead. The App Store RSS feed is the exception: it answers 403
+  while it throttles an address, so its 403 is a retryable `rate_limited`.
+  Delivery depends on the layer:
   `fetch`/`iter_pages` walk many pages
   across many countries where partial success is normal, so they report a
   `FetchError` as data; `search`/`lookup` are single requests with a single

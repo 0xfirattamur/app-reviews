@@ -8,7 +8,7 @@ from email.utils import parsedate_to_datetime
 
 from app_reviews.models.config import RetryConfig
 
-__all__ = ["RetryPolicy"]
+__all__ = ["RetryPolicy", "retry_after_seconds"]
 
 
 class RetryPolicy:
@@ -38,40 +38,41 @@ class RetryPolicy:
         Both paths are capped at ``max_backoff``, so neither an outsized header nor
         a high ``max_retries`` can park a request for hours.
         """
-        asked = self._retry_after_seconds(retry_after)
+        asked = retry_after_seconds(retry_after)
         if asked is not None:
             return min(asked, self._config.max_backoff)
         return float(
             min(self._config.backoff_factor * (2**attempt), self._config.max_backoff)
         )
 
-    def _retry_after_seconds(self, value: str | None) -> float | None:
-        """``Retry-After`` as seconds from now, or None if it is unusable.
 
-        RFC 9110 allows either a delay in seconds or an HTTP date. Stores send
-        seconds; the date form is accepted because it costs one stdlib call. A
-        value already in the past, in either form, means "now".
+def retry_after_seconds(value: str | None) -> float | None:
+    """``Retry-After`` as seconds from now, or None if it is unusable.
 
-        NaN is rejected rather than clamped. It parses as a float, so it used to
-        reach the clamp, where every comparison against it is False, making
-        ``max(0.0, nan)`` return ``0.0`` and a throttled client retry with no
-        backoff at all. Unlike ``-10`` it names no instant, so "unusable" is the
-        honest reading and the exponential schedule applies. ``inf`` does name an
-        instant and stays: ``get_delay`` caps it, and for a 429 the safe error is
-        waiting too long.
-        """
-        if value is None or not (text := value.strip()):
-            return None
-        try:
-            seconds = float(text)
-        except ValueError:
-            pass
-        else:
-            return None if math.isnan(seconds) else max(0.0, seconds)
-        try:
-            when = parsedate_to_datetime(text)
-        except (IndexError, TypeError, ValueError):
-            return None
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=UTC)
-        return max(0.0, (when - datetime.now(tz=UTC)).total_seconds())
+    RFC 9110 allows either a delay in seconds or an HTTP date. Stores send
+    seconds; the date form is accepted because it costs one stdlib call. A
+    value already in the past, in either form, means "now".
+
+    NaN is rejected rather than clamped. It parses as a float, so it used to
+    reach the clamp, where every comparison against it is False, making
+    ``max(0.0, nan)`` return ``0.0`` and a throttled client retry with no
+    backoff at all. Unlike ``-10`` it names no instant, so "unusable" is the
+    honest reading and the exponential schedule applies. ``inf`` does name an
+    instant and stays: callers cap it, and for a 429 the safe error is waiting
+    too long.
+    """
+    if value is None or not (text := value.strip()):
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        pass
+    else:
+        return None if math.isnan(seconds) else max(0.0, seconds)
+    try:
+        when = parsedate_to_datetime(text)
+    except (IndexError, TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(tz=UTC)).total_seconds())

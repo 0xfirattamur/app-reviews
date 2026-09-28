@@ -144,6 +144,32 @@ print([app.name for app in ios_apps + android_apps])
 ```
 
 Search returns `list[AppMetadata]`; lookup returns `AppMetadata | None`.
+`AppMetadata.release_notes` carries the current version's "What's New" text: on
+every App Store result, and from Google Play `lookup()`.
+
+### App Store version history
+
+The iTunes APIs report only the current version. `version_history()` reads the
+"Version History" from the public App Store product page instead, newest first:
+
+```python
+from app_reviews import AppStoreSearch
+
+with AppStoreSearch() as apple:
+    for entry in apple.version_history("324684580"):
+        print(entry.version, entry.released_at.isoformat(), entry.release_notes)
+```
+
+Each `AppVersionEntry` has `version`, `released_at` (timezone-aware UTC), and
+`release_notes`. It takes the numeric app ID and goes through the client's
+`proxy=`, `retry=`, and `rate_limiter=` settings. An app the store does not
+have, or a page with no history, returns `[]`; a history that cannot be read
+raises `ParseError`. `aversion_history()` is the async twin.
+
+> **Scraped source.** `version_history()` reads the public product page, not an
+> API. It is best-effort and App Store only, and it may break when Apple
+> changes the page. An official source from App Store Connect is planned for
+> 1.2.0.
 
 ## Results and errors
 
@@ -170,6 +196,11 @@ for error in result.errors:
 such as `limit`, `since`, and `max_pages` mean the client stopped while more data
 may exist. Malformed records that can be isolated are counted as
 `skipped_reviews`; malformed page envelopes are parse errors.
+
+Apple's RSS JSON feed sometimes answers with no entries while its XML feed for
+the same page has them. The package then reads the XML feed, through the same
+client and settings, and records it: `outcome.feed_format` is `"xml"` (else
+`"json"`, and `None` for other sources). Both empty is a normal `"exhausted"`.
 
 `fetch()` retains partial failures as data. Search and lookup are single-request
 operations and raise typed exceptions such as `RateLimitError`, `RequestError`,
@@ -259,6 +290,48 @@ asyncio.run(main())
 
 For Apple RSS, multi-country `fetch()` caps default fan-out at eight workers.
 Pass `concurrency=` to choose a smaller or larger explicit limit.
+
+## Sharing a rate limit across fetches
+
+`concurrency=` paces one fetch. When one process fetches many apps, pass the same
+`RateLimiter` to every client instead, so they share one request budget. It is
+thread-safe and asyncio-safe, and every attempt, retries included, takes a token.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+from app_reviews import AppStoreReviews, RateLimiter
+
+limiter = RateLimiter(rate=2.0, burst=4)  # two requests per second, bursts of four
+
+
+def fetch(app_id: str):
+    with AppStoreReviews(rate_limiter=limiter) as client:
+        result = client.fetch(app_id, countries=["us", "gb", "de"], max_pages=2)
+    throttled = [error.country for error in result.errors if error.kind == "rate_limited"]
+    return result, throttled
+
+
+with ThreadPoolExecutor(max_workers=16) as pool:
+    results = list(pool.map(fetch, ["324684580", "310633997"]))
+```
+
+When a store throttles (HTTP 429, or the HTTP 403 Apple's RSS feed answers while
+it blocks an address), the limiter pauses every client sharing it: for the
+server's `Retry-After` if it sent one, else 30 seconds, doubling on each
+consecutive throttled answer up to 15 minutes. A successful answer resets the
+doubling. Tune it with `RateLimiter(rate, burst, initial_penalty=30.0,
+max_penalty=900.0)`, or pause it yourself with `limiter.penalize(seconds)`.
+
+Any object with `acquire()`, `aacquire()`, and `record(status, retry_after)`
+satisfies the `RequestLimiter` protocol and can be passed instead, for a budget
+shared across processes. `record` runs once per response.
+
+Throttled storefronts fail alone: other countries keep their reviews, and each
+throttled country carries `FetchError(kind="rate_limited", retryable=True)` in
+its `CountryOutcome`. The package does not retry those 403s itself, because
+requests made during a block extend it; fetch the throttled countries again
+later through the same limiter.
 
 ## Official APIs
 

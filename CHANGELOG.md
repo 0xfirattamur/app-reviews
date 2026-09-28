@@ -4,6 +4,71 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## [1.1.0] - 2026-09-28
+
+A shared rate limit for processes that fetch many apps from one address, App
+Store release history with exact dates, and App Store reviews read from the XML
+feed when the JSON feed comes back empty. Backward compatible except for one
+reclassification: an App Store RSS 403 is now a retryable `rate_limited`
+failure instead of `request` (see Changed). The XML fallback also applies
+without opting in. Otherwise, omitting the new parameters keeps 1.0.0 behavior.
+
+### Added
+
+- `RateLimiter(rate, burst=1, *, initial_penalty=30.0, max_penalty=900.0)`, a
+  thread-safe and asyncio-safe token bucket one process can share across every
+  client, thread, and task. `penalize(seconds)` pauses every holder.
+- `rate_limiter=` on `HttpClient`, `AppStoreReviews`, `GooglePlayReviews`,
+  `AppStoreSearch`, and `GooglePlaySearch`. Every attempt, retries included,
+  takes a token. A 429, or a 403 from a credential-free request, pauses the
+  limiter for `Retry-After`, else for 30 seconds doubling per consecutive
+  throttled answer, capped at `max_penalty`; a success resets the doubling.
+  Passing it alongside `http=` raises `TypeError`, like `proxy=` and `retry=`.
+- `RequestLimiter`, the protocol `rate_limiter=` accepts: `acquire()`,
+  `aacquire()`, and `record(status, retry_after)`, which `HttpClient` calls once
+  per response (not for a transport failure, nor for a 403 on a credentialed
+  request). `RateLimiter` implements it; any other object with those methods,
+  such as a limiter shared across processes, can be passed instead.
+- `AppStoreSearch.version_history(app_id, *, country="us")` and
+  `aversion_history()`, returning the app's App Store "Version History" as
+  `list[AppVersionEntry]`, newest first. Read from the public product page
+  through the client's `HttpClient`, so `proxy=`, `retry=`, and `rate_limiter=`
+  apply. An unknown app (HTTP 404) or a page without a history returns `[]`; a
+  history that cannot be read raises `ParseError`. This is a scraped source:
+  best-effort, App Store only, and it may break when Apple changes the page. An
+  official source from App Store Connect is planned for 1.2.0.
+- `AppVersionEntry(version, released_at, release_notes)`, a frozen dataclass
+  exported from `app_reviews`. `released_at` is timezone-aware UTC, and
+  `release_notes` is named like `AppMetadata.release_notes`.
+- `AppMetadata.release_notes`, the current version's "What's New" text: from
+  iTunes `releaseNotes` on every App Store result, and from the Google Play
+  detail page on `lookup()` and the featured search hit. `None` when absent.
+- `PageResult.feed_format` and `CountryOutcome.feed_format` (`"json"`, `"xml"`,
+  or `None`), also in both `to_dict()` envelopes, and the `FeedFormat` type.
+  They say which App Store RSS feed answered; `None` for other sources.
+
+### Fixed
+
+- App Store RSS pages the JSON feed answers 200 with no entries, or with an
+  unreadable body, are asked again from the same page's XML (Atom) feed, and
+  its entries are used when it has any. Duolingo, Spotify, Facebook, and
+  Instagram storefronts have been seen answering an empty JSON page 1 while the
+  XML page held 50 reviews, which 1.0.0 reported as an exhausted storefront.
+  The XML request goes through the same `HttpClient`, so retry, proxy, and rate
+  limiter apply. It is made on page 1, and on a later page unless the previous
+  page was short. Both feeds empty is still a normal `"exhausted"`; an
+  unreadable XML body leaves the JSON answer standing; a failed XML request is
+  reported as the page's `FetchError`.
+
+### Changed
+
+- An App Store RSS 403 is now `FetchError(kind="rate_limited", retryable=True,
+  status=403)` instead of a non-retryable `request` failure. The feed answers
+  403 while it throttles an address. Credentialed endpoints keep 403 as `auth`,
+  and the 403 is not retried inside the package.
+
+See the [v1.1.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.1.0.md).
+
 ## [1.0.0] - 2026-09-22
 
 The first stable API release.
@@ -85,6 +150,7 @@ Corrected initial package behavior and metadata.
 
 Initial release.
 
+[1.1.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.4.0...v0.5.0

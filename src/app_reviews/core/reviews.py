@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import dataclasses
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -23,6 +24,7 @@ from app_reviews.core.paging import (
     with_stop_reason,
 )
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.validation import require_non_negative, require_positive
 from app_reviews.errors import AppReviewsError, AuthError
 from app_reviews.models.config import RetryConfig
@@ -97,8 +99,9 @@ class BaseReviews(PooledClient, abc.ABC):
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
-        super().__init__(proxy=proxy, retry=retry, http=http)
+        super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._cached_provider: ReviewProvider | None = None
 
     @property
@@ -842,13 +845,7 @@ class BaseReviews(PooledClient, abc.ABC):
             return page, qualified
         retained = [review for review in page.reviews if qualifying(review)]
         qualified += len(retained)
-        page = PageResult(
-            reviews=retained,
-            next_cursor=page.next_cursor,
-            error=page.error,
-            stopped_because=page.stopped_because,
-            skipped_reviews=page.skipped_reviews,
-        )
+        page = dataclasses.replace(page, reviews=retained)
         if qualifying_limit is not None and qualified >= qualifying_limit:
             page = with_stop_reason(
                 page, prefer_stop_reason(page.stopped_because, "limit")

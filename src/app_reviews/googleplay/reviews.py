@@ -7,6 +7,7 @@ from collections.abc import Collection
 
 from app_reviews.core.http import HttpClient
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.reviews import BaseReviews
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
@@ -32,8 +33,9 @@ class GooglePlayReviews(BaseReviews):
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
+        rate_limiter: RequestLimiter | None = None,
     ) -> None:
-        super().__init__(proxy=proxy, retry=retry, http=http)
+        super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._auth = auth
 
     def _build_provider(self) -> ReviewProvider:

@@ -28,6 +28,7 @@ from app_reviews.appstore import AppStoreReviews, AppStoreSearch
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.provider import ReviewProvider
+from app_reviews.core.ratelimit import RateLimiter, RequestLimiter
 from app_reviews.errors import (
     AppReviewsError,
     AuthError,
@@ -47,11 +48,18 @@ from app_reviews.models.config import (
     RetryConfig,
 )
 from app_reviews.models.country import Country
-from app_reviews.models.metadata import AppMetadata
+from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
 from app_reviews.models.review import Review
-from app_reviews.models.types import ErrorKind, Sort, Source, StopReason, Store
+from app_reviews.models.types import (
+    ErrorKind,
+    FeedFormat,
+    Sort,
+    Source,
+    StopReason,
+    Store,
+)
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -63,11 +71,13 @@ __all__ = [
     "AppStoreAuth",
     "AppStoreReviews",
     "AppStoreSearch",
+    "AppVersionEntry",
     "AuthError",
     "ConnectCredentials",
     "Country",
     "CountryOutcome",
     "ErrorKind",
+    "FeedFormat",
     "FetchError",
     "FetchResult",
     "GooglePlayAuth",
@@ -80,7 +90,9 @@ __all__ = [
     "PageResult",
     "ParseError",
     "RateLimitError",
+    "RateLimiter",
     "RequestError",
+    "RequestLimiter",
     "RetryConfig",
     "Review",
     "ReviewProvider",

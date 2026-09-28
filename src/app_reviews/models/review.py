@@ -47,6 +47,11 @@ class Review:
     official Play API send JSON objects, while Play's web endpoint sends
     positional arrays. Wrapping the arrays would make ``raw`` stop meaning
     "what the source sent" for that provider.
+
+    The one exception is an App Store RSS review read from the XML feed, when
+    the JSON feed came back empty (``PageResult.feed_format == "xml"``): XML is
+    not JSON, so ``raw`` is its ``<entry>`` in the JSON feed's shape, with
+    ``{"label": ...}`` values under the same keys.
     """
 
     def __post_init__(self) -> None:

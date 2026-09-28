@@ -40,6 +40,7 @@ def _detail_block(
     version: Any = None,
     released_on: Any = None,
     updated_on: Any = None,
+    release_notes: Any = None,
 ) -> list[Any]:
     """A detail block, as found at ds:5[1][2] and inside a top search result.
 
@@ -49,6 +50,7 @@ def _detail_block(
 
     ``released_on`` and ``updated_on`` are the display dates Play renders as
     "Released on" and "Updated on", verified live at ``[10][0]`` and ``[145][0][0]``.
+    ``release_notes`` is "What's new", verified live at ``[144][1][1]``.
     """
     block: list[Any] = [None] * 146
     block[0] = [name]
@@ -58,6 +60,8 @@ def _detail_block(
         block[10] = [released_on]
     if updated_on is not None:
         block[145] = [[updated_on]]
+    if release_notes is not None:
+        block[144] = [None, [None, release_notes]]
     block[41] = [
         [None, None, f"https://play.google.com/store/apps/details?id={app_id}"]
     ]
@@ -746,3 +750,27 @@ class TestReleaseDates:
         results = _serving(page).search("whatsapp")
 
         assert results[0].first_release_date == datetime(2010, 12, 21, tzinfo=UTC)
+
+
+class TestReleaseNotes:
+    """Play's "What's new" sits in the detail block at ``[144][1][1]`` as HTML."""
+
+    def test_line_breaks_and_entities_become_plain_text(self):
+        app = _serving(
+            _detail_page(release_notes="- Built-in VPN<br>- Tom &amp; Jerry<br/>")
+        ).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.release_notes == "- Built-in VPN\n- Tom & Jerry"
+
+    @pytest.mark.parametrize("bad", [None, "", "  ", [], {}])
+    def test_absent_or_unusable_notes_are_none(self, bad):
+        app = _serving(_detail_page(release_notes=bad)).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.release_notes is None
+
+    def test_a_search_hit_has_none(self):
+        results = _serving(_search_page(groups=[[_entry()]])).search("whatsapp")
+
+        assert [a.release_notes for a in results] == [None]

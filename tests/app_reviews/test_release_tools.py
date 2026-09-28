@@ -6,12 +6,16 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+    "project"
+]["version"]
 
 
 def _run(
@@ -95,7 +99,9 @@ def test_artifact_verifier_rejects_bad_wheels(
                 if damage == "wrong-version" and member.filename.endswith(
                     ".dist-info/METADATA"
                 ):
-                    data = data.replace(b"Version: 1.0.0", b"Version: 9.9.9")
+                    data = data.replace(
+                        f"Version: {VERSION}".encode(), b"Version: 9.9.9"
+                    )
                 output.writestr(member, data)
 
     completed = _run(
@@ -127,7 +133,7 @@ def test_offline_smoke_script_executes_real_wheel(built_dist: Path) -> None:
         "--dist-dir",
         str(built_dist),
         "--expected-version",
-        "1.0.0",
+        VERSION,
     )
 
 

@@ -252,6 +252,7 @@ class TestStructuredSerialization:
             elapsed=0.75,
             skipped_reviews=3,
             error=error,
+            feed_format="json",
         )
 
         assert outcome.to_dict() == {
@@ -262,6 +263,7 @@ class TestStructuredSerialization:
             "stopped_because": "error",
             "elapsed": 0.75,
             "error": error.to_dict(),
+            "feed_format": "json",
         }
 
     def test_fetch_result_is_a_complete_json_safe_envelope(self):

@@ -7,6 +7,7 @@ status table, so the two deliveries of a failure can never classify it different
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from app_reviews.errors import (
@@ -64,16 +65,18 @@ def classify(
     transport_error: str | None = None,
     *,
     credentialed: bool = True,
+    rate_limited_statuses: Collection[int] = (),
 ) -> ErrorKind:
     """The kind of failure an HTTP outcome represents.
 
-    ``status`` is 0 when the exchange never completed, in which case
-    ``transport_error`` holds the exception text. A transport failure always wins
-    over the status. Completed unmapped 4xx responses are permanent ``request``
-    failures. A 401/403 is ``auth`` only for a credentialed endpoint.
+    ``status`` is 0 when the exchange never completed; a transport failure wins
+    over any status. ``rate_limited_statuses`` are statuses an endpoint uses for
+    throttling beyond 429. A 401/403 is ``auth`` only for a credentialed endpoint.
     """
     if transport_error is not None or status == 0:
         return "transport"
+    if status in rate_limited_statuses:
+        return "rate_limited"
     if status in {401, 403} and not credentialed:
         return "request"
     if kind := _STATUS_KINDS.get(status):
@@ -108,6 +111,7 @@ def fetch_error_from_response(
     message: str,
     transport_error: str | None = None,
     credentialed: bool = True,
+    rate_limited_statuses: Collection[int] = (),
 ) -> FetchError:
     """Build a classified FetchError from an HTTP outcome.
 
@@ -115,7 +119,12 @@ def fetch_error_from_response(
     failure, a status description otherwise. A transport failure has ``status=0``,
     so describing it by status alone would report a meaningless ``"HTTP 0"``.
     """
-    kind = classify(status, transport_error, credentialed=credentialed)
+    kind = classify(
+        status,
+        transport_error,
+        credentialed=credentialed,
+        rate_limited_statuses=rate_limited_statuses,
+    )
     return FetchError(
         country=country,
         message=message,

@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 
+from app_reviews.appstore.product_page import parse_version_history
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -20,7 +21,7 @@ from app_reviews.core.search import (
 from app_reviews.core.validation import require_non_negative
 from app_reviews.errors import ParseError
 from app_reviews.models.country import Country, normalise_country
-from app_reviews.models.metadata import AppMetadata
+from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 
 _LOG = logging.getLogger(__name__)
 
@@ -29,10 +30,18 @@ class AppStoreSearch(PooledClient):
     """Search and lookup for App Store apps via the iTunes APIs.
 
     Satisfies ``SearchClient`` structurally; see that Protocol for the contract.
+    ``version_history`` goes beyond it, scraping the public product page.
     """
 
     SEARCH_URL = "https://itunes.apple.com/search"
     LOOKUP_URL = "https://itunes.apple.com/lookup"
+    PRODUCT_PAGE_URL = "https://apps.apple.com/{country}/app/id{app_id}"
+
+    USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+    )
+    """Sent for the product page, which is built for browsers rather than clients."""
 
     def search(
         self,
@@ -94,6 +103,55 @@ class AppStoreSearch(PooledClient):
             self.LOOKUP_URL,
             self._lookup_params(app_id, country),
             self._parse_lookup,
+        )
+
+    def version_history(
+        self,
+        app_id: str,
+        *,
+        country: Country | str = Country.US,
+    ) -> list[AppVersionEntry]:
+        """Every version the App Store lists for an app, newest first.
+
+        ``app_id`` is the numeric trackId, the id ``search()`` and ``lookup()``
+        return. An app the store does not have (HTTP 404) returns ``[]``, as
+        ``lookup()`` returns None, and so does a page with no version history.
+        A history this cannot read raises ``ParseError``.
+
+        Scraped from the public product page, since the iTunes APIs report only
+        the current version: best-effort, and may break when Apple changes it.
+        """
+        return get_and_parse(
+            self._http,
+            self._product_page_url(app_id, country),
+            {},
+            parse_version_history,
+            headers={"User-Agent": self.USER_AGENT},
+        )
+
+    async def aversion_history(
+        self,
+        app_id: str,
+        *,
+        country: Country | str = Country.US,
+    ) -> list[AppVersionEntry]:
+        """Async equivalent of ``version_history``."""
+        return await aget_and_parse(
+            self._http,
+            self._product_page_url(app_id, country),
+            {},
+            parse_version_history,
+            headers={"User-Agent": self.USER_AGENT},
+        )
+
+    def _product_page_url(self, app_id: str, country: Country | str) -> str:
+        """The product page only exists under the numeric trackId."""
+        if not app_id.isdigit():
+            raise ValueError(
+                f"version_history needs a numeric App Store trackId, got {app_id!r}"
+            )
+        return self.PRODUCT_PAGE_URL.format(
+            country=self._storefront(country), app_id=app_id
         )
 
     def _search_params(
@@ -201,4 +259,5 @@ class AppStoreSearch(PooledClient):
                 result.get("currentVersionReleaseDate")
             ),
             first_release_date=scraped_datetime(result.get("releaseDate")),
+            release_notes=scraped_text(result.get("releaseNotes")),
         )

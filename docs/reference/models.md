@@ -40,7 +40,7 @@ from app_reviews import Review
 | `language` | `str` or `None` | `None` | Review language. |
 | `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `fetched_at` | `datetime` or `None` | `None` | When the review was fetched. |
-| `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. |
+| `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. An App Store RSS review read from the XML fallback carries its entry converted to the JSON feed's shape. |
 
 Rows are in field order, which is also the positional-constructor order,
 though `Review` is far easier to get right with keywords.
@@ -182,6 +182,7 @@ from app_reviews import CountryOutcome
 | `error` | `FetchError \| None` | Set if the walk ended on an error. |
 | `elapsed` | `float` | Wall-clock seconds spent on this country. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped during this walk. |
+| `feed_format` | `FeedFormat \| None` | App Store RSS only: `"xml"` if any page of this walk came from the XML fallback, `"json"` if every answered page came from the JSON feed. `None` for other sources, or when no feed answered. See [FeedFormat](#feedformat). |
 
 `CountryOutcome.to_dict()` serializes every field and nests the complete
 `FetchError` dictionary when an error is present.
@@ -207,9 +208,40 @@ from app_reviews import PageResult
 | `error` | `FetchError \| None` | Set if this page failed. |
 | `stopped_because` | `StopReason \| None` | Set only on the final page of an `iter_pages()`/`aiter_pages()` walk. Always `None` on a bare `fetch_page()` call, which has nothing to stop. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped while parsing this page. |
+| `feed_format` | `FeedFormat \| None` | Which App Store RSS feed this page came from: `"json"`, or `"xml"` for the fallback. `None` for other sources and for a failed page. |
 
 `PageResult.to_dict(include_raw=False)` returns a JSON-safe page envelope with
-`reviews`, `skipped_reviews`, `next_cursor`, `error`, and `stopped_because`.
+`reviews`, `skipped_reviews`, `next_cursor`, `error`, `stopped_because`, and
+`feed_format`.
+
+---
+
+## FeedFormat
+
+A `Literal` naming the App Store RSS feed that answered a page:
+`"json"` or `"xml"`. Appears on `PageResult.feed_format` and
+`CountryOutcome.feed_format`.
+
+```python
+from app_reviews import FeedFormat
+```
+
+The package asks the JSON feed first. Apple's JSON feed sometimes answers 200
+with no entries, or with a body that cannot be parsed, while the XML (Atom) feed
+for the same page has the reviews. Such a page is asked again as XML, through
+the same client, so `retry=`, `proxy=`, and `rate_limiter=` apply, and the XML
+entries are used if there are any: `feed_format` is then `"xml"`. Reviews from
+either feed have the same fields; only `raw` differs, since an XML entry is
+converted into the JSON feed's shape.
+
+- The XML request is made on page 1, and on a later page unless the page
+  before it was short of Apple's 50 entries (then an empty page is the feed's
+  real end). A walk resumed from a persisted cursor may cost one XML request at
+  its end.
+- Both feeds empty is a normal `"exhausted"`, with `feed_format="json"`.
+- An unreadable XML body leaves the JSON feed's answer standing. A failed XML
+  request (a 403, 5xx, or transport failure) is reported as the page's
+  `FetchError`, since the empty JSON answer is the one in doubt.
 
 ---
 
@@ -223,7 +255,7 @@ from app_reviews import ErrorKind
 
 | Value | Meaning |
 |-------|---------|
-| `"rate_limited"` | HTTP 429. |
+| `"rate_limited"` | HTTP 429, or HTTP 403 from the App Store RSS feed, which answers 403 while it throttles an address. Retryable. |
 | `"auth"` | HTTP 401 or 403 from a credentialed official API, or credentials that cannot be used. |
 | `"not_found"` | HTTP 404. |
 | `"server"` | HTTP 5xx. |
@@ -232,9 +264,10 @@ from app_reviews import ErrorKind
 | `"parse"` | The response body was malformed, not `json.JSONDecodeError` raised out of the call but a classified error you can inspect. |
 
 On single-request operations, the `"request"` kind is raised as
-`RequestError`. It is nonretryable. A public RSS, web, search, or lookup endpoint
+`RequestError`. It is nonretryable. A public web, search, or lookup endpoint
 has no caller credentials to repair, so its 401/403 is also a request rejection;
-401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint.
+401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint. The
+credential-free App Store RSS feed reports its 403 as `"rate_limited"` instead.
 
 ---
 
@@ -379,6 +412,7 @@ with AppStoreSearch() as client:
 | `url` | `str` | Store page URL. |
 | `current_version_release_date` | `datetime \| None` | When the current version shipped. |
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store. |
+| `release_notes` | `str \| None` | "What's New" text for the current version. |
 
 Text and number fields are non-optional, so a store that does not report one gets
 a stated placeholder rather than `None`. The two dates are the exception: a date
@@ -394,6 +428,7 @@ Measured against the live stores:
 | `version` | yes | when the app publishes one | always `"Varies with device"` |
 | `icon_url` | yes | yes | yes |
 | `current_version_release_date` / `first_release_date` | yes, to the second | yes, to the day | always `None` |
+| `release_notes` | yes | yes, `<br>` as newlines | always `None` |
 
 - **Google Play publishes a version for some apps, not all.** `lookup()` returns
   the real one when the detail page carries it, and `"Varies with device"` when it
@@ -416,6 +451,29 @@ Measured against the live stores:
   as are positive amounts with a missing currency. Apple preserves its
   `formattedPrice` value and uses `"Unknown"` when that value is absent or
   unusable.
+
+---
+
+## AppVersionEntry
+
+One entry of an app's App Store "Version History", returned newest first by
+`AppStoreSearch.version_history()` / `aversion_history()`. The history is
+scraped from the public App Store product page: best-effort, App Store only,
+and liable to break when Apple changes the page. An official source from App
+Store Connect is planned for 1.2.0.
+
+```python
+from app_reviews import AppStoreSearch
+
+with AppStoreSearch() as client:
+    history = client.version_history("324684580")   # list[AppVersionEntry]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | `str` | Version string, such as `"9.1.84"`. |
+| `released_at` | `datetime` | When that version shipped: timezone-aware UTC, to the second. |
+| `release_notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. Same name as `AppMetadata.release_notes`. |
 
 ---
 

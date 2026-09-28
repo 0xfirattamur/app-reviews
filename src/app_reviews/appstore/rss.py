@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
+from xml.etree import ElementTree
 
+from app_reviews.appstore.atom import atom_entries
 from app_reviews.core.classify import fetch_error_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
@@ -15,70 +19,128 @@ from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
-from app_reviews.models.types import Source
+from app_reviews.models.types import FeedFormat, Source
 
 _LOG = logging.getLogger(__name__)
+
+_THROTTLE_STATUSES = frozenset({403})
+"""The feed answers 403 while it throttles an address."""
+
+
+@dataclass(frozen=True, slots=True)
+class _PageRef:
+    """One page of one app's reviews in one storefront."""
+
+    app_id: str
+    country: str
+    page: int
+
+    def next(self) -> _PageRef:
+        return _PageRef(self.app_id, self.country, self.page + 1)
+
+
+class _ShortPageMemory:
+    """Remembers the pages that follow a short page, where empty means the end.
+
+    Thread-safe. Bounded, because a walk abandoned midway never collects its mark.
+    """
+
+    def __init__(self, capacity: int = 4096) -> None:
+        self._capacity = capacity
+        self._pages: set[_PageRef] = set()
+        self._lock = threading.Lock()
+
+    def remember(self, ref: _PageRef) -> None:
+        with self._lock:
+            if len(self._pages) >= self._capacity:
+                self._pages.clear()
+            self._pages.add(ref)
+
+    def take(self, ref: _PageRef) -> bool:
+        """Whether ``ref`` follows a short page; forgets it either way."""
+        with self._lock:
+            if ref in self._pages:
+                self._pages.discard(ref)
+                return True
+            return False
 
 
 class AppStoreScraperProvider(PooledClient):
     """Fetches one page of App Store RSS reviews per call.
 
-    Public JSON feed, no credentials, one request per country.
+    Public feed, no credentials. The JSON feed sometimes answers an empty or
+    unreadable page that the XML feed has in full, so such a page is asked again
+    as XML, unless the page before it was short (an empty page there is the real
+    end). ``PageResult.feed_format`` says which feed answered.
     """
 
     source: Source = "appstore_scraper"
     MAX_PAGES = 10
     """How many pages Apple serves per storefront. Undocumented; measured."""
 
+    PAGE_SIZE = 50
+    """Entries on a full page. Undocumented; measured."""
+
     URL_TEMPLATE = (
         "https://itunes.apple.com/{country}/rss/customerreviews"
         "/id={app_id}/sortBy=mostRecent/page={page}/json"
     )
 
+    XML_URL_TEMPLATE = (
+        "https://itunes.apple.com/{country}/rss/customerreviews"
+        "/id={app_id}/sortBy=mostRecent/page={page}/xml"
+    )
+
     def __init__(self, *, http: HttpClient | None = None) -> None:
         super().__init__(http=http)
+        self._short_pages = _ShortPageMemory()
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one RSS page. ``cursor`` is the page number, None meaning page 1."""
-        page = self._resolve_cursor(cursor, country)
-        if isinstance(page, PageResult):
-            return page
-
-        response = self._http.get(self._url(app_id, country, page))
-        return self._to_page(response, app_id, country, page)
+        ref = self._resolve_cursor(app_id, country, cursor)
+        if isinstance(ref, PageResult):
+            return ref
+        after_short_page = self._short_pages.take(ref)
+        response = self._http.get(self._url(ref, "json"))
+        result = self._json_page(response, ref)
+        if not after_short_page and self._needs_xml(response, result):
+            xml = self._http.get(self._url(ref, "xml"))
+            result = self._xml_page(xml, ref, fallback=result)
+        return self._remembering_short(result, ref)
 
     async def afetch_page(
         self, app_id: str, country: str, cursor: str | None
     ) -> PageResult:
         """Async equivalent of ``fetch_page``."""
-        page = self._resolve_cursor(cursor, country)
-        if isinstance(page, PageResult):
-            return page
+        ref = self._resolve_cursor(app_id, country, cursor)
+        if isinstance(ref, PageResult):
+            return ref
+        after_short_page = self._short_pages.take(ref)
+        response = await self._http.aget(self._url(ref, "json"))
+        result = self._json_page(response, ref)
+        if not after_short_page and self._needs_xml(response, result):
+            xml = await self._http.aget(self._url(ref, "xml"))
+            result = self._xml_page(xml, ref, fallback=result)
+        return self._remembering_short(result, ref)
 
-        response = await self._http.aget(self._url(app_id, country, page))
-        return self._to_page(response, app_id, country, page)
-
-    def _url(self, app_id: str, country: str, page: int) -> str:
-        """The feed URL for one page.
-
-        Both interpolated values land in the path, so both are escaped: left raw,
-        ``..`` segments in either are normalised away by the client and the
-        request quietly goes somewhere else, where an empty feed means nothing.
-        """
-        return self.URL_TEMPLATE.format(
-            country=quote(country, safe=""),
-            app_id=quote(app_id, safe=""),
-            page=page,
+    def _url(self, ref: _PageRef, feed_format: FeedFormat) -> str:
+        """Both ids are escaped: a raw ``..`` would send the request elsewhere."""
+        template = self.URL_TEMPLATE if feed_format == "json" else self.XML_URL_TEMPLATE
+        return template.format(
+            country=quote(ref.country, safe=""),
+            app_id=quote(ref.app_id, safe=""),
+            page=ref.page,
         )
 
-    def _resolve_cursor(self, cursor: str | None, country: str) -> int | PageResult:
+    def _resolve_cursor(
+        self, app_id: str, country: str, cursor: str | None
+    ) -> _PageRef | PageResult:
         """The page to request, or a ``PageResult`` that ends the walk.
 
-        Cursors are persisted verbatim by callers, so an unusable one is reported
-        rather than raised: ``iter_pages`` reports page failures instead.
+        An unusable cursor is reported, not raised, as other page failures are.
         """
         if cursor is None:
-            return 1
+            return _PageRef(app_id, country, 1)
         try:
             page = int(cursor)
         except (TypeError, ValueError):
@@ -93,58 +155,95 @@ class AppStoreScraperProvider(PooledClient):
             )
         if page > self.MAX_PAGES:
             return PageResult()
-        return page
+        return _PageRef(app_id, country, page)
 
-    def _to_page(
-        self, response: HttpResponse, app_id: str, country: str, page: int
-    ) -> PageResult:
-        """Turn one HTTP outcome into a ``PageResult``."""
-        if response.transport_error is not None:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=country,
-                    status=response.status,
-                    message=response.transport_error,
-                    transport_error=response.transport_error,
-                    credentialed=False,
-                )
-            )
-        if not response.ok:
-            message = f"HTTP {response.status} from the App Store RSS feed"
-            if response.status == 403:
-                message += "; access may be blocked or throttled"
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=country,
-                    status=response.status,
-                    message=message,
-                    credentialed=False,
-                )
-            )
-
+    def _json_page(self, response: HttpResponse, ref: _PageRef) -> PageResult:
+        failure = self._failure(response, ref.country)
+        if failure is not None:
+            return failure
         try:
             entries = self._entries(json.loads(response.body))
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
             return PageResult(
                 error=FetchError(
-                    country=country,
+                    country=ref.country,
                     message=f"Malformed App Store RSS response: {exc}",
                     kind="parse",
                     status=response.status,
                 )
             )
+        return self._page_of(entries, ref, "json")
 
-        mapped = (self._review(entry, app_id, country) for entry in entries)
+    def _xml_page(
+        self, response: HttpResponse, ref: _PageRef, *, fallback: PageResult
+    ) -> PageResult:
+        """The XML feed's page, or ``fallback`` when XML has nothing to add.
+
+        A failed XML request fails the page: passing on the doubtful empty JSON
+        page would report the storefront exhausted.
+        """
+        failure = self._failure(response, ref.country)
+        if failure is not None:
+            return failure
+        try:
+            entries = atom_entries(response.body)
+        except (ElementTree.ParseError, ValueError) as exc:
+            _LOG.warning("Unreadable App Store RSS XML for %s: %s", ref, exc)
+            return fallback
+        if not entries and fallback.error is None:
+            return fallback
+        _LOG.info("App Store RSS XML answered %d entries for %s", len(entries), ref)
+        return self._page_of(entries, ref, "xml")
+
+    def _failure(self, response: HttpResponse, country: str) -> PageResult | None:
+        """The failed page for an exchange that got no usable answer, else None."""
+        if response.transport_error is not None:
+            message = response.transport_error
+        elif not response.ok:
+            message = f"HTTP {response.status} from the App Store RSS feed"
+            if response.status in _THROTTLE_STATUSES:
+                message += "; access may be blocked or throttled"
+        else:
+            return None
+        return PageResult(
+            error=fetch_error_from_response(
+                country=country,
+                status=response.status,
+                message=message,
+                transport_error=response.transport_error,
+                credentialed=False,
+                rate_limited_statuses=_THROTTLE_STATUSES,
+            )
+        )
+
+    def _page_of(
+        self, entries: list[Any], ref: _PageRef, feed_format: FeedFormat
+    ) -> PageResult:
+        mapped = (self._review(entry, ref.app_id, ref.country) for entry in entries)
         reviews = [review for review in mapped if review is not None]
-        # Gated on what the feed sent, not on what survived mapping: a page whose
-        # entries all fail still means Apple has more, and reporting no cursor
-        # here would end the walk as "exhausted", meaning no more data.
-        next_cursor = str(page + 1) if entries and page < self.MAX_PAGES else None
+        # Gated on what the feed sent, not on what survived mapping: entries that
+        # all fail to map still mean Apple has more.
+        more = bool(entries) and ref.page < self.MAX_PAGES
         return PageResult(
             reviews=reviews,
-            next_cursor=next_cursor,
+            next_cursor=str(ref.page + 1) if more else None,
             skipped_reviews=len(entries) - len(reviews),
+            feed_format=feed_format,
         )
+
+    def _needs_xml(self, response: HttpResponse, result: PageResult) -> bool:
+        """The JSON feed answered 2xx, but with no entries or an unreadable body."""
+        if not response.ok:
+            return False
+        return result.error is not None or not (
+            result.reviews or result.skipped_reviews
+        )
+
+    def _remembering_short(self, result: PageResult, ref: _PageRef) -> PageResult:
+        entries = len(result.reviews) + result.skipped_reviews
+        if result.next_cursor is not None and entries < self.PAGE_SIZE:
+            self._short_pages.remember(ref.next())
+        return result
 
     def _entries(self, body: Any) -> list[Any]:
         """The feed's entries, always as a list.

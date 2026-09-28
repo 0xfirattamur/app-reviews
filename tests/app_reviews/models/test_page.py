@@ -45,6 +45,7 @@ class TestPageResult:
             next_cursor="next-page",
             error=error,
             stopped_because="error",
+            feed_format="xml",
         )
 
         serialised = page.to_dict()
@@ -55,6 +56,7 @@ class TestPageResult:
             "next_cursor": "next-page",
             "error": error.to_dict(),
             "stopped_because": "error",
+            "feed_format": "xml",
         }
         json.dumps(serialised, allow_nan=False)
 

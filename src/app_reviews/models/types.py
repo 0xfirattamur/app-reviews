@@ -18,6 +18,9 @@ Source = Literal[
     "googleplay_official",
 ]
 
+FeedFormat = Literal["json", "xml"]
+"""Which App Store RSS feed answered: the JSON feed, or its XML (Atom) twin."""
+
 ErrorKind = Literal[
     "rate_limited",  # 429
     "auth",  # 401, 403

@@ -66,6 +66,7 @@ client = AppStoreReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 
@@ -154,6 +155,7 @@ client = GooglePlayReviews(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 
@@ -425,9 +427,79 @@ reviews = AppStoreReviews(http=pool)
 search = AppStoreSearch(http=pool)
 ```
 
-A pool you pass with `http=` already carries its own `proxy` and `retry`, so
-passing either alongside it raises `TypeError` rather than silently ignoring
-what you asked for.
+A pool you pass with `http=` already carries its own `proxy`, `retry` and
+`rate_limiter`, so passing any of them alongside it raises `TypeError` rather
+than silently ignoring what you asked for.
+
+### Sharing a rate limit across fetches
+
+`concurrency=` paces a single fetch. To keep many clients, threads, or tasks
+inside one request budget, give them all the same `RateLimiter`. The search
+clients and `HttpClient` accept `rate_limiter=` too.
+
+```python
+from app_reviews import AppStoreReviews, RateLimiter
+
+limiter = RateLimiter(rate=2.0, burst=4)
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us", "gb", "de"])
+
+retry_later = [e.country for e in result.errors if e.kind == "rate_limited"]
+```
+
+`RateLimiter(rate, burst=1, *, initial_penalty=30.0, max_penalty=900.0)` is a
+token bucket holding at most `burst` tokens and refilling `rate` per second.
+`acquire()` blocks the calling thread and `await aacquire()` sleeps only the
+calling task; both draw from the same bucket. Every attempt, retries included,
+takes one token.
+
+A 429, or a 403 from a request that carried no credential (Apple's RSS feed
+answers 403 while it blocks an address), pauses every holder of the limiter:
+for the server's `Retry-After` if present, else `initial_penalty` seconds,
+doubling on each consecutive throttled answer, both capped at `max_penalty`. A
+successful answer resets the doubling. `limiter.penalize(seconds)` pauses it by
+hand; it only ever extends a pause, never shortens one. The pause is separate
+from `RetryConfig`, whose `max_backoff` still bounds only the waits between
+attempts of one request.
+
+A throttled App Store storefront fails alone with
+`FetchError(kind="rate_limited", retryable=True, status=403)`; the other
+countries keep their reviews. The 403 is not retried inside the package,
+because requests made during a block extend it. Fetch the throttled countries
+again later through the same limiter.
+
+#### Bringing your own limiter
+
+`rate_limiter=` accepts any object with the three methods of the
+`RequestLimiter` protocol, so a budget can live outside the process, in a
+store every worker shares. `RateLimiter` is the default implementation.
+
+```python
+from app_reviews import AppStoreReviews, RequestLimiter
+
+
+class SharedLimiter:
+    def acquire(self) -> None: ...          # block until one request may go
+    async def aacquire(self) -> None: ...   # the same, for async requests
+    def record(self, status: int, retry_after: float | None) -> None: ...
+
+
+limiter: RequestLimiter = SharedLimiter()
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us"])
+```
+
+`acquire()` or `aacquire()` runs before every attempt, retries included.
+`record(status, retry_after)` runs once for each response, with its HTTP status
+and the server's `Retry-After` in seconds (`None` when absent or unreadable;
+never negative). Deciding what counts as throttling is the limiter's job:
+`RateLimiter` pauses on 429 and 403 and resets its doubling on a 2xx. Two
+exceptions keep that decision honest: an attempt that got no response
+(connection failure, timeout) is not recorded, and neither is a 403 on a request
+that carried a credential, which is an authorization refusal. `fetch()` calls
+the limiter from several threads, so all three methods must be thread-safe.
 
 ### Per-country outcomes
 
@@ -447,6 +519,12 @@ value, all of which mean more data may exist: `"limit"` and `"since"` because th
 walk stopped asking, `"cycle"`, `"stalled"` and `"max_pages"` because it gave up on
 a source that would not end, and `"error"`.
 See [Models](../reference/models.md#countryoutcome).
+
+For the App Store RSS feed, `outcome.feed_format` also says which feed
+answered. Apple's JSON feed sometimes answers 200 with no entries while the
+XML feed for the same page has them; the package then reads the XML feed, and
+reports `feed_format="xml"`. See
+[FeedFormat](../reference/models.md#feedformat).
 
 ---
 
@@ -489,6 +567,44 @@ app = client.lookup(
 # returns AppMetadata | None
 ```
 
+#### version_history()
+
+The iTunes APIs report only the current version. `version_history()` reads the
+"Version History" the public App Store product page shows, and returns every
+version it lists, newest first.
+
+!!! warning "Scraped source"
+    `version_history()` parses the data the public product page embeds for
+    browsers; it is not an API. It is best-effort and App Store only, and it
+    may break whenever Apple changes the page. An official source, from App
+    Store Connect, is planned for 1.2.0.
+
+```python
+history = client.version_history(
+    "324684580",         # str: numeric track ID (the /id number in a store URL)
+    country=Country.US,  # Country: storefront (default: US)
+)
+# returns list[AppVersionEntry]
+for entry in history:
+    print(entry.version, entry.released_at.isoformat(), entry.release_notes)
+```
+
+`AppVersionEntry` is a frozen dataclass: `version: str` (for example
+`"9.1.84"`), `released_at: datetime` (timezone-aware UTC, to the second), and
+`release_notes: str | None` (that version's "What's New" text, the same name as
+`AppMetadata.release_notes`). `aversion_history()` is the async twin. The
+request goes through the client's own `HttpClient`, so `proxy=`, `retry=`, and
+`rate_limiter=` apply to it like any other call.
+
+- An app the store does not have (HTTP 404) returns `[]`, the way `lookup()`
+  returns `None`, and so does a page that shows no version history.
+- A page whose history cannot be read raises `ParseError` rather than returning
+  a partial list. Other failures raise the usual `HttpError` subclasses.
+- A bundle ID is rejected with `ValueError`: the product page exists only under
+  the numeric track ID. `lookup(bundle_id).app_id` gives you that ID.
+- The store lists a recent window of versions, not necessarily every release
+  the app ever shipped (25 for Spotify when this was written).
+
 ### GooglePlaySearch
 
 ```python
@@ -524,11 +640,16 @@ Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with the
 | `icon_url` | `str \| None` | App icon image URL |
 | `current_version_release_date` | `datetime \| None` | When the current version shipped |
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store |
+| `release_notes` | `str \| None` | "What's New" text for the current version |
 
 > **Dates:** both are `None` when the store publishes none, because a date has no
 > honest placeholder. Precision differs: the App Store sends a real timestamp,
 > while Google Play publishes only a day, so a Play date is midnight UTC on that
 > day. A Play *search* hit carries neither; use `lookup()`.
+
+> **Release notes:** every App Store result carries them. On Google Play only
+> `lookup()` (and the one featured search hit) does, with Play's `<br>` line
+> breaks turned into newlines. `None` when the store shows none.
 
 > **Note:** Google Play search results may have `"Unknown"` for `name`,
 > `developer` and `category`, and `0` for `rating_count`, because a regular search hit

@@ -7,7 +7,7 @@ from typing import Any
 
 from app_reviews.models.result import FetchError, _validate_non_negative_int
 from app_reviews.models.review import Review
-from app_reviews.models.types import StopReason
+from app_reviews.models.types import FeedFormat, StopReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,10 @@ class PageResult:
     resume a walk later. ``None`` means there are no more pages.
 
     ``stopped_because`` is set only on the last page of a walk.
+
+    ``feed_format`` says which App Store RSS feed answered: ``"json"``, or
+    ``"xml"`` when the JSON feed came back empty or unreadable and its XML twin
+    had the entries. None for other sources, and for a page that failed.
     """
 
     reviews: list[Review] = field(default_factory=list)
@@ -25,6 +29,7 @@ class PageResult:
     error: FetchError | None = None
     stopped_because: StopReason | None = None
     skipped_reviews: int = 0
+    feed_format: FeedFormat | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_int(self.skipped_reviews, "skipped_reviews")
@@ -39,4 +44,5 @@ class PageResult:
             "next_cursor": self.next_cursor,
             "error": self.error.to_dict() if self.error is not None else None,
             "stopped_because": self.stopped_because,
+            "feed_format": self.feed_format,
         }

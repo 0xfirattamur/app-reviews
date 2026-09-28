@@ -61,6 +61,13 @@ class AppMetadata:
     on a review history: no review of this app predates it.
     """
 
+    release_notes: str | None = None
+    """The store's "What's New" text for the version in ``version``, or None.
+
+    Filled on every App Store result. On Play, only ``lookup()`` and the featured
+    search hit carry it, with Play's ``<br>`` line breaks turned into newlines.
+    """
+
     def __post_init__(self) -> None:
         if isinstance(self.rating, float) and not isfinite(self.rating):
             raise ValueError("rating must be finite")
@@ -88,3 +95,17 @@ class AppMetadata:
                 value.isoformat() if isinstance(value, datetime) else value
             )
         return values
+
+
+@dataclass(frozen=True, slots=True)
+class AppVersionEntry:
+    """One published version from an app's store "Version History".
+
+    ``released_at`` is a timezone-aware UTC timestamp. ``release_notes`` is that
+    version's "What's New" text, or None when the store shows none. The name
+    matches ``AppMetadata.release_notes``, the same text for the current version.
+    """
+
+    version: str
+    released_at: datetime
+    release_notes: str | None
