@@ -161,10 +161,15 @@ with AppStoreSearch() as apple:
 ```
 
 Each `AppVersionEntry` has `version`, `released_at` (timezone-aware UTC), and
-`release_notes`. It takes the numeric app ID and goes through the client's `proxy=`,
-`retry=`, and `rate_limiter=` settings. An app the store does not have, or a
-page with no history, returns `[]`; a history that cannot be read raises
-`ParseError`. `aversion_history()` is the async twin.
+`release_notes`. It takes the numeric app ID and goes through the client's
+`proxy=`, `retry=`, and `rate_limiter=` settings. An app the store does not
+have, or a page with no history, returns `[]`; a history that cannot be read
+raises `ParseError`. `aversion_history()` is the async twin.
+
+> **Scraped source.** `version_history()` reads the public product page, not an
+> API. It is best-effort and App Store only, and it may break when Apple
+> changes the page. An official source from App Store Connect is planned for
+> 1.2.0.
 
 ## Results and errors
 

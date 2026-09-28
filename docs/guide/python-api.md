@@ -571,7 +571,13 @@ app = client.lookup(
 
 The iTunes APIs report only the current version. `version_history()` reads the
 "Version History" the public App Store product page shows, and returns every
-version it lists, newest first:
+version it lists, newest first.
+
+!!! warning "Scraped source"
+    `version_history()` parses the data the public product page embeds for
+    browsers; it is not an API. It is best-effort and App Store only, and it
+    may break whenever Apple changes the page. An official source, from App
+    Store Connect, is planned for 1.2.0.
 
 ```python
 history = client.version_history(
@@ -583,11 +589,12 @@ for entry in history:
     print(entry.version, entry.released_at.isoformat(), entry.release_notes)
 ```
 
-`AppVersionEntry` is a frozen dataclass: `version: str` (for example `"9.1.84"`),
-`released_at: datetime` (timezone-aware UTC, to the second), and
-`release_notes: str | None` (that version's "What's New" text). `aversion_history()` is
-the async twin. The request goes through the client's own `HttpClient`, so
-`proxy=`, `retry=`, and `rate_limiter=` apply to it like any other call.
+`AppVersionEntry` is a frozen dataclass: `version: str` (for example
+`"9.1.84"`), `released_at: datetime` (timezone-aware UTC, to the second), and
+`release_notes: str | None` (that version's "What's New" text, the same name as
+`AppMetadata.release_notes`). `aversion_history()` is the async twin. The
+request goes through the client's own `HttpClient`, so `proxy=`, `retry=`, and
+`rate_limiter=` apply to it like any other call.
 
 - An app the store does not have (HTTP 404) returns `[]`, the way `lookup()`
   returns `None`, and so does a page that shows no version history.

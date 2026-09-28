@@ -31,7 +31,7 @@ class AppStoreSearch(PooledClient):
     """Search and lookup for App Store apps via the iTunes APIs.
 
     Satisfies ``SearchClient`` structurally; see that Protocol for the contract.
-    ``version_history`` goes beyond it, reading the public product page.
+    ``version_history`` goes beyond it, scraping the public product page.
     """
 
     SEARCH_URL = "https://itunes.apple.com/search"
@@ -127,10 +127,15 @@ class AppStoreSearch(PooledClient):
         """Every version the App Store lists for an app, newest first.
 
         ``app_id`` is the numeric trackId, the id ``search()`` and ``lookup()``
-        return. Read from the public product page, since the iTunes APIs report
-        only the current version. An app the store does not have (HTTP 404)
-        returns ``[]``, as ``lookup()`` returns None, and so does a page with no
-        version history. A history this cannot read raises ``ParseError``.
+        return. An app the store does not have (HTTP 404) returns ``[]``, as
+        ``lookup()`` returns None, and so does a page with no version history.
+        A history this cannot read raises ``ParseError``.
+
+        This is a scraped source: the iTunes APIs report only the current
+        version, so the history is read from the data the public App Store
+        product page embeds for browsers. It is best-effort, App Store only, and
+        may break whenever Apple changes that page. An official source, from App
+        Store Connect, is planned for 1.2.0.
         """
         return get_and_parse(
             self._http,

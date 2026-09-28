@@ -108,6 +108,18 @@ Authenticated REST API for app developers.
 - You can only access reviews for apps you own.
 - Requires Apple Developer Program membership ($99/year).
 
+### Apple App Store: Product Page (Version History)
+
+The public web page `AppStoreSearch.version_history()` reads. No authentication.
+
+**Endpoint:** `https://apps.apple.com/{country}/app/id{app_id}`
+
+- Parses the JSON the page embeds for browsers (`serialized-server-data`).
+- Returns: version, release timestamp, and "What's New" text for the versions
+  the page lists.
+- **Scraped, best-effort, App Store only**: can break whenever Apple changes the
+  page. An official source from App Store Connect is planned for 1.2.0.
+
 ### Google Play: Web Scraper
 
 Sends requests to Google Play's internal batch endpoint.
