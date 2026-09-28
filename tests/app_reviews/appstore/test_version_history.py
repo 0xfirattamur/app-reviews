@@ -26,11 +26,11 @@ SPOTIFY_NOTES = (
 def _item(
     version: Any = "1.0",
     date: Any = "Fri Sep 18 2026 06:25:38 GMT+0000 (Coordinated Universal Time)",
-    notes: Any = "Notes",
+    release_notes: Any = "Notes",
 ) -> dict[str, Any]:
     return {
         "$kind": "TitledParagraph",
-        "text": notes,
+        "text": release_notes,
         "primarySubtitle": version,
         "secondarySubtitle": date,
     }
@@ -75,7 +75,7 @@ class TestRecordedPage:
         assert history[0] == AppVersionEntry(
             version="9.1.86",
             released_at=datetime(2026, 9, 23, 17, 49, 27, tzinfo=UTC),
-            notes=SPOTIFY_NOTES,
+            release_notes=SPOTIFY_NOTES,
         )
         assert history[1].version == "9.1.84"
         assert history[1].released_at == datetime(2026, 9, 18, 6, 25, 38, tzinfo=UTC)
@@ -163,11 +163,13 @@ class TestEntries:
         assert entry.released_at == datetime(2026, 9, 18, 6, 25, 38, tzinfo=UTC)
         assert entry.released_at.tzinfo is UTC
 
-    @pytest.mark.parametrize("notes", ["", "   ", None, []])
-    def test_missing_notes_are_none(self, notes):
-        (entry,) = _serving(_history(_item(notes=notes))).version_history("1")
+    @pytest.mark.parametrize("release_notes", ["", "   ", None, []])
+    def test_missing_release_notes_are_none(self, release_notes):
+        (entry,) = _serving(
+            _history(_item(release_notes=release_notes))
+        ).version_history("1")
 
-        assert entry.notes is None
+        assert entry.release_notes is None
 
     def test_out_of_order_entries_come_back_newest_first(self):
         page = _history(

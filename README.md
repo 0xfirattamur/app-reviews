@@ -157,11 +157,11 @@ from app_reviews import AppStoreSearch
 
 with AppStoreSearch() as apple:
     for entry in apple.version_history("324684580"):
-        print(entry.version, entry.released_at.isoformat(), entry.notes)
+        print(entry.version, entry.released_at.isoformat(), entry.release_notes)
 ```
 
 Each `AppVersionEntry` has `version`, `released_at` (timezone-aware UTC), and
-`notes`. It takes the numeric app ID and goes through the client's `proxy=`,
+`release_notes`. It takes the numeric app ID and goes through the client's `proxy=`,
 `retry=`, and `rate_limiter=` settings. An app the store does not have, or a
 page with no history, returns `[]`; a history that cannot be read raises
 `ParseError`. `aversion_history()` is the async twin.

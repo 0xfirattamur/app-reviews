@@ -27,7 +27,7 @@ new parameters keeps 1.0.0 behavior.
   through the client's `HttpClient`, so `proxy=`, `retry=`, and `rate_limiter=`
   apply. An unknown app (HTTP 404) or a page without a history returns `[]`; a
   history that cannot be read raises `ParseError`.
-- `AppVersionEntry(version, released_at, notes)`, a frozen dataclass exported
+- `AppVersionEntry(version, released_at, release_notes)`, a frozen dataclass exported
   from `app_reviews`. `released_at` is timezone-aware UTC.
 - `AppMetadata.release_notes`, the current version's "What's New" text: from
   iTunes `releaseNotes` on every App Store result, and from the Google Play

@@ -101,10 +101,11 @@ class AppMetadata:
 class AppVersionEntry:
     """One published version from an app's store "Version History".
 
-    ``released_at`` is a timezone-aware UTC timestamp. ``notes`` is that
-    version's "What's New" text, or None when the store shows none.
+    ``released_at`` is a timezone-aware UTC timestamp. ``release_notes`` is that
+    version's "What's New" text, or None when the store shows none. The name
+    matches ``AppMetadata.release_notes``, the same text for the current version.
     """
 
     version: str
     released_at: datetime
-    notes: str | None
+    release_notes: str | None

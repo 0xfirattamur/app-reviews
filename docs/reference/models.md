@@ -438,7 +438,7 @@ with AppStoreSearch() as client:
 |-------|------|-------------|
 | `version` | `str` | Version string, such as `"9.1.84"`. |
 | `released_at` | `datetime` | When that version shipped: timezone-aware UTC, to the second. |
-| `notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. |
+| `release_notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. Same name as `AppMetadata.release_notes`. |
 
 ---
 

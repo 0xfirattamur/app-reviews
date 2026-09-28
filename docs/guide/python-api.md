@@ -542,12 +542,12 @@ history = client.version_history(
 )
 # returns list[AppVersionEntry]
 for entry in history:
-    print(entry.version, entry.released_at.isoformat(), entry.notes)
+    print(entry.version, entry.released_at.isoformat(), entry.release_notes)
 ```
 
 `AppVersionEntry` is a frozen dataclass: `version: str` (for example `"9.1.84"`),
 `released_at: datetime` (timezone-aware UTC, to the second), and
-`notes: str | None` (that version's "What's New" text). `aversion_history()` is
+`release_notes: str | None` (that version's "What's New" text). `aversion_history()` is
 the async twin. The request goes through the client's own `HttpClient`, so
 `proxy=`, `retry=`, and `rate_limiter=` apply to it like any other call.
 

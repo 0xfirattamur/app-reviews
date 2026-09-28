@@ -366,7 +366,7 @@ class AppStoreSearch(PooledClient):
         return AppVersionEntry(
             version=version,
             released_at=released_at,
-            notes=scraped_text(item.get("text")),
+            release_notes=scraped_text(item.get("text")),
         )
 
     def _released_at(self, text: str | None) -> datetime | None:
