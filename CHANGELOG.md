@@ -8,8 +8,10 @@ recent versions are also kept in
 
 A shared rate limit for processes that fetch many apps from one address, App
 Store release history with exact dates, and App Store reviews read from the XML
-feed when the JSON feed comes back empty. Backward compatible; omitting the new
-parameters keeps 1.0.0 behavior.
+feed when the JSON feed comes back empty. Backward compatible except for one
+reclassification: an App Store RSS 403 is now a retryable `rate_limited`
+failure instead of `request` (see Changed). The XML fallback also applies
+without opting in. Otherwise, omitting the new parameters keeps 1.0.0 behavior.
 
 ### Added
 
