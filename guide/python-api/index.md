@@ -1,0 +1,648 @@
+# Python API
+
+Four main classes: two for reviews, two for search and lookup. All follow the same pattern: create a client, call a method.
+
+`fetch()` is the top of a four-rung ladder (`fetch_page()` -> `iter_pages()` -> `iter_reviews()` -> `fetch()`), and every rung has an async twin. This page covers `fetch()`; see [Paging and cursors](https://0xfirattamur.github.io/app-reviews/guide/paging/index.md) for the lower rungs (including `iter_reviews()`, which streams reviews instead of buffering them), and [Async](https://0xfirattamur.github.io/app-reviews/guide/async/index.md) for the `a`-prefixed equivalents.
+
+Every client owns one HTTP connection pool, so close it when you are done or use it as a context manager. See [Connection pooling](#connection-pooling).
+
+______________________________________________________________________
+
+## Imports
+
+Everything public comes from the top-level package. There is one import path per name:
+
+```
+from app_reviews import AppStoreReviews, Country, Sort, FetchResult, HttpError
+```
+
+That is the whole contract, and it is why the package's internal layout is free to change without breaking you: nothing supported points at a submodule. `app_reviews.models` deliberately re-exports nothing; import the models from the root.
+
+For annotating your own code, the closed vocabularies are exported too:
+
+```
+from app_reviews import ErrorKind, Review, Sort, Source, StopReason, Store
+
+def handle(review: Review, source: Source) -> None: ...
+```
+
+Two submodules are documented and reasonable to reach into:
+
+```
+from app_reviews.appstore import AppStoreScraperProvider, AppStoreOfficialProvider
+from app_reviews.googleplay import GooglePlayScraperProvider, GooglePlayOfficialProvider
+```
+
+`app_reviews.appstore` and `app_reviews.googleplay` each hold one store's five pieces: credentials, its two providers, its reviews client, its search client. Reach in when you want to drive a provider directly, or to pin a source rather than letting the presence of credentials choose it. Both also re-export their two clients, but prefer the root for those.
+
+`app_reviews.core` is the store-agnostic engine: the connection pool, the page walk, the protocols. Internal, and carries no compatibility promise.
+
+______________________________________________________________________
+
+## AppStoreReviews
+
+```
+from app_reviews import AppStoreReviews, AppStoreAuth
+```
+
+### Constructor
+
+```
+client = AppStoreReviews(
+    auth=None,       # AppStoreAuth | None: credentials for App Store Connect API
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+)
+```
+
+Without `auth`, uses the public RSS feed. With `auth`, uses the App Store Connect API.
+
+### fetch()
+
+```
+result = client.fetch(
+    app_id,          # str: App Store ID (numeric)
+    countries=None,  # Collection[Country | str] | None: storefronts (default: ["us"])
+    since=None,      # date | datetime | None: only reviews on or after this date
+    until=None,      # date | datetime | None: only reviews on or before this date
+    ratings=None,    # list[int] | None: filter to specific star ratings
+    sort=Sort.NEWEST,# Sort: sort order
+    limit=None,      # int | None: max reviews to return
+    concurrency=None,# int | None: max countries fetched in parallel (default: 8)
+    max_pages=None,  # int | None: request budget per country (default: 10,000)
+)
+```
+
+`since` also **reduces how many requests are made**, not just what is returned: on a source whose pages arrive newest-first (see [how the sources differ](https://0xfirattamur.github.io/app-reviews/reference/capabilities/#page-order)), the page walk stops as soon as it reaches a page older than `since`. See [How It Works](https://0xfirattamur.github.io/app-reviews/reference/how-it-works/#the-fetch-pipeline).
+
+`limit` bounds the walk too, but only for `sort=Sort.NEWEST` on a newest-first source; with `Sort.OLDEST` or `Sort.RATING` the "best N" are not the first N fetched, so pagination must exhaust before truncating.
+
+### AppStoreAuth
+
+```
+auth = AppStoreAuth(
+    key_id="ABC123DEF4",
+    issuer_id="12345678-1234-1234-1234-123456789012",
+    key_path="/path/to/AuthKey_ABC123DEF4.p8",
+)
+# or, with the PEM text from a secret manager:
+auth = AppStoreAuth(key_id="ABC123DEF4", issuer_id="...", private_key=pem_text)
+```
+
+Pass exactly one of `key_path` and `private_key`. The key never appears in the `repr`.
+
+### Examples
+
+```
+# No auth (public RSS feed)
+from app_reviews import Country
+
+with AppStoreReviews() as client:
+    result = client.fetch("123456789")
+    multi_country = client.fetch(
+        "123456789", countries=[Country.US, Country.GB, Country.DE]
+    )
+
+# With auth
+with AppStoreReviews(
+    auth=AppStoreAuth(
+        key_id="ABC123DEF4",
+        issuer_id="12345678-1234-1234-1234-123456789012",
+        key_path="/path/to/AuthKey.p8",
+    )
+) as client:
+    # App Store Connect is global; reuse one client for account-owned apps.
+    spotify = client.fetch("324684580", limit=100)
+    instagram = client.fetch("389801252", limit=100)
+    twitter = client.fetch("333903271", ratings=[1, 2])
+
+# Filter by date and rating
+from datetime import date
+with AppStoreReviews() as client:
+    result = client.fetch("123456789", ratings=[1, 2], since=date(2025, 1, 1))
+```
+
+______________________________________________________________________
+
+## GooglePlayReviews
+
+```
+from app_reviews import GooglePlayReviews, GooglePlayAuth
+```
+
+### Constructor
+
+```
+client = GooglePlayReviews(
+    auth=None,       # GooglePlayAuth | None: credentials for Developer API
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+)
+```
+
+Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play Developer API.
+
+### fetch()
+
+The filtering, sorting, limit, and request-budget parameters match `AppStoreReviews.fetch()`, and `app_id` is a package name (for example, `"com.example.app"`). An explicit empty or all-blank `countries` collection is a no-op and makes no requests on every review client. Otherwise, Google Play review clients reject any nonblank `country` or `countries` selection before network I/O: the public and official sources expose one global review corpus and no reviewer-country field. Google Play search and metadata continue to accept `country` as a storefront selector.
+
+### GooglePlayAuth
+
+```
+auth = GooglePlayAuth(
+    service_account_path="/path/to/service-account.json",
+)
+# or, with the parsed key JSON from a secret manager:
+auth = GooglePlayAuth(service_account_info=service_account_dict)
+```
+
+Pass exactly one of the two.
+
+### Examples
+
+```
+# No auth
+with GooglePlayReviews() as client:
+    result = client.fetch("com.example.app")
+
+# With auth
+from app_reviews import Sort
+with GooglePlayReviews(
+    auth=GooglePlayAuth(service_account_path="/path/to/service-account.json")
+) as client:
+    result = client.fetch("com.example.app", sort=Sort.NEWEST, limit=100)
+```
+
+______________________________________________________________________
+
+## Replies
+
+`AppStoreReplies` and `GooglePlayReplies` write the developer reply to a review. Both take their store's auth as the first argument, plus the same `proxy=`, `retry=`, `http=`, and `rate_limiter=` keywords as the review clients.
+
+```
+from app_reviews import AppStoreReplies, GooglePlayReplies
+
+with AppStoreReplies(app_store_auth) as apple:
+    current = apple.get_reply("review-id")          # ReviewReply | None
+    reply = apple.reply("review-id", "Thanks!")      # creates or replaces
+    removed = apple.delete_reply("review-id")        # bool
+
+with GooglePlayReplies(play_auth) as play:
+    current = play.get_reply("gp:review-id", package_name="com.example.app")
+    reply = play.reply("gp:review-id", "Thanks!", package_name="com.example.app")
+```
+
+`review_id` is the official API's review id, which is `Review.id` on reviews fetched with `auth=`. Async twins: `areply()`, `aget_reply()`, and (App Store only) `adelete_reply()`. Play has no API to delete a reply.
+
+`ReviewReply` has `review_id`, `reply_id` (Apple's `customerReviewResponses` id; `None` on Play), `text`, `state` (`"pending"` or `"published"`), and `updated_at`. Apple can keep a reply `"pending"` for up to 24 hours; Play replies are `"published"` at once.
+
+Writes are never retried: each is sent once, whatever `retry=` says, because a published reply cannot be taken back. Reads retry as usual.
+
+| Raised                                  | When                                                                   | Published?                   |
+| --------------------------------------- | ---------------------------------------------------------------------- | ---------------------------- |
+| `ReplyOutcomeUnknownError`              | timeout, dropped connection, 5xx, or an unfollowed redirect on a write | unknown: check `get_reply()` |
+| `ReplyRejectedError(reason)`            | a 4xx refusal; `reason` is the store's error code or `http_<status>`   | no                           |
+| `ReplyRejectedError(reason="too_long")` | a Play reply over 350 characters, before sending                       | no                           |
+| `RateLimitError`                        | HTTP 429; `retry_after` is the asked wait in seconds                   | no                           |
+| `AuthError`                             | unusable key, or a 401/403                                             | no                           |
+| `NotFoundError`                         | `get_reply()` or `delete_reply()` for a review the store does not have | no                           |
+
+## AppStoreVersions
+
+```
+from app_reviews import AppStoreVersions
+
+with AppStoreVersions(app_store_auth) as client:
+    versions = client.versions("6741066976")  # list[AppStoreVersion]
+```
+
+Reads the app's `appStoreVersions` from App Store Connect, with each version's `whatsNew` text, newest `created_at` first. `aversions()` is the async twin. An app the key cannot see raises `NotFoundError`; an unreadable page raises `ParseError` rather than returning a partial list.
+
+The official API has no release date. `created_at` is when the version was created in App Store Connect and `earliest_release_date` is the floor of a `SCHEDULED` release; neither is when the version went live. For release dates, use [`version_history()`](#version_history), which reads the public product page. `state` is `appVersionState`: `"READY_FOR_DISTRIBUTION"` means the version is live.
+
+______________________________________________________________________
+
+## Country Enum
+
+`Country` is a `StrEnum`; values are two-letter country codes.
+
+```
+from app_reviews import Country
+
+Country.US   # "us"
+Country.GB   # "gb"
+Country.DE   # "de"
+```
+
+**Region groups:**
+
+| Group                      | Description                  |
+| -------------------------- | ---------------------------- |
+| `Country.ALL`              | All 155 supported countries  |
+| `Country.EUROPE`           | European countries           |
+| `Country.AMERICAS`         | North and South America      |
+| `Country.ASIA_PACIFIC`     | Asia-Pacific region          |
+| `Country.MIDDLE_EAST`      | Middle East and North Africa |
+| `Country.ENGLISH_SPEAKING` | English-speaking countries   |
+
+Each group is a `frozenset[Country]` and can be passed straight to `countries=`, which takes any collection of `Country` or `str`. Plain strings work too: `countries=["us", "gb"]`. Entries are normalised and deduplicated, so `"US"`, `"us"` and `"USA"` name one storefront and are walked once. These selections apply to Apple review storefronts; Google Play review clients reject nonblank country selections because their review corpus is global.
+
+______________________________________________________________________
+
+## Sort Enum
+
+```
+from app_reviews import Sort
+
+Sort.NEWEST   # most recent first (default)
+Sort.OLDEST   # oldest first
+Sort.RATING   # highest rated first
+```
+
+______________________________________________________________________
+
+## Working with Results
+
+### Iterate, count, and check
+
+```
+result = client.fetch("123456789")
+
+for review in result:
+    print(review.title)
+
+print(f"Reviews: {len(result)}")
+
+if result:
+    print("Got reviews!")
+```
+
+### Filter after fetching
+
+```
+from datetime import date
+
+bad_recent = result.filter(ratings=[1, 2], since=date(2025, 1, 1))
+```
+
+### Check errors
+
+```
+if result.errors:
+    for err in result.errors:
+        print(f"Failed: {err.country} ({err.message})")
+```
+
+### Serialise
+
+`to_dict()` gives you the complete JSON-safe result envelope, including errors, outcomes and skipped-record counts. `to_dicts()` is the compatibility helper for review rows only. Provider payloads (`raw`) are left out unless you ask for them:
+
+```
+payload = result.to_dict()                     # reviews + diagnostics
+records = result.to_dicts()                    # review rows only
+records = result.to_dicts(include_raw=True)    # keep the provider payload
+```
+
+From there the standard library does the rest. The package ships no exporters: serialisation is a solved problem and `json`/`csv` do it better than a wrapper would.
+
+```
+import csv, json
+
+json.dumps(result.to_dicts(), indent=2)                      # JSON
+"\n".join(json.dumps(d) for d in result.to_dicts())          # JSONL
+
+rows = result.to_dicts()
+if rows:
+    with open("reviews.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+```
+
+`newline=""` is required when writing CSV; without it, review bodies containing newlines produce broken rows on some platforms.
+
+### Review
+
+`fetch()` returns a `FetchResult` containing `Review` objects, frozen dataclasses with these fields:
+
+| Field         | Type                   | Description                                                                                                                |
+| ------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | `str`                  | Raw identifier assigned by the source ([details](https://0xfirattamur.github.io/app-reviews/reference/models/#review-ids)) |
+| `store`       | `Store`                | `"appstore"` or `"googleplay"`                                                                                             |
+| `app_id`      | `str`                  | Numeric Apple app ID or Google Play package name                                                                           |
+| `country`     | `str \| None`          | Storefront queried. `None` if the source does not report one (e.g. `googleplay_official`, `googleplay_scraper`)            |
+| `rating`      | `int`                  | Star rating (`1`-`5`)                                                                                                      |
+| `title`       | `str \| None`          | Review title. Google Play web has none; the official API may expose a legacy title                                         |
+| `body`        | `str`                  | Review text                                                                                                                |
+| `author_name` | `str`                  | Reviewer display name                                                                                                      |
+| `app_version` | `str \| None`          | App version at time of review                                                                                              |
+| `created_at`  | `datetime \| None`     | When written. `None` on sources that only report a modification time                                                       |
+| `updated_at`  | `datetime \| None`     | Last modified. `None` on sources that only report a creation time                                                          |
+| `source`      | `Source`               | Provider (e.g. `"appstore_scraper"`, `"googleplay_official"`)                                                              |
+| `language`    | `str \| None`          | Review language code                                                                                                       |
+| `fetched_at`  | `datetime \| None`     | When the review was fetched                                                                                                |
+| `raw`         | `dict \| list \| None` | Raw provider payload. Apple and official Play use objects; Play web uses arrays                                            |
+
+### Error handling
+
+`fetch()` does not raise on partial failures. Check `result.errors`: each is a `FetchError` with a typed `kind` (`ErrorKind`) to branch retry policy on, rather than parsing exception text:
+
+```
+result = client.fetch("123456789")
+
+if not result and result.errors:
+    print("All fetches failed:")
+    for err in result.errors:
+        print(f"  {err.country}: {err.message} ({err.kind})")
+elif result.errors:
+    print(f"Got {len(result)} reviews, but some countries failed:")
+    for err in result.errors:
+        if err.retryable:
+            schedule_retry(err)
+        print(f"  {err.country}: {err.message} ({err.kind})")
+```
+
+`fetch()` surfaces errors that older versions swallowed: previously, a page error on a country that had already yielded some reviews was logged and discarded, so a non-empty `result` could still hide a failure. Errors now always reach `result.errors`, so code that treated "got some reviews" as "nothing failed" will start seeing failures it did not see before.
+
+`search()` and `lookup()` **raise** instead: a single request has a single outcome, so there is no partial result to hand back. They raise `HttpError`, which carries the same `kind` and `status` you would have got from a `FetchError`:
+
+```
+from app_reviews import AppStoreSearch, AuthError, HttpError, RateLimitError
+
+with AppStoreSearch() as client:
+    try:
+        apps = client.search("fitness tracker")
+    except RateLimitError as err:
+        back_off(err.status)
+    except AuthError:
+        alert_a_human()
+    except HttpError as err:
+        log(type(err).__name__, err.status)
+```
+
+The exception class carries the classification, so there is no `kind` attribute to read and no `kind=` to pass, so an error cannot be labelled as something it is not. `status` is the HTTP status when the failure came from a response, and `None` when the exchange never produced one.
+
+| exception        | raised when                                                                                    | retry?     |
+| ---------------- | ---------------------------------------------------------------------------------------------- | ---------- |
+| `RateLimitError` | HTTP 429                                                                                       | yes, later |
+| `ServerError`    | HTTP 5xx                                                                                       | yes        |
+| `TransportError` | connection refused, timeout, or an exchange that did not complete                              | yes        |
+| `AuthError`      | credentials rejected, or unusable; 401/403 from an official credentialed endpoint              | **no**     |
+| `RequestError`   | another permanent HTTP 4xx rejection, including 401/403 from a credential-free public endpoint | no         |
+| `NotFoundError`  | HTTP 404                                                                                       | no         |
+| `ParseError`     | a success carrying an unreadable body                                                          | no         |
+
+All except `AuthError` subclass `HttpError`, so `except HttpError` still catches every request-level failure. `AuthError` sits beside it because an unreadable key file is an auth failure with no HTTP in it. Everything subclasses `AppReviewsError`.
+
+On the `fetch` path there is nothing to catch: a walk over many countries reports `FetchError` values in `result.errors` instead, carrying the matching [`ErrorKind`](https://0xfirattamur.github.io/app-reviews/reference/models/#errorkind) as data. One taxonomy, two deliveries: `core.classify` maps a status to both.
+
+______________________________________________________________________
+
+## Connection pooling
+
+Each client owns one `HttpClient`, which holds a single `httpx.Client` / `AsyncClient` for its lifetime. That means a multi-page walk reuses one connection instead of performing a TLS handshake per page, and that the sockets stay open until you close them:
+
+```
+with AppStoreReviews() as client:
+    result = client.fetch("324684580")
+```
+
+`close()` and `aclose()` do the same thing explicitly. A client remains usable afterwards; the next request reopens the pool.
+
+To share one pool across several clients, or to set a custom transport, build it yourself:
+
+```
+from app_reviews import AppStoreReviews, AppStoreSearch, HttpClient, RetryConfig
+
+pool = HttpClient(proxy="http://proxy.example.com:8080", retry=RetryConfig())
+reviews = AppStoreReviews(http=pool)
+search = AppStoreSearch(http=pool)
+```
+
+A pool you pass with `http=` already carries its own `proxy`, `retry` and `rate_limiter`, so passing any of them alongside it raises `TypeError` rather than silently ignoring what you asked for.
+
+### Sharing a rate limit across fetches
+
+`concurrency=` paces a single fetch. To keep many clients, threads, or tasks inside one request budget, give them all the same `RateLimiter`. The search clients and `HttpClient` accept `rate_limiter=` too.
+
+```
+from app_reviews import AppStoreReviews, RateLimiter
+
+limiter = RateLimiter(rate=2.0, burst=4)
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us", "gb", "de"])
+
+retry_later = [e.country for e in result.errors if e.kind == "rate_limited"]
+```
+
+`RateLimiter(rate, burst=1, *, initial_penalty=30.0, max_penalty=900.0)` is a token bucket holding at most `burst` tokens and refilling `rate` per second. `acquire()` blocks the calling thread and `await aacquire()` sleeps only the calling task; both draw from the same bucket. Every attempt, retries included, takes one token.
+
+A 429, or a 403 from a request that carried no credential (Apple's RSS feed answers 403 while it blocks an address), pauses every holder of the limiter: for the server's `Retry-After` if present, else `initial_penalty` seconds, doubling on each consecutive throttled answer, both capped at `max_penalty`. A successful answer resets the doubling. `limiter.penalize(seconds)` pauses it by hand; it only ever extends a pause, never shortens one. The pause is separate from `RetryConfig`, whose `max_backoff` still bounds only the waits between attempts of one request.
+
+A throttled App Store storefront fails alone with `FetchError(kind="rate_limited", retryable=True, status=403)`; the other countries keep their reviews. The 403 is not retried inside the package, because requests made during a block extend it. Fetch the throttled countries again later through the same limiter.
+
+#### Bringing your own limiter
+
+`rate_limiter=` accepts any object with the three methods of the `RequestLimiter` protocol, so a budget can live outside the process, in a store every worker shares. `RateLimiter` is the default implementation.
+
+```
+from app_reviews import AppStoreReviews, RequestLimiter
+
+
+class SharedLimiter:
+    def acquire(self) -> None: ...          # block until one request may go
+    async def aacquire(self) -> None: ...   # the same, for async requests
+    def record(self, status: int, retry_after: float | None) -> None: ...
+
+
+limiter: RequestLimiter = SharedLimiter()
+
+with AppStoreReviews(rate_limiter=limiter) as client:
+    result = client.fetch("324684580", countries=["us"])
+```
+
+`acquire()` or `aacquire()` runs before every attempt, retries included. `record(status, retry_after)` runs once for each response, with its HTTP status and the server's `Retry-After` in seconds (`None` when absent or unreadable; never negative). Deciding what counts as throttling is the limiter's job: `RateLimiter` pauses on 429 and 403 and resets its doubling on a 2xx. Two exceptions keep that decision honest: an attempt that got no response (connection failure, timeout) is not recorded, and neither is a 403 on a request that carried a credential, which is an authorization refusal. `fetch()` calls the limiter from several threads, so all three methods must be thread-safe.
+
+### Per-country outcomes
+
+`result.outcomes` is a `list[CountryOutcome]`, one per requested country (or a single entry with `country=None` for global sources). Each reports how many pages and reviews were fetched, why the walk stopped (`stopped_because`), and how long it took:
+
+```
+for outcome in result.outcomes:
+    print(outcome.country, outcome.pages, outcome.reviews_fetched,
+          outcome.stopped_because)
+```
+
+`stopped_because` distinguishes `"exhausted"` (no more data) from every other value, all of which mean more data may exist: `"limit"` and `"since"` because the walk stopped asking, `"cycle"`, `"stalled"` and `"max_pages"` because it gave up on a source that would not end, and `"error"`. See [Models](https://0xfirattamur.github.io/app-reviews/reference/models/#countryoutcome).
+
+For the App Store RSS feed, `outcome.feed_format` also says which feed answered. Apple's JSON feed sometimes answers 200 with no entries while the XML feed for the same page has them; the package then reads the XML feed, and reports `feed_format="xml"`. See [FeedFormat](https://0xfirattamur.github.io/app-reviews/reference/models/#feedformat).
+
+______________________________________________________________________
+
+## App Search & Lookup
+
+Search for apps by keyword and look up app metadata by ID. No authentication required.
+
+### AppStoreSearch
+
+```
+from app_reviews import AppStoreSearch, Country
+```
+
+```
+client = AppStoreSearch(
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+#### search()
+
+```
+results = client.search(
+    "fitness tracker",       # str: search query
+    country=Country.US,      # Country: store region (default: US)
+    limit=50,                # int: max results (default: 50)
+)
+# returns list[AppMetadata]
+```
+
+#### lookup()
+
+```
+app = client.lookup(
+    "com.whatsapp.WhatsApp", # str: bundle ID
+    country=Country.US,      # Country: store region (default: US)
+)
+# returns AppMetadata | None
+```
+
+#### version_history()
+
+The iTunes APIs report only the current version. `version_history()` reads the "Version History" the public App Store product page shows, and returns every version it lists, newest first.
+
+Scraped source
+
+`version_history()` parses the data the public product page embeds for browsers; it is not an API. It is best-effort and App Store only, and it may break whenever Apple changes the page. [`AppStoreVersions`](#appstoreversions) reads versions from App Store Connect, but that API has no release date, so this stays the source for dates.
+
+```
+history = client.version_history(
+    "324684580",         # str: numeric track ID (the /id number in a store URL)
+    country=Country.US,  # Country: storefront (default: US)
+)
+# returns list[AppVersionEntry]
+for entry in history:
+    print(entry.version, entry.released_at.isoformat(), entry.release_notes)
+```
+
+`AppVersionEntry` is a frozen dataclass: `version: str` (for example `"9.1.84"`), `released_at: datetime` (timezone-aware UTC, to the second), and `release_notes: str | None` (that version's "What's New" text, the same name as `AppMetadata.release_notes`). `aversion_history()` is the async twin. The request goes through the client's own `HttpClient`, so `proxy=`, `retry=`, and `rate_limiter=` apply to it like any other call.
+
+- An app the store does not have (HTTP 404) returns `[]`, the way `lookup()` returns `None`, and so does a page that shows no version history.
+- A page whose history cannot be read raises `ParseError` rather than returning a partial list. Other failures raise the usual `HttpError` subclasses.
+- A bundle ID is rejected with `ValueError`: the product page exists only under the numeric track ID. `lookup(bundle_id).app_id` gives you that ID.
+- The store lists a recent window of versions, not necessarily every release the app ever shipped (25 for Spotify when this was written).
+
+### GooglePlaySearch
+
+```
+from app_reviews import GooglePlaySearch, Country
+```
+
+```
+client = GooglePlaySearch(
+    proxy=None,      # str | None: HTTP proxy URL
+    retry=None,      # RetryConfig | None: retry settings
+    http=None,       # HttpClient | None: supply your own connection pool
+)
+```
+
+Same `search()` and `lookup()` methods as `AppStoreSearch`. For lookup, pass a package name (e.g. `"com.whatsapp"`).
+
+### AppMetadata
+
+Both `search()` and `lookup()` return `AppMetadata`, a frozen dataclass with these fields:
+
+| Field                          | Type               | Description                                                         |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------- |
+| `app_id`                       | `str`              | Numeric track ID for App Store results, or Google Play package name |
+| `store`                        | `Store`            | `"appstore"` or `"googleplay"`                                      |
+| `name`                         | `str`              | App display name                                                    |
+| `developer`                    | `str`              | Developer or publisher name                                         |
+| `category`                     | `str`              | Primary category (e.g. `"Social Networking"`)                       |
+| `price`                        | `str`              | Localized store price, ISO fallback, `"Free"`, or `"Unknown"`       |
+| `version`                      | `str`              | Current version string                                              |
+| `rating`                       | `float`            | Average star rating (`0.0`-`5.0`)                                   |
+| `rating_count`                 | `int`              | Total number of ratings                                             |
+| `url`                          | `str`              | Store page URL                                                      |
+| `icon_url`                     | `str \| None`      | App icon image URL                                                  |
+| `current_version_release_date` | `datetime \| None` | When the current version shipped                                    |
+| `first_release_date`           | `datetime \| None` | When the app first appeared on the store                            |
+| `release_notes`                | `str \| None`      | "What's New" text for the current version                           |
+
+> **Dates:** both are `None` when the store publishes none, because a date has no honest placeholder. Precision differs: the App Store sends a real timestamp, while Google Play publishes only a day, so a Play date is midnight UTC on that day. A Play *search* hit carries neither; use `lookup()`.
+>
+> **Release notes:** every App Store result carries them. On Google Play only `lookup()` (and the one featured search hit) does, with Play's `<br>` line breaks turned into newlines. `None` when the store shows none.
+>
+> **Note:** Google Play search results may have `"Unknown"` for `name`, `developer` and `category`, and `0` for `rating_count`, because a regular search hit carries no count. Google Play `price` prefers the localized display value; absent data or numeric zero becomes `"Free"`, a positive numeric amount plus ISO currency becomes an ISO-formatted fallback, and malformed/non-finite data or a missing currency becomes `"Unknown"`. `version` is always `"Varies with device"`, because a regular search hit carries no version field. Use `lookup()` for a real rating count, and for the real version when the app publishes one.
+
+### Examples
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, Country
+
+# Search App Store
+with AppStoreSearch() as client:
+    results = client.search("weather", country=Country.GB, limit=5)
+    for app in results:
+        print(f"{app.name} by {app.developer} ({app.rating}*)")
+
+# Search Google Play
+with GooglePlaySearch() as client:
+    results = client.search("weather", country=Country.US, limit=5)
+    for app in results:
+        print(f"{app.name}: {app.icon_url}")
+
+# Look up a specific app, then fetch its reviews
+from app_reviews import GooglePlayReviews
+with GooglePlaySearch() as search:
+    app = search.lookup("com.whatsapp")
+if app:
+    with GooglePlayReviews() as reviews_client:
+        reviews = reviews_client.fetch(app.app_id)
+    print(f"{app.name}: {len(reviews)} reviews")
+```
+
+______________________________________________________________________
+
+## Metadata for one app
+
+Use the search client for the store you are asking about:
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, Country
+
+with AppStoreSearch() as apple, GooglePlaySearch() as play:
+    meta = apple.lookup("324684580")                         # None if absent
+    meta = play.lookup("com.whatsapp")
+    german_meta = apple.lookup("324684580", country=Country.DE)
+```
+
+`lookup()` returns `AppMetadata | None`, and `alookup()` is the async twin.
+
+Earlier versions shipped a `lookup_metadata()` helper that guessed the store from the id's shape. It was removed in 0.6.0: the guess was a lowercase reverse-DNS regex, so real Play packages like `com.Slack` and `com.t_mobile.pr.mytmobile` were routed to the App Store and came back as "not found". A caller always knows which store an id came from, and if you genuinely need to route a mixed batch, the test is one line, because App Store ids are numeric:
+
+```
+from app_reviews import AppStoreSearch, GooglePlaySearch, HttpClient
+
+with HttpClient() as pool:                       # one pool for the whole batch
+    apple, play = AppStoreSearch(http=pool), GooglePlaySearch(http=pool)
+    for app_id in app_ids:
+        client = apple if app_id.isdigit() else play
+        meta = client.lookup(app_id)
+```
