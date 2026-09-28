@@ -194,8 +194,9 @@ def raise_for_write_failure(response: HttpResponse, api: str) -> None:
     A write is sent once and never retried (see ``HttpClient.post``), so the
     one question that matters is whether it may have taken effect:
 
-    - no complete answer (``transport_error``) or a 5xx: it may have, so
-      ``ReplyOutcomeUnknownError``;
+    - no complete answer (``transport_error``), a 3xx or a 5xx: it may have, so
+      ``ReplyOutcomeUnknownError``. Writes do not follow redirects, since httpx
+      re-sends the body on a 307/308, so a 3xx arrives here unfollowed;
     - 429: ``RateLimitError`` with the ``retry_after`` the store asked for;
     - 401/403: ``AuthError``, the credential cannot write here;
     - any other 4xx: ``ReplyRejectedError``, refused and not applied, with the
@@ -213,6 +214,13 @@ def raise_for_write_failure(response: HttpResponse, api: str) -> None:
     status = response.status
     code, detail = _store_error(response.body)
     message = f"HTTP {status} from {api}" + (f": {detail}" if detail else "")
+    if 300 <= status < 400:
+        raise ReplyOutcomeUnknownError(
+            f"{message}: the write was redirected, and redirects are not followed "
+            f"for writes because following one re-sends it. Check get_reply() "
+            f"before sending again.",
+            status=status,
+        )
     if status >= 500:
         raise ReplyOutcomeUnknownError(
             f"{message}. The write may or may not have been applied; check "

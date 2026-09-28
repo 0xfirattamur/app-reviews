@@ -133,6 +133,33 @@ class TestReply:
 
         assert len(record.requests) == 1
 
+    @pytest.mark.parametrize("status", [301, 302, 307, 308])
+    def test_a_redirected_write_is_not_followed_and_its_outcome_is_unknown(
+        self, status
+    ):
+        """Following a 307/308 would make httpx send the reply a second time."""
+        record = _Recorder(
+            httpx.Response(status, headers={"Location": f"{_BASE}/elsewhere"}),
+            httpx.Response(201, json=_response_doc()),
+        )
+
+        with pytest.raises(ReplyOutcomeUnknownError) as caught:
+            _replies(record).reply("review-9", "Thanks!")
+
+        assert len(record.requests) == 1
+        assert caught.value.status == status
+
+    async def test_the_async_write_does_not_follow_a_redirect_either(self):
+        record = _Recorder(
+            httpx.Response(307, headers={"Location": f"{_BASE}/elsewhere"}),
+            httpx.Response(201, json=_response_doc()),
+        )
+
+        with pytest.raises(ReplyOutcomeUnknownError):
+            await _replies(record).areply("review-9", "Thanks!")
+
+        assert len(record.requests) == 1
+
     def test_a_429_is_rate_limited_with_the_asked_wait_and_not_retried(self):
         record = _Recorder(httpx.Response(429, headers={"Retry-After": "12"}))
 
@@ -296,6 +323,23 @@ class TestDeleteReply:
 
         with pytest.raises(ReplyOutcomeUnknownError):
             _replies(record).delete_reply("review-9")
+
+        assert [r.method for r in record.requests] == ["GET", "DELETE"]
+
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_a_redirected_delete_is_not_followed(self, asynchronous):
+        record = _Recorder(
+            httpx.Response(200, json=_response_doc()),
+            httpx.Response(307, headers={"Location": f"{_BASE}/elsewhere"}),
+            httpx.Response(204),
+        )
+        replies = _replies(record)
+
+        with pytest.raises(ReplyOutcomeUnknownError):
+            if asynchronous:
+                await replies.adelete_reply("review-9")
+            else:
+                replies.delete_reply("review-9")
 
         assert [r.method for r in record.requests] == ["GET", "DELETE"]
 

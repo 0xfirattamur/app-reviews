@@ -145,6 +145,23 @@ class TestReply:
 
         assert len(api.requests) == 1
 
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_a_redirected_write_is_not_followed(self, asynchronous):
+        """Following a 307/308 would make httpx post the reply a second time."""
+        api = _Api(
+            httpx.Response(307, headers={"Location": f"{_REVIEWS}/elsewhere"}),
+            httpx.Response(200, json=_reply_result()),
+        )
+        replies = _replies(api)
+
+        with pytest.raises(ReplyOutcomeUnknownError):
+            if asynchronous:
+                await replies.areply("gp-1", "Hi", package_name="com.example.app")
+            else:
+                replies.reply("gp-1", "Hi", package_name="com.example.app")
+
+        assert len(api.requests) == 1
+
     def test_a_429_is_rate_limited_with_the_asked_wait(self):
         api = _Api(httpx.Response(429, headers={"Retry-After": "30"}))
 

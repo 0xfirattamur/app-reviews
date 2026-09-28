@@ -223,14 +223,25 @@ class HttpClient:
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
         retryable: bool = True,
     ) -> HttpResponse:
-        """Perform a DELETE on the shared pool. ``retryable`` is as for ``post``."""
+        """Perform a DELETE on the shared pool.
+
+        ``follow_redirects`` and ``retryable`` are as for ``post``: a write that
+        must happen at most once wants both False, since httpx re-sends a DELETE
+        (and a POST, on 307/308) to the redirect target.
+        """
         pool = self._pool()
         return self._execute(
             "DELETE",
             url,
-            send=lambda: pool.stream("DELETE", url, headers=self._headers(headers)),
+            send=lambda: pool.stream(
+                "DELETE",
+                url,
+                headers=self._headers(headers),
+                follow_redirects=follow_redirects,
+            ),
             credentialed=_carries_credential(headers),
             retryable=retryable,
         )
@@ -283,6 +294,7 @@ class HttpClient:
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
         retryable: bool = True,
     ) -> HttpResponse:
         """Async equivalent of ``delete``."""
@@ -290,7 +302,12 @@ class HttpClient:
         return await self._aexecute(
             "DELETE",
             url,
-            send=lambda: pool.stream("DELETE", url, headers=self._headers(headers)),
+            send=lambda: pool.stream(
+                "DELETE",
+                url,
+                headers=self._headers(headers),
+                follow_redirects=follow_redirects,
+            ),
             credentialed=_carries_credential(headers),
             retryable=retryable,
         )

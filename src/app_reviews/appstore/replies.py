@@ -66,6 +66,7 @@ class AppStoreReplies(ConnectAPIClient):
             f"{self.API_BASE}/v1/customerReviewResponses",
             body=self._reply_body(review_id, text),
             headers=self._headers() | _JSON_HEADERS,
+            follow_redirects=False,
             retryable=False,
         )
         return self._written(response, review_id)
@@ -76,6 +77,7 @@ class AppStoreReplies(ConnectAPIClient):
             f"{self.API_BASE}/v1/customerReviewResponses",
             body=self._reply_body(review_id, text),
             headers=await self._aheaders() | _JSON_HEADERS,
+            follow_redirects=False,
             retryable=False,
         )
         return self._written(response, review_id)
@@ -109,6 +111,7 @@ class AppStoreReplies(ConnectAPIClient):
         response = self._http.delete(
             self._delete_url(existing.reply_id),
             headers=self._headers(),
+            follow_redirects=False,
             retryable=False,
         )
         return self._deleted(response)
@@ -121,6 +124,7 @@ class AppStoreReplies(ConnectAPIClient):
         response = await self._http.adelete(
             self._delete_url(existing.reply_id),
             headers=await self._aheaders(),
+            follow_redirects=False,
             retryable=False,
         )
         return self._deleted(response)
