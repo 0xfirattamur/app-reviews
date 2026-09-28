@@ -352,8 +352,79 @@ with AppStoreReviews(auth=auth) as client:
     result = client.fetch("324684580", limit=100, max_pages=3)
 ```
 
+The key can also come from memory, for a secret manager or an environment
+variable: `AppStoreAuth(key_id=..., issuer_id=..., private_key=pem_text)` and
+`GooglePlayAuth(service_account_info=parsed_json)`. Each takes exactly one of its
+two sources, and neither shows the key in its `repr`.
+
 See [authentication](docs/guide/authentication.md) for Google credentials and
 setup details.
+
+### Replying to reviews
+
+`AppStoreReplies` and `GooglePlayReplies` write the public developer reply to a
+review. Both need credentials that are allowed to answer reviews:
+
+| Store | Credential | Permission |
+|---|---|---|
+| App Store | App Store Connect API key | a team key with the **Customer Support** or **Admin** role ([Apple](https://developer.apple.com/help/app-store-connect/monitor-ratings-and-reviews/respond-to-reviews)) |
+| Google Play | Service account invited in Play Console | **Reply to reviews** for the app |
+
+```python
+from app_reviews import AppStoreReplies, GooglePlayAuth, GooglePlayReplies
+
+with AppStoreReplies(auth) as apple:
+    if apple.get_reply(review.id) is None:
+        reply = apple.reply(review.id, "Thanks, fixed in 4.2.")
+        print(reply.state)  # "pending": Apple can take up to 24 hours to show it
+
+play_auth = GooglePlayAuth(service_account_path="/path/to/service-account.json")
+with GooglePlayReplies(play_auth) as play:
+    play.reply("gp:AOqpTO...", "Thanks for the report!", package_name="com.example.app")
+```
+
+`reply()` creates the reply or replaces the existing one and returns a
+`ReviewReply(review_id, reply_id, text, state, updated_at)`. `state` is
+`"pending"` until Apple shows the reply and `"published"` after; Play replies are
+published at once and have no `reply_id`. `get_reply()` returns the current
+`ReviewReply` or `None`. `AppStoreReplies.delete_reply()` removes a reply and
+returns whether there was one; Play has no delete API. Each method has an async
+twin: `areply()`, `aget_reply()`, and `adelete_reply()`.
+
+Writes are sent exactly once, whatever `retry=` says, because a public reply
+cannot be taken back. Check `get_reply()` before replying again after any
+failure:
+
+- `ReplyOutcomeUnknownError`: a timeout, dropped connection, or 5xx after the
+  request was sent. The reply may or may not be live.
+- `ReplyRejectedError(reason)`: the store refused it, and nothing was published.
+  A Play reply over 350 characters raises `reason="too_long"` before anything is
+  sent.
+- `RateLimitError`: HTTP 429; `retry_after` is the wait the store asked for.
+- `AuthError`: the key is unusable or lacks the permission.
+
+Reads (`get_reply()`) follow the normal retry policy.
+
+### App Store versions from App Store Connect
+
+`AppStoreVersions(auth).versions(app_id)` lists an owned app's versions from the
+official API, newest `created_at` first, each with its "What's New" text per
+locale:
+
+```python
+from app_reviews import AppStoreVersions
+
+with AppStoreVersions(auth) as client:
+    for version in client.versions("6741066976"):
+        print(version.version, version.state, version.release_notes.get("en-US"))
+```
+
+The official API has no release date. `AppStoreVersion.created_at` is when the
+version was created in App Store Connect, and `earliest_release_date` is only the
+earliest moment a scheduled release may go out. For the dates versions reached
+the store, `AppStoreSearch.version_history()` (scraped from the product page)
+remains the source. `state` is Apple's `appVersionState`, which tells whether a
+version is live: `"READY_FOR_DISTRIBUTION"` once it is on the store.
 
 ## Limits worth knowing
 

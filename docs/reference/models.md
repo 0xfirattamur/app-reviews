@@ -477,6 +477,47 @@ with AppStoreSearch() as client:
 
 ---
 
+## AppStoreVersion
+
+One version of an app as App Store Connect records it, returned newest
+`created_at` first by `AppStoreVersions(auth).versions()` / `aversions()`.
+
+The official API has no release date. For when versions reached the store, use
+[`AppVersionEntry`](#appversionentry) from `version_history()`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version_id` | `str` | The `appStoreVersions` resource id. |
+| `version` | `str` | `versionString`, such as `"4.0.1"`. |
+| `platform` | `str` | `"IOS"`, `"MAC_OS"`, `"TV_OS"`, or `"VISION_OS"`. |
+| `state` | `str \| None` | `appVersionState`; `"READY_FOR_DISTRIBUTION"` means live. |
+| `release_type` | `str \| None` | `"MANUAL"`, `"AFTER_APPROVAL"`, or `"SCHEDULED"`. |
+| `created_at` | `datetime \| None` | `createdDate`: when the version was created in App Store Connect, not when it shipped. |
+| `earliest_release_date` | `datetime \| None` | `earliestReleaseDate`: the earliest moment a `SCHEDULED` release may go out. |
+| `release_notes` | `dict[str, str]` | `whatsNew` per locale, such as `{"en-US": "..."}`; locales without text are omitted. |
+
+---
+
+## ReviewReply
+
+The developer reply to one review, returned by `AppStoreReplies` and
+`GooglePlayReplies`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `review_id` | `str` | The review replied to. |
+| `reply_id` | `str \| None` | Apple's `customerReviewResponses` id; `None` on Google Play, which has none. |
+| `text` | `str` | The reply text as the store holds it. |
+| `state` | `ReplyState` | `"pending"` until Apple shows it (up to 24 hours), then `"published"`. Always `"published"` on Play. |
+| `updated_at` | `datetime \| None` | When the reply was last written, timezone-aware. |
+
+Reply errors: `ReplyRejectedError(reason)` subclasses `RequestError` and means
+nothing was published. `ReplyOutcomeUnknownError` subclasses `HttpError` and
+means a write may or may not have taken effect. `RateLimitError.retry_after` is
+the wait the store asked for, in seconds, or `None`.
+
+---
+
 ## Type Aliases
 
 ```python
@@ -487,5 +528,6 @@ from app_reviews.models.types import Store, Source
 |------|--------|
 | `Store` | `"appstore"`, `"googleplay"` |
 | `Source` | `"appstore_scraper"`, `"appstore_official"`, `"googleplay_scraper"`, `"googleplay_official"` |
+| `ReplyState` | `"published"`, `"pending"` |
 
 ---

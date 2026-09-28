@@ -106,7 +106,12 @@ auth = AppStoreAuth(
     issuer_id="12345678-1234-1234-1234-123456789012",
     key_path="/path/to/AuthKey_ABC123DEF4.p8",
 )
+# or, with the PEM text from a secret manager:
+auth = AppStoreAuth(key_id="ABC123DEF4", issuer_id="...", private_key=pem_text)
 ```
+
+Pass exactly one of `key_path` and `private_key`. The key never appears in the
+`repr`.
 
 ### Examples
 
@@ -178,7 +183,11 @@ accept `country` as a storefront selector.
 auth = GooglePlayAuth(
     service_account_path="/path/to/service-account.json",
 )
+# or, with the parsed key JSON from a secret manager:
+auth = GooglePlayAuth(service_account_info=service_account_dict)
 ```
+
+Pass exactly one of the two.
 
 ### Examples
 
@@ -194,6 +203,69 @@ with GooglePlayReviews(
 ) as client:
     result = client.fetch("com.example.app", sort=Sort.NEWEST, limit=100)
 ```
+
+---
+
+## Replies
+
+`AppStoreReplies` and `GooglePlayReplies` write the developer reply to a review.
+Both take their store's auth as the first argument, plus the same `proxy=`,
+`retry=`, `http=`, and `rate_limiter=` keywords as the review clients.
+
+```python
+from app_reviews import AppStoreReplies, GooglePlayReplies
+
+with AppStoreReplies(app_store_auth) as apple:
+    current = apple.get_reply("review-id")          # ReviewReply | None
+    reply = apple.reply("review-id", "Thanks!")      # creates or replaces
+    removed = apple.delete_reply("review-id")        # bool
+
+with GooglePlayReplies(play_auth) as play:
+    current = play.get_reply("gp:review-id", package_name="com.example.app")
+    reply = play.reply("gp:review-id", "Thanks!", package_name="com.example.app")
+```
+
+`review_id` is the official API's review id, which is `Review.id` on reviews
+fetched with `auth=`. Async twins: `areply()`, `aget_reply()`, and (App Store
+only) `adelete_reply()`. Play has no API to delete a reply.
+
+`ReviewReply` has `review_id`, `reply_id` (Apple's `customerReviewResponses` id;
+`None` on Play), `text`, `state` (`"pending"` or `"published"`), and `updated_at`.
+Apple can keep a reply `"pending"` for up to 24 hours; Play replies are
+`"published"` at once.
+
+Writes are never retried: each is sent once, whatever `retry=` says, because a
+published reply cannot be taken back. Reads retry as usual.
+
+| Raised | When | Published? |
+|---|---|---|
+| `ReplyOutcomeUnknownError` | timeout, dropped connection, or 5xx on a write | unknown: check `get_reply()` |
+| `ReplyRejectedError(reason)` | a 4xx refusal; `reason` is the store's error code or `http_<status>` | no |
+| `ReplyRejectedError(reason="too_long")` | a Play reply over 350 characters, before sending | no |
+| `RateLimitError` | HTTP 429; `retry_after` is the asked wait in seconds | no |
+| `AuthError` | unusable key, or a 401/403 | no |
+| `NotFoundError` | `get_reply()` or `delete_reply()` for a review the store does not have | no |
+
+## AppStoreVersions
+
+```python
+from app_reviews import AppStoreVersions
+
+with AppStoreVersions(app_store_auth) as client:
+    versions = client.versions("6741066976")  # list[AppStoreVersion]
+```
+
+Reads the app's `appStoreVersions` from App Store Connect, with each version's
+`whatsNew` text, newest `created_at` first. `aversions()` is the async twin. An
+app the key cannot see raises `NotFoundError`; an unreadable page raises
+`ParseError` rather than returning a partial list.
+
+The official API has no release date. `created_at` is when the version was
+created in App Store Connect and `earliest_release_date` is the floor of a
+`SCHEDULED` release; neither is when the version went live. For release dates,
+use [`version_history()`](#version_history), which reads the public product page.
+`state` is `appVersionState`: `"READY_FOR_DISTRIBUTION"` means the version is
+live.
 
 ---
 

@@ -71,6 +71,31 @@ with AppStoreReviews(
     result = client.fetch("324684580", limit=100, max_pages=3)
 ```
 
+**Keys held in memory**
+
+To load the key from a secret manager or an environment variable instead of a
+file, pass its PEM text as `private_key`. Pass exactly one of `key_path` and
+`private_key`; the PEM is left out of `repr` and out of validation errors.
+
+```python
+import os
+
+from app_reviews import AppStoreAuth
+
+auth = AppStoreAuth(
+    key_id="ABC123DEF4",
+    issuer_id="12345678-1234-1234-1234-123456789012",
+    private_key=os.environ["ASC_PRIVATE_KEY"],
+)
+```
+
+**Replying to reviews**
+
+`AppStoreReplies` needs a key whose role may answer reviews: **Customer Support**
+or **Admin** (see Apple's
+[Respond to reviews](https://developer.apple.com/help/app-store-connect/monitor-ratings-and-reviews/respond-to-reviews)).
+`AppStoreVersions` needs a key that can read the app's App Store versions.
+
 ### No Auth (Public RSS Feed)
 
 If you do not provide `auth`, the client automatically uses the public RSS feed:
@@ -146,6 +171,28 @@ with GooglePlayReviews(
     # Play reviews are global; reviewer country is not reported.
     result = client.fetch("com.spotify.music", limit=100, max_pages=3)
 ```
+
+**Keys held in memory**
+
+To load the key from a secret manager instead of a file, pass the parsed JSON as
+`service_account_info`. Pass exactly one of `service_account_path` and
+`service_account_info`; the info mapping is left out of `repr`.
+
+```python
+import json
+import os
+
+from app_reviews import GooglePlayAuth
+
+auth = GooglePlayAuth(
+    service_account_info=json.loads(os.environ["PLAY_SERVICE_ACCOUNT_JSON"])
+)
+```
+
+**Replying to reviews**
+
+`GooglePlayReplies` also needs the **Reply to reviews** permission for the app,
+granted to the service account in Play Console under **Users and permissions**.
 
 ### No Auth (Public Web Endpoint)
 
