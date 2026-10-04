@@ -7,6 +7,7 @@ the official review APIs.
 
 [![PyPI](https://img.shields.io/pypi/v/app-reviews.svg)](https://pypi.org/project/app-reviews)
 [![Python](https://img.shields.io/pypi/pyversions/app-reviews.svg)](https://pypi.org/project/app-reviews)
+[![PyPI total downloads](https://img.shields.io/pepy/dt/app-reviews?label=total%20downloads)](https://pepy.tech/project/app-reviews)
 [![CI](https://github.com/0xfirattamur/app-reviews/actions/workflows/ci.yml/badge.svg)](https://github.com/0xfirattamur/app-reviews/actions/workflows/ci.yml)
 [![E2E](https://github.com/0xfirattamur/app-reviews/actions/workflows/scheduled_e2e_test.yml/badge.svg)](https://github.com/0xfirattamur/app-reviews/actions/workflows/scheduled_e2e_test.yml)
 [![License](https://img.shields.io/github/license/0xfirattamur/app-reviews)](LICENSE)
