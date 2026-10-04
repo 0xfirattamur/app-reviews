@@ -16,6 +16,9 @@ thread-pool wrapper.
 | `search()` | `asearch()` |
 | `lookup()` | `alookup()` |
 | `version_history()` | `aversion_history()` |
+| `reply()` / `get_reply()` | `areply()` / `aget_reply()` |
+| `delete_reply()` (App Store) | `adelete_reply()` |
+| `versions()` | `aversions()` |
 | `close()` / `with` | `aclose()` / `async with` |
 
 ```python
@@ -54,10 +57,11 @@ async def stream_reviews(client):
 The sync path is a separate implementation, not a wrapper around the async one,
 so calling `fetch()` from inside a running event loop is safe.
 
-Async credential work stays off the event loop: the Google Play token exchange
-is awaited, and App Store JWT signing, which is blocking local work with no
-async equivalent, runs in a thread. Either way it happens once per client, not
-once per request.
+Async credential work stays off the event loop: key loading and App Store JWT
+signing, which are blocking local work with no async equivalent, run in a thread,
+and the Google Play token exchange is awaited. Either way each client caches its
+token and reuses it until it nears expiry, then signs or exchanges a fresh one;
+it does not authenticate once per request.
 
 ---
 

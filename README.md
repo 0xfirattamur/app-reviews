@@ -44,6 +44,8 @@ if result.errors:
 - Partial failures remain visible through typed errors and per-source outcomes.
 - A complete JSON-safe result envelope for automation.
 - Search and metadata lookup for both stores.
+- Developer replies through both official APIs, with safe single-attempt writes.
+- App Store version history and App Store Connect versions with release notes.
 - Python 3.11+ with `py.typed`; runtime dependencies are `httpx` and
   `cryptography`.
 
@@ -204,9 +206,9 @@ the same page has them. The package then reads the XML feed, through the same
 client and settings, and records it: `outcome.feed_format` is `"xml"` (else
 `"json"`, and `None` for other sources). Both empty is a normal `"exhausted"`.
 
-`fetch()` retains partial failures as data. Search and lookup are single-request
-operations and raise typed exceptions such as `RateLimitError`, `RequestError`,
-`NotFoundError`, and `ParseError`.
+`fetch()` retains partial failures as data. Search and lookup raise typed
+exceptions such as `RateLimitError`, `RequestError`, `NotFoundError`, and
+`ParseError` instead of returning fetch diagnostics.
 
 ## JSON, JSONL, and CSV
 
@@ -295,9 +297,10 @@ Pass `concurrency=` to choose a smaller or larger explicit limit.
 
 ## Sharing a rate limit across fetches
 
-`concurrency=` paces one fetch. When one process fetches many apps, pass the same
-`RateLimiter` to every client instead, so they share one request budget. It is
-thread-safe and asyncio-safe, and every attempt, retries included, takes a token.
+`concurrency=` limits parallel country walks within one fetch. When one process
+fetches many apps, pass the same `RateLimiter` to every client instead, so they
+share one request budget. It is thread-safe and asyncio-safe, and every attempt,
+retries included, takes a token.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
@@ -393,9 +396,9 @@ published at once and have no `reply_id`. `get_reply()` returns the current
 returns whether there was one; Play has no delete API. Each method has an async
 twin: `areply()`, `aget_reply()`, and `adelete_reply()`.
 
-Writes are sent exactly once, whatever `retry=` says, because a public reply
-cannot be taken back. Check `get_reply()` before replying again after any
-failure:
+Each reply write is attempted once, whatever `retry=` says, to avoid blindly
+repeating a write that may already have succeeded. Check `get_reply()` before
+replying again after any failure:
 
 - `ReplyOutcomeUnknownError`: a timeout, dropped connection, 5xx, or redirect
   after the request was sent (writes never follow redirects, which would re-send

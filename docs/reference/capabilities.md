@@ -9,9 +9,11 @@ reference for the differences that change how you call the library.
 
 There is no runtime object to query. A `capabilities()` function used to publish
 these as data and was removed in 0.6.0: of its seven fields the library read two,
-one had the same value for every source, and one described a reply API this
-package never calls. "How do these sources differ" is a question you have while
-*writing* code, so it is answered here, where you are at the time.
+one had the same value for every source, and one described a reply API the
+package did not call at the time (replies are now written by `AppStoreReplies`
+and `GooglePlayReplies`; see [Replies](#replies)). "How do these sources differ"
+is a question you have while *writing* code, so it is answered here, where you
+are at the time.
 
 Which source you get is decided by whether you pass `auth=`:
 
@@ -47,7 +49,7 @@ Only `appstore_scraper` has a country dimension. Its feed URL is per storefront
 storefront's own reviews, and fetching `us` and `gb` gets you two different
 review sets.
 
-App Store Connect is global: one request covers every territory, and reviews
+App Store Connect is global: one walk covers every territory, and reviews
 may carry their own territory. Its high-level client resolves a requested
 storefront fan-out to one global walk.
 
@@ -68,7 +70,7 @@ review corpus per app; `gl`/`hl` select the store's *presentation* locale
 also why `Review.country` is always `None` for this source: there is no
 storefront to attribute a review to.
 
-`appstore_official` is global in the same sense (one request), but each review
+`appstore_official` is global in the same sense (one walk), but each review
 carries its own `territory`, so `Review.country` is set. Apple reports it as ISO
 alpha-3 (`"USA"`); the package normalises to the alpha-2 form `Country` uses
 (`"us"`), and the original stays in `raw["attributes"]["territory"]`.
@@ -131,7 +133,9 @@ off by default because the payload routinely dwarfs the review around it.
 `AppStoreReplies` and `GooglePlayReplies` write the developer reply through each
 store's official API (see the [Python API guide](../guide/python-api.md#replies)).
 Both take the official API's review id, which is `Review.id` on reviews fetched
-with `auth=`; a scraper-sourced id is not one the reply endpoints accept.
+with `auth=`. An `appstore_scraper` id is not one Connect accepts; whether a
+`googleplay_scraper` id works with Play's reply endpoint is untested (see
+[Review IDs](models.md#review-ids)).
 Deleting a reply exists on the App Store only, because Play has no delete API.
 
 ---

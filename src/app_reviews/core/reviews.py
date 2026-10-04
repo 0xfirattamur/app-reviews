@@ -46,7 +46,7 @@ class BaseReviews(PooledClient, abc.ABC):
 
     Four rungs, each built on the one below and mirrored sync/async:
 
-    - ``fetch_page``: one request. Cursor in, cursor out. Persist the cursor
+    - ``fetch_page``: one provider page. Cursor in, cursor out. Persist the cursor
       to resume the walk later, in another process if you like.
     - ``iter_pages``: one country, paginated. Owns the ``since`` early stop.
     - ``iter_reviews``: every country, streamed one review at a time.
@@ -155,7 +155,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """Resolve requested countries to what will actually be fetched.
 
         Returns ``[""]`` for global sources, where the country dimension does
-        not exist and a fan-out would be decorative: one request covers every
+        not exist and a fan-out would be decorative: one global walk covers every
         territory. Keyed off ``core.paging.is_per_country``, which is the
         only home for that fact.
         """
@@ -165,7 +165,7 @@ class BaseReviews(PooledClient, abc.ABC):
             return []
         return self._country_list(self._ensure_provider(), selection)
 
-    # ---- rung 1: one request ------------------------------------------------
+    # ---- rung 1: one provider page ------------------------------------------
 
     def fetch_page(
         self,
@@ -178,8 +178,8 @@ class BaseReviews(PooledClient, abc.ABC):
 
         ``cursor`` is opaque and provider-specific. Persist it verbatim to
         resume later. A returned ``next_cursor`` of None means no more pages.
-        ``stopped_because`` is always None here, because a single request has nothing
-        to stop.
+        ``stopped_because`` is always None here, because no page walk is being
+        performed. Retries and provider fallbacks may make multiple HTTP requests.
         """
         self._validate_country_argument(country)
         provider = self._ensure_provider()
@@ -228,8 +228,8 @@ class BaseReviews(PooledClient, abc.ABC):
         ``stopped_because == "limit"`` means more data exists;
         ``"exhausted"`` means it does not.
 
-        ``max_pages`` is the maximum number of requests in this country walk.
-        Zero performs no I/O; omission uses the client's safety ceiling.
+        ``max_pages`` is the maximum number of provider pages in this country walk,
+        not HTTP attempts. Zero performs no I/O; omission uses the safety ceiling.
         """
         self._validate_country_argument(country)
         require_non_negative(limit, "limit")
@@ -560,7 +560,7 @@ class BaseReviews(PooledClient, abc.ABC):
         ``concurrency`` bounds the cross-country fan-out. Pass 1 to make it
         sequential, for example when you are rate-limiting a source yourself.
         Omission caps the fan-out at eight. ``max_pages`` bounds each country
-        walk so filtered requests have an explicit request budget.
+        walk so filtered fetches have an explicit provider-page budget.
         """
         self._validate_countries_argument(countries)
         require_non_negative(limit, "limit")
@@ -932,6 +932,6 @@ class BaseReviews(PooledClient, abc.ABC):
         return list(dict.fromkeys(country for country in resolved if country))
 
     def _page_budget(self, max_pages: int | None) -> int:
-        """Resolve and validate a per-country page request budget."""
+        """Resolve and validate a per-country provider-page budget."""
         require_non_negative(max_pages, "max_pages")
         return self.MAX_PAGES if max_pages is None else max_pages

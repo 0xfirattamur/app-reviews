@@ -49,8 +49,8 @@ the last seven days.
 
 App Store Connect and Google Play's public web source have no package-imposed
 history window, but upstream availability and throttling still apply. Set
-`limit=` for the number returned and `max_pages=` for the maximum requests per
-source walk.
+`limit=` for the number returned and `max_pages=` for the maximum provider pages
+per source walk. Retries and Apple's XML fallback can make additional HTTP requests.
 
 ## Is fetching App Store and Google Play reviews legal?
 

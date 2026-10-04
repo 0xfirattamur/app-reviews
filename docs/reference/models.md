@@ -34,11 +34,11 @@ from app_reviews import Review
 | `body` | `str` | Required | Review body text. |
 | `author_name` | `str` | Required | Author display name. |
 | `source` | `Source` | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`. |
+| `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `created_at` | `datetime` or `None` | `None` | When the review was posted. `None` where the source reports no creation date. |
 | `updated_at` | `datetime` or `None` | `None` | Last edit time. `None` where the source reports no modification date. |
 | `app_version` | `str` or `None` | `None` | App version reviewed. |
 | `language` | `str` or `None` | `None` | Review language. |
-| `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `fetched_at` | `datetime` or `None` | `None` | When the review was fetched. |
 | `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. An App Store RSS review read from the XML fallback carries its entry converted to the JSON feed's shape. |
 
@@ -52,15 +52,15 @@ though `Review` is far easier to get right with keywords.
 !!! warning "IDs are not comparable across sources"
 
     An `id` is unique within a `(store, source)` pair, but not across sources. The two
-    providers for a given store read genuinely different identifier spaces, so the same
-    real-world review fetched via `googleplay_scraper` and via `googleplay_official`
-    carries two different ids.
+    providers for a given store need not share an identifier space: the same
+    real-world App Store review fetched via `appstore_scraper` and via
+    `appstore_official` carries two different ids.
 
     Key deduplication on `(store, source, id)`, and use `source` to tell provenance apart.
 
 For App Store Connect, `customerReviewResponses` requires a Connect `customerReviews.id`. RSS ids are numeric (`14357217033`) and Connect ids are opaque, and Apple exposes no mapping between them: the `customerReviews` endpoint has no id filter and no legacy-id attribute. So an `appstore_scraper` id cannot be used to reply.
 
-Google Play appears to use one identifier space for both providers, so a `googleplay_scraper` id may be usable with `androidpublisher` `reviews.reply`. This package neither implements replies nor tests that, so treat it as unverified.
+Google Play appears to use one identifier space for both providers, so a `googleplay_scraper` id may be usable with `GooglePlayReplies`, which calls `androidpublisher` `reviews.reply`. That has not been tested, so treat it as unverified and reply with ids from `GooglePlayReviews(auth=...)`.
 
 ---
 
@@ -147,7 +147,7 @@ missing".
 | `app_version` | yes | - | mostly | yes |
 | `language` | - | - | - | yes |
 
-Two things worth planning around:
+Three things worth planning around:
 
 - **The paid API reports less than the free one in places.** App Store Connect
   sends only `body`, `createdDate`, `rating`, `reviewerNickname`, `territory` and
@@ -263,7 +263,7 @@ from app_reviews import ErrorKind
 | `"transport"` | Connection failure or timeout. |
 | `"parse"` | The response body was malformed, not `json.JSONDecodeError` raised out of the call but a classified error you can inspect. |
 
-On single-request operations, the `"request"` kind is raised as
+On search and lookup operations, the `"request"` kind is raised as
 `RequestError`. It is nonretryable. A public web, search, or lookup endpoint
 has no caller credentials to repair, so its 401/403 is also a request rejection;
 401/403 is `"auth"`/`AuthError` only for an official credentialed endpoint. The
@@ -410,6 +410,7 @@ with AppStoreSearch() as client:
 | `rating` | `float` | Average star rating. |
 | `rating_count` | `int` | Total number of ratings. |
 | `url` | `str` | Store page URL. |
+| `icon_url` | `str \| None` | App icon URL, or `None` when the store reports none. |
 | `current_version_release_date` | `datetime \| None` | When the current version shipped. |
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store. |
 | `release_notes` | `str \| None` | "What's New" text for the current version. |

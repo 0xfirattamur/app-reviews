@@ -31,11 +31,11 @@ Go to [App Store Connect](https://appstoreconnect.apple.com/) and sign in with y
 
 **Step 2: Navigate to API Keys**
 
-Go to **Users and Access** in the top menu, then click the **Keys** tab. If you don't see this tab, you may need the Admin or Account Holder role.
+Go to **Users and Access**, select the **Integrations** tab, then **App Store Connect API** in the left column, and make sure the **Team Keys** tab is selected. Generating team keys requires the Admin role (see Apple's [Creating API Keys for App Store Connect API](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api)).
 
 **Step 3: Generate a New Key**
 
-Click the **+** button to create a new API key. Give it a name (like "App Reviews") and select the appropriate access level.
+Click **Generate API Key** or the **+** button to create a new API key. Give it a name (like "App Reviews") and, under **Access**, select the role for the key.
 
 After creating the key, you will see two values on the page:
 
@@ -112,8 +112,9 @@ with AppStoreReviews() as client:
 
 The package uses your `.p8` private key to sign a JWT (JSON Web Token) using the ES256 algorithm. This token is sent as a Bearer token in the `Authorization` header of each request to the App Store Connect API.
 
-Tokens are short-lived. One client signs once and reuses the result until it
-nears expiry, not once per fetch. Your private key never leaves your machine.
+Tokens are short-lived. One client caches its signed token and reuses it until
+it nears expiry, then signs a fresh one; it does not sign once per fetch or per
+request. Your private key never leaves your machine.
 
 ---
 
@@ -135,11 +136,11 @@ Go to [Google Cloud Console](https://console.cloud.google.com/) and select your 
 
 **Step 2: Enable the Google Play Developer API**
 
-Go to **APIs & Services** > **Library**, search for "Google Play Android Developer API", and click **Enable**.
+Open the [Google Play Developer API page](https://console.developers.google.com/apis/api/androidpublisher.googleapis.com/) in Google Cloud Console and click **Enable**.
 
 **Step 3: Create a Service Account**
 
-Go to **APIs & Services** > **Credentials**, click **Create Credentials** > **Service Account**.
+Go to [Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts) and click **Create service account**.
 
 Give it a name (like "app-reviews") and click through the wizard. You do not need to grant it any Google Cloud roles; the permissions come from the Google Play Console side.
 
@@ -149,9 +150,9 @@ After creating the service account, click on it, go to the **Keys** tab, and cli
 
 This downloads a JSON file. Save it somewhere safe, like `~/.google-keys/service-account.json`.
 
-**Step 5: Link to Google Play Console**
+**Step 5: Invite the Service Account in Google Play Console**
 
-Go to the [Google Play Console](https://play.google.com/console/), then **Settings** > **API access**. Find your service account and click **Grant access**. Give it at least **View app information and download bulk reports** permission.
+Go to the [Users and permissions](https://play.google.com/console/users-and-permissions) page in the Google Play Console and click **Invite new users**. Enter the service account's email address, grant it the **Reply to reviews** permission for the app, and click **Invite user**. Google's [Reply to Reviews API](https://developers.google.com/android-publisher/reply-to-reviews) requires that permission for reading reviews as well as replying (see also Google's [Getting Started](https://developers.google.com/android-publisher/getting_started)).
 
 !!! note "Propagation delay"
     After granting access, it can take up to 24 hours for the permissions to take effect.
@@ -191,8 +192,8 @@ auth = GooglePlayAuth(
 
 **Replying to reviews**
 
-`GooglePlayReplies` also needs the **Reply to reviews** permission for the app,
-granted to the service account in Play Console under **Users and permissions**.
+`GooglePlayReplies` uses the same **Reply to reviews** permission granted in
+Step 5.
 
 ### No Auth (Public Web Endpoint)
 
@@ -208,7 +209,10 @@ with GooglePlayReviews() as client:
 
 ### How It Works
 
-The package reads your service account JSON file, extracts the RSA private key, and signs a JWT using the RS256 algorithm. This JWT is exchanged for an OAuth2 access token via Google's token endpoint.
+The package reads your service account JSON file or uses the mapping supplied as
+`service_account_info`, extracts the RSA private key, and signs a JWT using the
+RS256 algorithm. This JWT is exchanged for an OAuth2 access token via Google's
+token endpoint.
 
-The access token is then used as a Bearer token in requests to the Google Play Developer API. One client exchanges once and reuses the token until it nears expiry, not once
-per fetch. Your private key never leaves your machine.
+The access token is then used as a Bearer token in requests to the Google Play Developer API. One client caches the token and reuses it until it nears expiry, then exchanges for a fresh one; it does not exchange once
+per fetch or per request. Your private key never leaves your machine.

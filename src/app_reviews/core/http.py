@@ -108,8 +108,8 @@ class HttpResponse:
 class HttpClient:
     """Owns one connection pool, and is the seam tests inject through.
 
-    Two jobs. Connection reuse: one pool for this client's lifetime, so a ten-page
-    walk costs one TLS handshake rather than ten. And the injection seam:
+    Two jobs. Connection reuse: pooled connections can be reused across pages
+    when the server permits it. And the injection seam:
     ``transport`` is a constructor parameter of the object that actually performs
     the I/O, which is where a test can substitute one.
 

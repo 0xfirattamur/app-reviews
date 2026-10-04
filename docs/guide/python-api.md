@@ -4,7 +4,7 @@ description: Public sync and async app-reviews Python API, result models, errors
 
 # Python API
 
-Four main classes: two for reviews, two for search and lookup. All follow the same pattern: create a client, call a method.
+Seven clients: two for reviews, two for search and lookup, two for replies, and one for App Store versions. All follow the same pattern: create a client, call a method.
 
 `fetch()` is the top of a four-rung ladder (`fetch_page()` -> `iter_pages()` -> `iter_reviews()` -> `fetch()`), and every rung has an async twin. This page covers `fetch()`; see [Paging and cursors](paging.md) for the lower rungs (including `iter_reviews()`, which streams reviews instead of buffering them), and [Async](async.md) for the `a`-prefixed equivalents.
 
@@ -42,10 +42,12 @@ from app_reviews.googleplay import GooglePlayScraperProvider, GooglePlayOfficial
 ```
 
 `app_reviews.appstore` and `app_reviews.googleplay` each hold one store's five
-pieces: credentials, its two providers, its reviews client, its search client.
+core pieces: credentials, its two providers, its reviews client, its search
+client, plus its reply client (and, for the App Store, the versions client).
 Reach in when you want to drive a provider directly, or to pin a source rather
-than letting the presence of credentials choose it. Both also re-export their two
-clients, but prefer the root for those.
+than letting the presence of credentials choose it. Both also re-export their
+reviews and search clients, but prefer the root for those; the reply and
+versions clients are exported from the root only.
 
 `app_reviews.core` is the store-agnostic engine: the connection pool, the page
 walk, the protocols. Internal, and carries no compatibility promise.
@@ -83,8 +85,8 @@ result = client.fetch(
     ratings=None,    # list[int] | None: filter to specific star ratings
     sort=Sort.NEWEST,# Sort: sort order
     limit=None,      # int | None: max reviews to return
-    concurrency=None,# int | None: max countries fetched in parallel (default: 8)
-    max_pages=None,  # int | None: request budget per country (default: 10,000)
+    concurrency=None,# int | None: max countries walked in parallel (default: 8)
+    max_pages=None,  # int | None: page budget per country (default: 10,000)
 )
 ```
 
@@ -235,7 +237,8 @@ Apple can keep a reply `"pending"` for up to 24 hours; Play replies are
 `"published"` at once.
 
 Writes are never retried: each is sent once, whatever `retry=` says, because a
-published reply cannot be taken back. Reads retry as usual.
+write whose answer was lost may already have succeeded, and repeating it could
+apply it twice. Reads retry as usual.
 
 | Raised | When | Published? |
 |---|---|---|
@@ -428,9 +431,9 @@ always reach `result.errors`, so code that treated "got some reviews" as
 "nothing failed" will start seeing failures it did not see before.
 
 `search()` and `lookup()` **raise** instead: a single
-request has a single outcome, so there is no partial result to hand back. They
-raise `HttpError`, which carries the same `kind` and `status` you would have got
-from a `FetchError`:
+operation has a single outcome, so there is no partial result to hand back. They
+raise an `HttpError` subclass, which carries the same classification and `status`
+you would have got from a `FetchError`:
 
 ```python
 from app_reviews import AppStoreSearch, AuthError, HttpError, RateLimitError
@@ -476,8 +479,8 @@ deliveries: `core.classify` maps a status to both.
 ## Connection pooling
 
 Each client owns one `HttpClient`, which holds a single `httpx.Client` /
-`AsyncClient` for its lifetime. That means a multi-page walk reuses one
-connection instead of performing a TLS handshake per page, and that the sockets
+`AsyncClient` for its lifetime. That means a multi-page walk can reuse
+connections instead of opening a new one per page, and that the sockets
 stay open until you close them:
 
 ```python
@@ -505,7 +508,7 @@ than silently ignoring what you asked for.
 
 ### Sharing a rate limit across fetches
 
-`concurrency=` paces a single fetch. To keep many clients, threads, or tasks
+`concurrency=` limits how many countries a single fetch walks in parallel. To keep many clients, threads, or tasks
 inside one request budget, give them all the same `RateLimiter`. The search
 clients and `HttpClient` accept `rate_limiter=` too.
 
@@ -615,6 +618,7 @@ client = AppStoreSearch(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 
@@ -689,6 +693,7 @@ client = GooglePlaySearch(
     proxy=None,      # str | None: HTTP proxy URL
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
 )
 ```
 

@@ -16,7 +16,10 @@ If you only want the reviews and not the pages, skip to
 
 ## One page at a time
 
-`fetch_page()` makes exactly one request and hands back the cursor:
+`fetch_page()` fetches exactly one page and hands back the cursor. That page can
+cost more than one request: the HTTP client's retries apply, and the App Store
+RSS feed may ask the same page again as XML when the JSON feed answers it empty
+or unreadable:
 
 ```python
 from app_reviews import AppStoreReviews
@@ -70,12 +73,13 @@ for page in client.iter_pages("324684580", country="us", limit=100):
 
 `fetch()` does not always apply the same bound for the same `limit`. It
 drives the identical page walk internally, but decides for itself whether
-stopping at `limit` unfiltered reviews is safe, and exhausts pagination
-instead when it is not: with a non-newest `sort`, on a source that does not
-guarantee newest-first ordering, or when a `ratings`/`until` filter is also
-requested, since none of those let it know in advance which of the first
-`limit` reviews fetched will be the ones the caller actually wants. See
-[Source capabilities](../reference/capabilities.md) for which sources
+stopping early is safe, and exhausts pagination instead when it is not: with a
+non-newest `sort`, or on a source that does not guarantee newest-first
+ordering, since neither lets it know in advance which of the first `limit`
+reviews fetched will be the ones the caller actually wants. With a
+`ratings`/`until` filter on a newest-first `Sort.NEWEST` walk, it stops once
+`limit` *matching* reviews have been collected, rather than `limit` unfiltered
+ones. See [Source capabilities](../reference/capabilities.md) for which sources
 guarantee newest-first ordering.
 
 ---
@@ -105,8 +109,9 @@ sorts and limits across the whole corpus, so it must hold every review of every
 country before it returns anything; with `Country.ALL` that is 155
 storefronts at once. `iter_reviews()` holds one page.
 
-That is also the trade: no cross-country sorting, and no `ratings` or `until`
-filtering, because all three need the full set in hand. Reviews arrive in fetch
+That is also the trade: no cross-country sorting, because that needs the full
+set in hand. `ratings` and `until` are not arguments of this rung either: both
+are per-review tests you can apply to the stream yourself. Reviews arrive in fetch
 order, country by country, walked in sequence rather than concurrently, because a
 concurrent fan-out would have to buffer to put results back in order, which is
 the cost this rung exists to avoid.

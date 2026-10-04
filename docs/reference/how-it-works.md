@@ -17,17 +17,19 @@ below, so there is exactly one page-walk implementation:
    requested list for per-country sources, or a single `[""]` call for global
    APIs where the country dimension does not exist. That is the only place the
    fact is recorded; providers do not also answer it. See
-   [Source capabilities](capabilities.md).
-2. **Walk each country's pages.** One request per page, following the
-   provider's opaque cursor. An App Store RSS page whose JSON came back empty
-   or unreadable costs a second request, to the same page's XML feed.
+   [How the sources differ](capabilities.md).
+2. **Walk each country's pages.** One page at a time, following the provider's
+   opaque cursor. A page usually costs one request, but HTTP retries add
+   attempts, and an App Store RSS page whose JSON came back empty or unreadable
+   costs a further request, to the same page's XML feed.
 3. **Stop.** On an exhausted cursor, on `limit`, on a page older than `since`,
    on a cursor the source repeated (`"cycle"`), on a run of review-less pages from
    a source still issuing cursors (`"stalled"`), on the page ceiling
    (`"max_pages"`), or on an error. Which one happened is reported in
    `CountryOutcome.stopped_because`.
-4. **Merge, filter, sort, truncate.** Reviews from every country are combined,
-   then date and rating filters apply, then the sort, then `limit`.
+4. **Filter, merge, sort, truncate.** Date and rating filters apply to each page
+   as it arrives, so only matching reviews are retained; the retained reviews
+   from every country are then combined, sorted, and cut to `limit`.
 
 Countries are fetched concurrently (threads for `fetch()`, `asyncio.gather`
 behind a semaphore for `afetch()`), bounded by `concurrency`. See
@@ -74,9 +76,9 @@ There is no manual provider override. If you pass credentials, you get the offic
 | **Official (auth)** | App Store Connect API. Requires Apple Developer account + API key. | Google Play Developer API. Requires service account. |
 | **Source value** | `appstore_scraper` / `appstore_official` | `googleplay_scraper` / `googleplay_official` |
 
-Each source's behavioral differences (ordering guarantees, reply support,
-country handling, history depth) are captured as data in
-[Source capabilities](capabilities.md).
+Each source's behavioral differences (ordering guarantees, country handling,
+history depth, field coverage) are documented in
+[How the sources differ](capabilities.md).
 
 ---
 
@@ -167,8 +169,10 @@ Authenticated REST API (v3).
 2. Build JWT with Key ID and Issuer ID.
 3. Sign with ES256.
 4. Send as `Authorization: Bearer {token}`.
-5. Signed once per client, not once per request. Reading the key and signing are
-   blocking work, so the async ladder does them in a thread.
+5. The signed token is cached per client and reused until it nears its
+   20-minute expiry, then re-signed, so signing happens far less often than once
+   per request. Reading the key and signing are blocking work, so the async
+   ladder does them in a thread.
 
 ### Google Play Developer API (RS256)
 
@@ -177,9 +181,10 @@ Authenticated REST API (v3).
 3. Sign with RS256.
 4. Exchange JWT for OAuth2 access token at `https://oauth2.googleapis.com/token`.
 5. Send access token as `Authorization: Bearer {token}`.
-6. Exchanged once per client, not once per request, and over the same
-   connection pool as the review requests, so it honours the same `proxy` and
-   `retry`.
+6. The access token is cached per client and reused until it nears expiry, then
+   exchanged again, so the exchange happens far less often than once per request.
+   It runs over the same connection pool as the review requests, so it honours
+   the same `proxy` and `retry`.
 
 Private keys never leave your machine.
 
@@ -192,10 +197,10 @@ runtime dependency. Every sync call has an async twin using `httpx.AsyncClient`
 for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
 
 - **One connection pool per client.** Each client owns an `HttpClient` that
-  holds a single `httpx.Client`/`AsyncClient` for its lifetime, so a ten-page
-  walk performs one TLS handshake rather than ten. Because the sockets outlive
-  the request, close the client when you are done, or use it as a context
-  manager:
+  holds a single `httpx.Client`/`AsyncClient` for its lifetime, so the pages of a
+  walk can reuse open connections instead of handshaking for every request.
+  Because the sockets outlive the request, close the client when you are done,
+  or use it as a context manager:
 
     ```python
     with AppStoreReviews() as client:
@@ -230,7 +235,7 @@ for real async I/O, not a thread-pool wrapper. See [Async](../guide/async.md).
   Delivery depends on the layer:
   `fetch`/`iter_pages` walk many pages
   across many countries where partial success is normal, so they report a
-  `FetchError` as data; `search`/`lookup` are single requests with a single
+  `FetchError` as data; `search`/`lookup` are operations with a single
   outcome, so they raise: `RateLimitError`, `AuthError`, `RequestError`,
   `ServerError` and the rest, all under `HttpError`/`AppReviewsError`. The class
   is the classification.

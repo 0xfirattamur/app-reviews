@@ -20,10 +20,12 @@ both behind one interface.
   single call; Google Play reviews remain global.
 - **Optional authenticated access.** Plug in App Store Connect or Google Play
   Developer API credentials for account-scoped review access.
+- **Developer replies.** Create or replace and read replies on both stores; delete replies on Apple. Requires official API credentials. See [Replies](guide/python-api.md#replies).
+- **Version history and release notes.** Read public App Store release history or owned-app versions from App Store Connect. See [Version history](guide/python-api.md#version_history) and [AppStoreVersions](guide/python-api.md#appstoreversions).
 - **Minimal dependencies.** `cryptography` for JWT signing and `httpx` for transport.
 - **Real async.** Every entry point has an async twin (`afetch`, `aiter_reviews`, `aiter_pages`, `asearch`, ...) using `httpx.AsyncClient`, not a thread-pool wrapper. See [Async](guide/async.md).
 - **Streams or buffers, your choice.** `fetch()` sorts and filters the whole corpus; `iter_reviews()` yields reviews as they arrive so a 155-storefront walk never has to fit in memory. See [Paging and cursors](guide/paging.md).
-- **Pooled connections.** Each client holds one `httpx` connection pool, so a multi-page walk costs one TLS handshake, not one per page.
+- **Pooled connections.** Clients reuse `httpx` connection pools across requests, avoiding a new connection for every page when the server permits reuse.
 - **Retries, timeouts and proxies.** Configured per client through `RetryConfig` and `proxy=`.
 - **JSON-ready output.** `to_dict()` preserves reviews and diagnostics;
   `to_dicts()` returns review rows for JSONL or CSV.
@@ -72,7 +74,7 @@ Both return a `FetchResult` containing reviews and any per-country errors. `Fetc
 - **How far back you can reach differs by source**
     - `appstore_scraper`: ~500 most recent reviews per storefront
     - `googleplay_official`: **the last 7 days only**; full history needs a Play Console CSV export, which this package does not read
-    - `appstore_official`, `googleplay_scraper`: unbounded
+    - `appstore_official`, `googleplay_scraper`: no package-imposed history window; upstream availability still applies
 - **The Google Play web endpoint is undocumented** and rate-limited, and can change without notice
 - **Authenticated APIs require developer accounts**
     - Apple Developer Program: $99/year

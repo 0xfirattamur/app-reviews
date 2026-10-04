@@ -4,6 +4,15 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## Unreleased
+
+### Documentation
+
+- Correct outdated reply support, client inventory, authentication setup, token
+  refresh, pagination budgets, filtering, and connection-pooling descriptions.
+- Include replies and version history in the feature overviews and align model
+  reference fields with the public API.
+
 ## [1.2.0] - 2026-09-28
 
 Reply to reviews on both stores, list App Store versions from App Store Connect,

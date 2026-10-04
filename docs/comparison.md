@@ -77,9 +77,10 @@ because neither supported Play review source reports reviewer location.
 
 ## When not to use app-reviews
 
-Do not use this package when you need Play Console CSV history, to post developer
-replies, to crawl arbitrary store pages, or to run a standalone service without
-writing an application wrapper. Prefer a store's official API when policy,
-support guarantees, or account-scoped data matter more than credential-free
-access. Prefer a focused single-store library when its existing schema is
+Do not use this package when you need Play Console CSV history, to crawl
+arbitrary store pages, or to run a standalone service without writing an
+application wrapper. Developer replies are supported on both stores through
+their official APIs with credentials; see [Replies](guide/python-api.md#replies).
+Prefer a store's official API directly when you need endpoints this package does
+not expose. Prefer a focused single-store library when its existing schema is
 already the contract used by your application.
