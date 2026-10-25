@@ -30,6 +30,11 @@ both behind one interface.
 - **JSON-ready output.** `to_dict()` preserves reviews and diagnostics;
   `to_dicts()` returns review rows for JSONL or CSV.
 - **Typed and tested.** Strict mypy, and coverage held at 85% or above.
+- **Docs for coding assistants.**
+  [`llms.txt`](https://0xfirattamur.github.io/app-reviews/llms.txt) indexes these
+  pages and
+  [`llms-full.txt`](https://0xfirattamur.github.io/app-reviews/llms-full.txt)
+  holds the full documentation as plain text.
 
 ---
 
