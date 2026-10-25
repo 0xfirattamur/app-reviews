@@ -267,6 +267,12 @@ authentication, allowlists, timeouts, retry decisions, and user authorization in
 the application layer. The package itself is a Python library and does not run a
 network service or accept prompts.
 
+For coding assistants, the documentation is also published as plain text:
+[`llms.txt`](https://0xfirattamur.github.io/app-reviews/llms.txt) indexes every
+page, and
+[`llms-full.txt`](https://0xfirattamur.github.io/app-reviews/llms-full.txt)
+contains the full documentation in one file.
+
 ## Async and streaming
 
 Every network entry point has an async twin. Use `iter_reviews()` /

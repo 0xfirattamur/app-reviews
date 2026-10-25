@@ -39,6 +39,7 @@ class TestAppStoreSearchLive:
         assert history[0].released_at.tzinfo is UTC
         dates = [e.released_at for e in history]
         assert dates == sorted(dates, reverse=True)
+        assert any(e.release_notes for e in history)
 
 
 @pytest.mark.live
