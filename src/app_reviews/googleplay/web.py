@@ -9,11 +9,10 @@ import urllib.parse
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
-from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import Source
 
@@ -77,6 +76,13 @@ class GooglePlayScraperProvider(PooledClient):
     }
     _PREFIX = re.compile(r"\)]}'\n\n([\s\S]+)")
 
+    # Fixed values in the RPC argument, copied from the request Play's own web
+    # client sends. Google documents none of them, so they are named for where
+    # they sit rather than for what they mean.
+    _ARGUMENT_HEAD = 2
+    _APP_ID_TAG = 7
+    _OPTION_SLOT_COUNT = 9
+
     # Slots in the decoded RPC payload.
     _REVIEWS = 0
     _PAGINATION = 1
@@ -103,7 +109,7 @@ class GooglePlayScraperProvider(PooledClient):
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. ``cursor`` is the page token from the previous page."""
-        url, body = self._request(app_id, country, cursor)
+        url, body = self._build_review_request(app_id, country, cursor)
         response = self._http.post(url, body=body, headers=self._HEADERS)
         return self._to_page(response, app_id)
 
@@ -111,11 +117,11 @@ class GooglePlayScraperProvider(PooledClient):
         self, app_id: str, country: str, cursor: str | None
     ) -> PageResult:
         """Async equivalent of ``fetch_page``."""
-        url, body = self._request(app_id, country, cursor)
+        url, body = self._build_review_request(app_id, country, cursor)
         response = await self._http.apost(url, body=body, headers=self._HEADERS)
         return self._to_page(response, app_id)
 
-    def _request(
+    def _build_review_request(
         self, app_id: str, country: str, cursor: str | None
     ) -> tuple[str, str]:
         """The URL and form body for one review-fetch RPC.
@@ -125,9 +131,9 @@ class GooglePlayScraperProvider(PooledClient):
         choose.
         """
         page = [self.PAGE_SIZE, None, cursor] if cursor else [self.PAGE_SIZE]
-        argument = json.dumps(
-            [None, [2, self.SORT_NEWEST, page, None, [None] * 9], [app_id, 7]]
-        )
+        options = [None] * self._OPTION_SLOT_COUNT
+        sort_and_page = [self._ARGUMENT_HEAD, self.SORT_NEWEST, page, None, options]
+        argument = json.dumps([None, sort_and_page, [app_id, self._APP_ID_TAG]])
         url = (
             f"{self.URL}"
             f"?hl={urllib.parse.quote(self.LANG, safe='')}"
@@ -142,77 +148,85 @@ class GooglePlayScraperProvider(PooledClient):
         Errors carry ``country=None``: this source is global, so there is no
         country to attribute a failure to. Matches both official providers.
         """
-        if response.transport_error is not None:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=response.transport_error,
-                    transport_error=response.transport_error,
-                    credentialed=False,
-                )
-            )
-        if not response.ok:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=f"HTTP {response.status} from the Google Play web endpoint",
-                    credentialed=False,
-                )
-            )
-
-        try:
-            entries, next_cursor = self._envelope(response.body)
-        except (_ParseFailed, *_UNUSABLE) as exc:
-            return PageResult(
-                error=FetchError(
-                    country=None,
-                    message=f"Malformed Google Play response: {exc}",
-                    kind="parse",
-                    status=response.status,
-                )
-            )
-
-        mapped = (self._review(entry, app_id) for entry in entries)
-        reviews = [review for review in mapped if review is not None]
-        return PageResult(
-            reviews=reviews,
-            next_cursor=next_cursor,
-            skipped_reviews=len(entries) - len(reviews),
+        failure = page_failure_from_response(
+            response,
+            country=None,
+            source_name="the Google Play web endpoint",
+            credentialed=False,
         )
+        if failure is not None:
+            return failure
+        try:
+            entries, next_cursor = self._parse_envelope(response.body)
+        except (_ParseFailed, *_UNUSABLE) as exc:
+            return malformed_page(
+                country=None,
+                source_name="Google Play",
+                status=response.status,
+                exc=exc,
+            )
+        return self._map_reviews(entries, next_cursor, app_id)
 
-    def _envelope(self, raw: str) -> tuple[list[Any], str | None]:
+    def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token in one batchexecute body.
 
         An unreadable envelope is not an empty page, so this raises rather than
         reporting no reviews: the caller has to be able to tell "this app has no
         more reviews" from "we could not read the response".
         """
-        match = self._PREFIX.search(raw)
+        match = self._PREFIX.search(body)
         if match is None:
             raise _ParseFailed("response is missing the batchexecute prefix")
 
         try:
-            for item in json.loads(match.group(1)):
-                if not isinstance(item, list) or len(item) < 3:
-                    continue
-                if item[0] != "wrb.fr" or item[1] != self.RPC_ID:
-                    continue
-                if item[2] is None:
-                    return [], None
-                payload = json.loads(item[2])
-                if not isinstance(payload, list):
-                    raise _ParseFailed(
-                        f"RPC payload is {type(payload).__name__}, expected an array"
-                    )
-                return self._entries(payload), self._token(payload)
+            payload = self._find_rpc_payload(json.loads(match.group(1)))
+            if payload is None:
+                return [], None
+            return self._read_review_entries(payload), self._read_next_cursor(payload)
         except _UNUSABLE as exc:
             raise _ParseFailed(f"Google Play response is malformed: {exc}") from exc
 
+    def _find_rpc_payload(self, rows: Any) -> list[Any] | None:
+        """This RPC's decoded payload, or None when Play answered it with null.
+
+        A null answer means the app has no more reviews. A body without this
+        RPC's row at all is unreadable, and raises.
+        """
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 3:
+                continue
+            if row[0] != "wrb.fr" or row[1] != self.RPC_ID:
+                continue
+            return self._decode_review_payload(row[2])
         raise _ParseFailed(f"no {self.RPC_ID} envelope in response")
 
-    def _entries(self, payload: list[Any]) -> list[Any]:
+    def _decode_review_payload(self, encoded_payload: Any) -> list[Any] | None:
+        """The RPC row's JSON-in-a-string payload, decoded."""
+        if encoded_payload is None:
+            return None
+        payload = json.loads(encoded_payload)
+        if not isinstance(payload, list):
+            raise _ParseFailed(
+                f"RPC payload is {type(payload).__name__}, expected an array"
+            )
+        return payload
+
+    def _map_reviews(
+        self, entries: list[Any], next_cursor: str | None, app_id: str
+    ) -> PageResult:
+        """The page's reviews; an unusable entry is skipped, not fatal."""
+        reviews: list[Review] = []
+        for entry in entries:
+            review = self._parse_review(entry, app_id)
+            if review is not None:
+                reviews.append(review)
+        return PageResult(
+            reviews=reviews,
+            next_cursor=next_cursor,
+            skipped_reviews=len(entries) - len(reviews),
+        )
+
+    def _read_review_entries(self, payload: list[Any]) -> list[Any]:
         """The review entries; absent/null is empty, wrong present types fail."""
         entries = payload[self._REVIEWS] if payload else None
         if entries is None:
@@ -223,7 +237,7 @@ class GooglePlayScraperProvider(PooledClient):
             )
         return entries
 
-    def _token(self, payload: list[Any]) -> str | None:
+    def _read_next_cursor(self, payload: list[Any]) -> str | None:
         """The next page token, or None on the last page."""
         if len(payload) <= self._PAGINATION:
             return None
@@ -236,16 +250,16 @@ class GooglePlayScraperProvider(PooledClient):
             )
         if len(pagination) <= self._PAGE_TOKEN:
             raise _ParseFailed("pagination is missing its page-token slot")
-        token = pagination[self._PAGE_TOKEN]
-        if token is None:
+        next_page_token = pagination[self._PAGE_TOKEN]
+        if next_page_token is None:
             return None
-        if not isinstance(token, str):
+        if not isinstance(next_page_token, str):
             raise _ParseFailed(
-                f"page token is {type(token).__name__}, expected a string"
+                f"page token is {type(next_page_token).__name__}, expected a string"
             )
-        return token
+        return next_page_token
 
-    def _review(self, entry: Any, app_id: str) -> Review | None:
+    def _parse_review(self, entry: Any, app_id: str) -> Review | None:
         """Parse one entry, or None if a field that cannot be invented is unusable.
 
         ``country`` is always None: Play reviews are one global corpus, so there
@@ -263,7 +277,7 @@ class GooglePlayScraperProvider(PooledClient):
                 app_version=self._app_version(entry),
                 # Play's web feed reports creation only. The wire carries nanoseconds;
                 # a datetime holds microseconds, so the last three digits are dropped.
-                created_at=self._created_at(entry[self._TIMESTAMP]),
+                created_at=self._parse_created_at(entry[self._TIMESTAMP]),
                 source="googleplay_scraper",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
@@ -305,7 +319,7 @@ class GooglePlayScraperProvider(PooledClient):
         """
         return entry[self._ID] if isinstance(entry, list) and entry else None
 
-    def _created_at(self, timestamp: Any) -> datetime:
+    def _parse_created_at(self, timestamp: Any) -> datetime:
         """Read ``[seconds, nanos]`` as one instant, keeping sub-second precision."""
         seconds = timestamp[self._SECONDS]
         nanos = timestamp[self._NANOS] if len(timestamp) > self._NANOS else 0

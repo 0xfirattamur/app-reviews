@@ -175,7 +175,7 @@ class HttpClient:
             send=lambda: pool.stream(
                 "GET", url, headers=self._headers(headers), params=params
             ),
-            credentialed=_carries_credential(headers),
+            is_credentialed=_carries_credential(headers),
         )
 
     def post(
@@ -203,7 +203,7 @@ class HttpClient:
                 headers=self._headers(headers),
                 follow_redirects=follow_redirects,
             ),
-            credentialed=not follow_redirects or _carries_credential(headers),
+            is_credentialed=not follow_redirects or _carries_credential(headers),
         )
 
     def send_once(
@@ -230,8 +230,8 @@ class HttpClient:
                 headers=self._headers(headers),
                 follow_redirects=False,
             ),
-            credentialed=_carries_credential(headers),
-            retryable=False,
+            is_credentialed=_carries_credential(headers),
+            is_retryable=False,
         )
 
     async def aget(
@@ -249,7 +249,7 @@ class HttpClient:
             send=lambda: pool.stream(
                 "GET", url, headers=self._headers(headers), params=params
             ),
-            credentialed=_carries_credential(headers),
+            is_credentialed=_carries_credential(headers),
         )
 
     async def apost(
@@ -272,7 +272,7 @@ class HttpClient:
                 headers=self._headers(headers),
                 follow_redirects=follow_redirects,
             ),
-            credentialed=not follow_redirects or _carries_credential(headers),
+            is_credentialed=not follow_redirects or _carries_credential(headers),
         )
 
     async def asend_once(
@@ -295,8 +295,8 @@ class HttpClient:
                 headers=self._headers(headers),
                 follow_redirects=False,
             ),
-            credentialed=_carries_credential(headers),
-            retryable=False,
+            is_credentialed=_carries_credential(headers),
+            is_retryable=False,
         )
 
     def _pool(self) -> httpx.Client:
@@ -335,8 +335,8 @@ class HttpClient:
         url: str,
         *,
         send: Callable[[], AbstractContextManager[httpx.Response]],
-        credentialed: bool,
-        retryable: bool = True,
+        is_credentialed: bool,
+        is_retryable: bool = True,
     ) -> HttpResponse:
         """Run one request, retrying on this client's policy.
 
@@ -352,23 +352,19 @@ class HttpClient:
             if self._limiter is not None:
                 self._limiter.acquire()
             _LOG.debug("%s %s (attempt %d)", method, url, attempt + 1)
-            response, retry_after, permanent = self._attempt(send)
-            self._record(response, retry_after, credentialed)
+            response, is_permanent = self._attempt(send)
+            self._record(response, is_credentialed)
 
-            if (
-                retryable
-                and not permanent
-                and self._policy
-                and self._policy.should_retry(attempt, response.status)
-            ):
-                delay = self._policy.get_delay(attempt, retry_after)
-                self._log_retry(method, url, response.status, delay, attempt)
-                time.sleep(delay)
-                attempt += 1
-                continue
+            delay = self._compute_retry_delay(
+                attempt, response, is_permanent=is_permanent, is_retryable=is_retryable
+            )
+            if delay is None:
+                self._log_failure(method, url, response)
+                return response
 
-            self._log_failure(method, url, response)
-            return response
+            self._log_retry(method, url, response.status, delay, attempt)
+            time.sleep(delay)
+            attempt += 1
 
     async def _aexecute(
         self,
@@ -376,8 +372,8 @@ class HttpClient:
         url: str,
         *,
         send: Callable[[], AbstractAsyncContextManager[httpx.Response]],
-        credentialed: bool,
-        retryable: bool = True,
+        is_credentialed: bool,
+        is_retryable: bool = True,
     ) -> HttpResponse:
         """Async twin of ``_execute``: same policy, ``asyncio.sleep`` for backoff."""
         attempt = 0
@@ -386,27 +382,36 @@ class HttpClient:
             if self._limiter is not None:
                 await self._limiter.aacquire()
             _LOG.debug("%s %s (attempt %d)", method, url, attempt + 1)
-            response, retry_after, permanent = await self._aattempt(send)
-            self._record(response, retry_after, credentialed)
+            response, is_permanent = await self._aattempt(send)
+            self._record(response, is_credentialed)
 
-            if (
-                retryable
-                and not permanent
-                and self._policy
-                and self._policy.should_retry(attempt, response.status)
-            ):
-                delay = self._policy.get_delay(attempt, retry_after)
-                self._log_retry(method, url, response.status, delay, attempt)
-                await asyncio.sleep(delay)
-                attempt += 1
-                continue
+            delay = self._compute_retry_delay(
+                attempt, response, is_permanent=is_permanent, is_retryable=is_retryable
+            )
+            if delay is None:
+                self._log_failure(method, url, response)
+                return response
 
-            self._log_failure(method, url, response)
-            return response
+            self._log_retry(method, url, response.status, delay, attempt)
+            await asyncio.sleep(delay)
+            attempt += 1
 
-    def _record(
-        self, response: HttpResponse, retry_after: str | None, credentialed: bool
-    ) -> None:
+    def _compute_retry_delay(
+        self,
+        attempt: int,
+        response: HttpResponse,
+        *,
+        is_permanent: bool,
+        is_retryable: bool,
+    ) -> float | None:
+        """Seconds to wait before the next attempt, or None if this one is final."""
+        if not is_retryable or is_permanent or not self._policy:
+            return None
+        if not self._policy.should_retry(attempt, response.status):
+            return None
+        return self._policy.get_delay(attempt, response.retry_after)
+
+    def _record(self, response: HttpResponse, is_credentialed: bool) -> None:
         """Report one response to the limiter.
 
         Skipped for a transport failure (there is no response), and for a 403 on
@@ -416,17 +421,14 @@ class HttpClient:
         """
         if self._limiter is None or response.transport_error is not None:
             return
-        if response.status == 403 and credentialed:
+        if response.status == 403 and is_credentialed:
             return
-        self._limiter.record(response.status, retry_after_seconds(retry_after))
+        self._limiter.record(response.status, retry_after_seconds(response.retry_after))
 
     def _attempt(
         self, send: Callable[[], AbstractContextManager[httpx.Response]]
-    ) -> tuple[HttpResponse, str | None, bool]:
-        """One exchange, plus the ``Retry-After`` it asked for, if any.
-
-        The header is returned separately as well as on ``HttpResponse``: it is a
-        retry input first, spent before the caller sees the final response.
+    ) -> tuple[HttpResponse, bool]:
+        """One exchange, and whether its failure is permanent.
 
         The deadline starts before the stream opens, so it covers connecting as
         well as reading. ``_BodyTooLarge`` and ``_AttemptTooSlow`` are permanent:
@@ -437,43 +439,36 @@ class HttpClient:
         try:
             with send() as raw:
                 body = self._read(raw.iter_bytes(), raw, deadline)
-                retry_after = raw.headers.get("Retry-After")
-                return (
-                    HttpResponse(
-                        status=raw.status_code, body=body, retry_after=retry_after
-                    ),
-                    retry_after,
-                    False,
-                )
+                return self._to_response(raw, body), False
         except (_BodyTooLarge, _AttemptTooSlow) as exc:
-            return self._to_error_response(exc), None, True
+            return self._to_error_response(exc), True
         except _PERMANENT_EXCEPTIONS as exc:
-            return self._to_error_response(exc), None, True
+            return self._to_error_response(exc), True
         except _TRANSPORT_EXCEPTIONS as exc:
-            return self._to_error_response(exc), None, False
+            return self._to_error_response(exc), False
 
     async def _aattempt(
         self, send: Callable[[], AbstractAsyncContextManager[httpx.Response]]
-    ) -> tuple[HttpResponse, str | None, bool]:
+    ) -> tuple[HttpResponse, bool]:
         """Async twin of ``_attempt``."""
         deadline = time.monotonic() + self._max_duration
         try:
             async with send() as raw:
                 body = await self._aread(raw, deadline)
-                retry_after = raw.headers.get("Retry-After")
-                return (
-                    HttpResponse(
-                        status=raw.status_code, body=body, retry_after=retry_after
-                    ),
-                    retry_after,
-                    False,
-                )
+                return self._to_response(raw, body), False
         except (_BodyTooLarge, _AttemptTooSlow) as exc:
-            return self._to_error_response(exc), None, True
+            return self._to_error_response(exc), True
         except _PERMANENT_EXCEPTIONS as exc:
-            return self._to_error_response(exc), None, True
+            return self._to_error_response(exc), True
         except _TRANSPORT_EXCEPTIONS as exc:
-            return self._to_error_response(exc), None, False
+            return self._to_error_response(exc), False
+
+    def _to_response(self, raw: httpx.Response, body: str) -> HttpResponse:
+        return HttpResponse(
+            status=raw.status_code,
+            body=body,
+            retry_after=raw.headers.get("Retry-After"),
+        )
 
     def _read(
         self, chunks: Iterable[bytes], raw: httpx.Response, deadline: float
@@ -485,40 +480,35 @@ class HttpClient:
         server's claim about what it is about to send.
         """
         buffered: list[bytes] = []
-        total = 0
+        total_bytes = 0
         for chunk in chunks:
-            total += len(chunk)
-            if total > self._max_bytes:
-                raise _BodyTooLarge(
-                    f"response body exceeded max_bytes={self._max_bytes}"
-                )
-            if time.monotonic() > deadline:
-                raise _AttemptTooSlow(
-                    f"attempt exceeded max_duration={self._max_duration}s "
-                    f"after {total} bytes"
-                )
+            total_bytes += len(chunk)
+            self._check_response_budget(total_bytes, deadline)
             buffered.append(chunk)
-        return b"".join(buffered).decode(
-            raw.charset_encoding or "utf-8", errors="replace"
-        )
+        return self._decode_body(buffered, raw)
 
     async def _aread(self, raw: httpx.Response, deadline: float) -> str:
         """Async twin of ``_read``. Duplicated for the same reason the walks are:
         an async iterator cannot be consumed by a sync loop."""
         buffered: list[bytes] = []
-        total = 0
+        total_bytes = 0
         async for chunk in raw.aiter_bytes():
-            total += len(chunk)
-            if total > self._max_bytes:
-                raise _BodyTooLarge(
-                    f"response body exceeded max_bytes={self._max_bytes}"
-                )
-            if time.monotonic() > deadline:
-                raise _AttemptTooSlow(
-                    f"attempt exceeded max_duration={self._max_duration}s "
-                    f"after {total} bytes"
-                )
+            total_bytes += len(chunk)
+            self._check_response_budget(total_bytes, deadline)
             buffered.append(chunk)
+        return self._decode_body(buffered, raw)
+
+    def _check_response_budget(self, total_bytes: int, deadline: float) -> None:
+        """Raise once the body grows past ``max_bytes`` or the attempt overruns."""
+        if total_bytes > self._max_bytes:
+            raise _BodyTooLarge(f"response body exceeded max_bytes={self._max_bytes}")
+        if time.monotonic() > deadline:
+            raise _AttemptTooSlow(
+                f"attempt exceeded max_duration={self._max_duration}s "
+                f"after {total_bytes} bytes"
+            )
+
+    def _decode_body(self, buffered: list[bytes], raw: httpx.Response) -> str:
         return b"".join(buffered).decode(
             raw.charset_encoding or "utf-8", errors="replace"
         )

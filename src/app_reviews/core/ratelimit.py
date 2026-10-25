@@ -14,6 +14,10 @@ __all__ = ["RateLimiter", "RequestLimiter"]
 
 _LOG = logging.getLogger(__name__)
 
+_MAX_PENALTY_DOUBLINGS = 64
+"""Cap on the exponent, not on the delay: ``max_penalty`` caps the delay long
+before this. Without it a long throttle streak overflows ``2.0 ** streak``."""
+
 
 class RequestLimiter(Protocol):
     """What ``HttpClient`` needs from a limiter; ``RateLimiter`` is the default.
@@ -110,7 +114,7 @@ class RateLimiter:
         if retry_after is not None:
             delay = min(retry_after, self._max_penalty)
         else:
-            doubled = self._initial_penalty * 2.0 ** min(streak, 64)
+            doubled = self._initial_penalty * 2.0 ** min(streak, _MAX_PENALTY_DOUBLINGS)
             delay = min(doubled, self._max_penalty)
         self.penalize(delay)
         _LOG.warning(

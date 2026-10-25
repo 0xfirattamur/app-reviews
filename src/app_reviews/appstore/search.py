@@ -25,6 +25,9 @@ from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 
 _LOG = logging.getLogger(__name__)
 
+_MAX_LOGGED_KEYS = 12
+"""How many of a skipped result's keys a warning names."""
+
 
 class AppStoreSearch(PooledClient):
     """Search and lookup for App Store apps via the iTunes APIs.
@@ -50,6 +53,11 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        """Search the App Store for apps matching ``query`` in ``country``.
+
+        ``limit`` is sent to iTunes as its own result cap, so at most ``limit``
+        apps come back; results without a usable id are skipped.
+        """
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
@@ -67,6 +75,7 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        """Async equivalent of ``search``."""
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
@@ -184,16 +193,22 @@ class AppStoreSearch(PooledClient):
 
     def _parse_search(self, response: HttpResponse) -> list[AppMetadata]:
         """Every usable result. Unusable ones are skipped, not fatal."""
-        results = self._results(response, "iTunes Search API")
-        mapped = (self._metadata(r) for r in results)
-        return [app for app in mapped if app is not None]
+        search_entries = self._read_search_results(response, "iTunes Search API")
+        apps: list[AppMetadata] = []
+        for search_entry in search_entries:
+            app = self._parse_metadata(search_entry)
+            if app is not None:
+                apps.append(app)
+        return apps
 
     def _parse_lookup(self, response: HttpResponse) -> AppMetadata | None:
         """The one result, or None, which is also how "no such app" is reported."""
-        results = self._results(response, "iTunes Lookup API")
-        return self._metadata(results[0]) if results else None
+        search_entries = self._read_search_results(response, "iTunes Lookup API")
+        if not search_entries:
+            return None
+        return self._parse_metadata(search_entries[0])
 
-    def _results(self, response: HttpResponse, api: str) -> list[Any]:
+    def _read_search_results(self, response: HttpResponse, api: str) -> list[Any]:
         """The ``results`` array, or ``ParseError`` if the body is unreadable.
 
         An unreadable body is not an empty result set: these methods raise rather
@@ -202,63 +217,62 @@ class AppStoreSearch(PooledClient):
         """
         raise_for_http_failure(response, api, credentialed=False)
         try:
-            results = json.loads(response.body).get("results", [])
+            search_entries = json.loads(response.body).get("results", [])
         except (AttributeError, json.JSONDecodeError) as exc:
             raise ParseError(
                 f"Unreadable response from {api}: {exc}", status=response.status
             ) from exc
-        if not isinstance(results, list):
+        if not isinstance(search_entries, list):
             raise ParseError(
-                f"{api} returned 'results' as {type(results).__name__}, "
+                f"{api} returned 'results' as {type(search_entries).__name__}, "
                 f"expected a list",
                 status=response.status,
             )
-        return results
+        return search_entries
 
-    def _metadata(self, result: Any) -> AppMetadata | None:
+    def _parse_metadata(self, search_entry: Any) -> AppMetadata | None:
         """Map one iTunes result, or None if it carries no usable id.
 
         ``app_id`` is the numeric ``trackId`` because the review APIs key off the
         track id, not the bundle id. Without either, there is nothing to look the
         app up by later, so the result is dropped rather than given an invented id.
         """
-        if not isinstance(result, dict):
+        if not isinstance(search_entry, dict):
             _LOG.warning(
                 "Skipped an iTunes result: expected an object, got %s",
-                type(result).__name__,
+                type(search_entry).__name__,
             )
             return None
 
-        app_id = scraped_text(result.get("trackId")) or scraped_text(
-            result.get("bundleId")
-        )
+        track_id = scraped_text(search_entry.get("trackId"))
+        app_id = track_id or scraped_text(search_entry.get("bundleId"))
         if not app_id:
             # The keys, not the object: the body is remote content and an
             # unbounded amount of it does not belong in a log line.
             _LOG.warning(
                 "Skipped an iTunes result: no trackId or bundleId. Keys: %s",
-                sorted(result)[:12],
+                sorted(search_entry)[:_MAX_LOGGED_KEYS],
             )
             return None
 
         return AppMetadata(
             app_id=app_id,
             store="appstore",
-            name=scraped_text(result.get("trackName")) or "Unknown",
-            developer=scraped_text(result.get("artistName")) or "Unknown",
-            category=scraped_text(result.get("primaryGenreName")) or "Unknown",
-            price=scraped_text(result.get("formattedPrice")) or "Unknown",
-            version=scraped_text(result.get("version")) or "Unknown",
-            rating=scraped_rating(result.get("averageUserRating")),
-            rating_count=scraped_rating_count(result.get("userRatingCount")),
-            url=scraped_text(result.get("trackViewUrl"))
+            name=scraped_text(search_entry.get("trackName")) or "Unknown",
+            developer=scraped_text(search_entry.get("artistName")) or "Unknown",
+            category=scraped_text(search_entry.get("primaryGenreName")) or "Unknown",
+            price=scraped_text(search_entry.get("formattedPrice")) or "Unknown",
+            version=scraped_text(search_entry.get("version")) or "Unknown",
+            rating=scraped_rating(search_entry.get("averageUserRating")),
+            rating_count=scraped_rating_count(search_entry.get("userRatingCount")),
+            url=scraped_text(search_entry.get("trackViewUrl"))
             or f"https://apps.apple.com/app/id{app_id}",
-            icon_url=scraped_text(result.get("artworkUrl512")),
+            icon_url=scraped_text(search_entry.get("artworkUrl512")),
             # Both arrive in the same result dict as ``version``, on every search
             # and lookup, so reading them costs no extra request.
             current_version_release_date=scraped_datetime(
-                result.get("currentVersionReleaseDate")
+                search_entry.get("currentVersionReleaseDate")
             ),
-            first_release_date=scraped_datetime(result.get("releaseDate")),
-            release_notes=scraped_text(result.get("releaseNotes")),
+            first_release_date=scraped_datetime(search_entry.get("releaseDate")),
+            release_notes=scraped_text(search_entry.get("releaseNotes")),
         )

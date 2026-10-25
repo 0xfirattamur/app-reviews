@@ -162,7 +162,7 @@ class AppStoreScraperProvider(PooledClient):
         if failure is not None:
             return failure
         try:
-            entries = self._entries(json.loads(response.body))
+            entries = self._read_review_entries(json.loads(response.body))
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
             return PageResult(
                 error=FetchError(
@@ -172,7 +172,7 @@ class AppStoreScraperProvider(PooledClient):
                     status=response.status,
                 )
             )
-        return self._page_of(entries, ref, "json")
+        return self._build_page(entries, ref, "json")
 
     def _xml_page(
         self, response: HttpResponse, ref: _PageRef, *, fallback: PageResult
@@ -193,7 +193,7 @@ class AppStoreScraperProvider(PooledClient):
         if not entries and fallback.error is None:
             return fallback
         _LOG.info("App Store RSS XML answered %d entries for %s", len(entries), ref)
-        return self._page_of(entries, ref, "xml")
+        return self._build_page(entries, ref, "xml")
 
     def _failure(self, response: HttpResponse, country: str) -> PageResult | None:
         """The failed page for an exchange that got no usable answer, else None."""
@@ -216,17 +216,20 @@ class AppStoreScraperProvider(PooledClient):
             )
         )
 
-    def _page_of(
+    def _build_page(
         self, entries: list[Any], ref: _PageRef, feed_format: FeedFormat
     ) -> PageResult:
-        mapped = (self._review(entry, ref.app_id, ref.country) for entry in entries)
-        reviews = [review for review in mapped if review is not None]
+        reviews: list[Review] = []
+        for entry in entries:
+            review = self._parse_review(entry, ref.app_id, ref.country)
+            if review is not None:
+                reviews.append(review)
         # Gated on what the feed sent, not on what survived mapping: entries that
         # all fail to map still mean Apple has more.
-        more = bool(entries) and ref.page < self.MAX_PAGES
+        has_more_pages = bool(entries) and ref.page < self.MAX_PAGES
         return PageResult(
             reviews=reviews,
-            next_cursor=str(ref.page + 1) if more else None,
+            next_cursor=str(ref.page + 1) if has_more_pages else None,
             skipped_reviews=len(entries) - len(reviews),
             feed_format=feed_format,
         )
@@ -240,12 +243,12 @@ class AppStoreScraperProvider(PooledClient):
         )
 
     def _remembering_short(self, result: PageResult, ref: _PageRef) -> PageResult:
-        entries = len(result.reviews) + result.skipped_reviews
-        if result.next_cursor is not None and entries < self.PAGE_SIZE:
+        entry_count = len(result.reviews) + result.skipped_reviews
+        if result.next_cursor is not None and entry_count < self.PAGE_SIZE:
             self._short_pages.remember(ref.next())
         return result
 
-    def _entries(self, body: Any) -> list[Any]:
+    def _read_review_entries(self, body: Any) -> list[Any]:
         """The feed's entries, always as a list.
 
         Apple sends ``entry`` as a bare object, not a one-element list, when an app
@@ -260,7 +263,7 @@ class AppStoreScraperProvider(PooledClient):
             )
         return entries
 
-    def _review(self, entry: Any, app_id: str, country: str) -> Review | None:
+    def _parse_review(self, entry: Any, app_id: str, country: str) -> Review | None:
         """Parse one entry, or None if a field we cannot fake is unusable.
 
         ``id`` keys deduplication, and ``rating``/``updated`` cannot be invented,
@@ -311,4 +314,5 @@ class AppStoreScraperProvider(PooledClient):
             node = node.get(key)
         if not isinstance(node, str):
             return None
-        return node.replace("\r\n", "\n").replace("\r", "\n").strip() or None
+        normalized_line_endings = node.replace("\r\n", "\n").replace("\r", "\n")
+        return normalized_line_endings.strip() or None

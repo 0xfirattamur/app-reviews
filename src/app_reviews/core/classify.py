@@ -21,6 +21,7 @@ from app_reviews.errors import (
     ServerError,
     TransportError,
 )
+from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from app_reviews.models.types import ErrorKind
 
@@ -132,6 +133,48 @@ def fetch_error_from_response(
         kind=kind,
         status=status or None,
     )
+
+
+def page_failure_from_response(
+    response: HttpResponse,
+    *,
+    country: str | None,
+    source_name: str,
+    credentialed: bool = True,
+) -> PageResult | None:
+    """The failed page for an exchange that got no usable answer, else None.
+
+    ``source_name`` completes the status message: ``HTTP 503 from <source_name>``.
+    A transport failure reports its exception text instead, because its status
+    is 0 and ``"HTTP 0"`` would say nothing.
+    """
+    if response.transport_error is not None:
+        message = response.transport_error
+    elif not response.ok:
+        message = f"HTTP {response.status} from {source_name}"
+    else:
+        return None
+    error = fetch_error_from_response(
+        country=country,
+        status=response.status,
+        message=message,
+        transport_error=response.transport_error,
+        credentialed=credentialed,
+    )
+    return PageResult(error=error)
+
+
+def malformed_page(
+    *, country: str | None, source_name: str, status: int, exc: Exception
+) -> PageResult:
+    """The failed page for a 2xx body whose envelope could not be read."""
+    error = FetchError(
+        country=country,
+        message=f"Malformed {source_name} response: {exc}",
+        kind="parse",
+        status=status,
+    )
+    return PageResult(error=error)
 
 
 def fetch_error_from_exception(

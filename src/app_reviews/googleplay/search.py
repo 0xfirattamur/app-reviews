@@ -100,6 +100,8 @@ class GooglePlaySearch(PooledClient):
     _RATING = (51, 0, 1)
     _RATING_COUNT = (51, 2, 1)
     _PRICE = (57, 0, 0, 0, 0, 1, 0)
+    _PRICE_MICROS_PER_UNIT = 1_000_000
+    """Play sends prices in millionths of the currency unit."""
     _DEVELOPER = (68, 0)
     _CATEGORY = (79, 0, 0, 0)
     _ICON = (95, 0, 3, 2)
@@ -112,11 +114,14 @@ class GooglePlaySearch(PooledClient):
 
     Display strings, not timestamps: ``Dec 21, 2010``. Day precision, and the month
     name is in the request's ``hl`` language, which is why ``hl`` is pinned to
-    ``en`` on both requests. See ``_display_date``.
+    ``en`` on both requests. See ``_parse_display_date``.
     """
 
     _RELEASE_NOTES = (144, 1, 1)
-    """The "What's new" text, with ``<br>`` for line breaks. See ``_release_notes``."""
+    """The "What's new" text, with ``<br>`` for line breaks.
+
+    See ``_parse_release_notes``.
+    """
 
     _LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
@@ -138,6 +143,11 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        """Search Play for apps matching ``query`` in ``country``'s market.
+
+        One results page is read; ``limit`` truncates it and never fetches more,
+        so asking for more apps than Play lists on that page returns what it lists.
+        """
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
@@ -156,6 +166,7 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
         limit: int = 50,
     ) -> list[AppMetadata]:
+        """Async equivalent of ``search``."""
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
@@ -222,18 +233,18 @@ class GooglePlaySearch(PooledClient):
         answer and must not arrive as ``[]``.
         """
         raise_for_http_failure(response, "Google Play search", credentialed=False)
-        datasets = self._datasets_or_raise(response)
-        readable = False
+        datasets = self._extract_datasets_or_raise(response)
+        has_readable_results = False
 
-        for data in self._preferring(datasets, self.SEARCH_DATASET):
-            sections = self._at(data, self._SECTIONS)
-            if not isinstance(sections, list) or not self._holds_results(sections):
+        for dataset in self._order_datasets(datasets, self.SEARCH_DATASET):
+            sections = self._at(dataset, self._SECTIONS)
+            if not self._is_results_container(sections):
                 continue
-            readable = True
-            if apps := self._apps(sections):
+            has_readable_results = True
+            if apps := self._collect_apps(sections):
                 return apps
 
-        if readable:
+        if has_readable_results:
             return []
         raise ParseError(
             "Google Play returned a page with no search results section",
@@ -251,10 +262,11 @@ class GooglePlaySearch(PooledClient):
         if response.status == 404:
             return None
         raise_for_http_failure(response, "Google Play", credentialed=False)
-        datasets = self._datasets_or_raise(response)
+        datasets = self._extract_datasets_or_raise(response)
 
-        for data in self._preferring(datasets, self.DETAIL_DATASET):
-            app = self._detail_app(self._at(data, self._DETAIL_BLOCK), app_id)
+        for dataset in self._order_datasets(datasets, self.DETAIL_DATASET):
+            detail_block = self._at(dataset, self._DETAIL_BLOCK)
+            app = self._parse_detail_app(detail_block, app_id)
             if app is not None:
                 return app
 
@@ -263,8 +275,8 @@ class GooglePlaySearch(PooledClient):
             status=response.status,
         )
 
-    def _datasets_or_raise(self, response: HttpResponse) -> dict[str, Any]:
-        datasets = self._datasets(response.body)
+    def _extract_datasets_or_raise(self, response: HttpResponse) -> dict[str, Any]:
+        datasets = self._extract_datasets(response.body)
         if not datasets:
             raise ParseError(
                 "Google Play returned a page with no embedded data",
@@ -272,7 +284,7 @@ class GooglePlaySearch(PooledClient):
             )
         return datasets
 
-    def _datasets(self, html: str) -> dict[str, Any]:
+    def _extract_datasets(self, page_html: str) -> dict[str, Any]:
         """The page's ``AF_initDataCallback`` payloads, keyed by ``ds:N``.
 
         Play bootstraps its own JavaScript with blocks shaped like::
@@ -286,83 +298,97 @@ class GooglePlaySearch(PooledClient):
         """
         datasets: dict[str, Any] = {}
         decoder = json.JSONDecoder()
-        for match in self._BLOCK.finditer(html):
-            block = match.group(0)
-            key = self._KEY.search(block)
-            start = self._DATA.search(block)
-            if key is None or start is None:
+        for block_match in self._BLOCK.finditer(page_html):
+            block = block_match.group(0)
+            key_match = self._KEY.search(block)
+            data_start = self._DATA.search(block)
+            if key_match is None or data_start is None:
                 continue
+            dataset_key = key_match.group(1)
             try:
-                datasets[key.group(1)], _ = decoder.raw_decode(block, start.end())
+                datasets[dataset_key], _ = decoder.raw_decode(block, data_start.end())
             except ValueError:
-                _LOG.debug("Skipped an unreadable %s payload", key.group(1))
+                _LOG.debug("Skipped an unreadable %s payload", dataset_key)
         return datasets
 
-    def _preferring(self, datasets: dict[str, Any], key: str) -> list[Any]:
+    def _order_datasets(
+        self, datasets: dict[str, Any], preferred_key: str
+    ) -> list[Any]:
         """Every dataset, the one that usually holds this page's data first.
 
         Google renumbers these keys between page versions, so a key is a hint
         rather than an address: try the expected one, then fall back to the rest.
         """
-        return [datasets[k] for k in sorted(datasets, key=lambda k: (k != key, k))]
+        ordered_keys = sorted(
+            datasets,
+            key=lambda dataset_key: (dataset_key != preferred_key, dataset_key),
+        )
+        return [datasets[dataset_key] for dataset_key in ordered_keys]
 
-    def _holds_results(self, sections: list[Any]) -> bool:
+    def _is_results_container(self, sections: Any) -> bool:
         """Whether these sections are a search results container at all.
 
         A list at the sections path is not enough, because an unrelated dataset can have
         one, and accepting it reported an unreadable page as "no results". A real
         section carries a featured slot or a list of result groups.
         """
-        return any(
-            isinstance(section, list)
-            and (
-                self._at(section, self._TOP_RESULT) is not None
-                or isinstance(self._at(section, self._ENTRY_GROUPS), list)
-            )
-            for section in sections
-        )
-
-    def _apps(self, sections: list[Any]) -> list[AppMetadata]:
-        """The apps across every section, the first mention of each id winning."""
-        found: dict[str, AppMetadata] = {}
+        if not isinstance(sections, list):
+            return False
         for section in sections:
-            for app in self._section_apps(section):
-                found.setdefault(app.app_id, app)
-        return list(found.values())
+            if not isinstance(section, list):
+                continue
+            has_featured_hit = self._at(section, self._TOP_RESULT) is not None
+            has_entry_groups = isinstance(self._at(section, self._ENTRY_GROUPS), list)
+            if has_featured_hit or has_entry_groups:
+                return True
+        return False
 
-    def _section_apps(self, section: Any) -> Iterator[AppMetadata]:
+    def _collect_apps(self, sections: list[Any]) -> list[AppMetadata]:
+        """The apps across every section, the first mention of each id winning."""
+        apps_by_id: dict[str, AppMetadata] = {}
+        for section in sections:
+            for app in self._iter_section_apps(section):
+                apps_by_id.setdefault(app.app_id, app)
+        return list(apps_by_id.values())
+
+    def _iter_section_apps(self, section: Any) -> Iterator[AppMetadata]:
         """One section's apps: its featured hit, then its regular hits."""
         if not isinstance(section, list):
             return
 
-        top = self._top_app(self._at(section, self._TOP_RESULT))
-        if top is not None:
-            yield top
+        featured_app = self._parse_featured_app(self._at(section, self._TOP_RESULT))
+        if featured_app is not None:
+            yield featured_app
 
         groups = self._at(section, self._ENTRY_GROUPS)
         if not isinstance(groups, list):
             return
         for group in groups:
-            if not isinstance(group, list):
-                continue
-            for entry in group:
-                app = self._entry_app(entry)
-                if app is not None:
-                    yield app
+            yield from self._iter_group_apps(group)
 
-    def _top_app(self, entry: Any) -> AppMetadata | None:
+    def _iter_group_apps(self, group: Any) -> Iterator[AppMetadata]:
+        """The regular hits in one result group, skipping entries without an id."""
+        if not isinstance(group, list):
+            return
+        for entry in group:
+            app = self._parse_entry_app(entry)
+            if app is not None:
+                yield app
+
+    def _parse_featured_app(self, entry: Any) -> AppMetadata | None:
         """The featured hit, which embeds a whole detail block.
 
         Its own id slot is empty in practice, so the package name is read out of
         the store link inside the block instead.
         """
-        block = self._at(entry, self._TOP_DETAIL_BLOCK)
-        app_id = self._app_id_from_url(scraped_text(self._at(block, self._STORE_URL)))
+        detail_block = self._at(entry, self._TOP_DETAIL_BLOCK)
+        store_url = scraped_text(self._at(detail_block, self._STORE_URL))
+        app_id = self._read_app_id_from_url(store_url)
         if app_id is None:
             return None
-        return self._detail_app(block, app_id)
+        return self._parse_detail_app(detail_block, app_id)
 
-    def _detail_app(self, block: Any, app_id: str) -> AppMetadata | None:
+    def _parse_detail_app(self, block: Any, app_id: str) -> AppMetadata | None:
         """One app from a detail block, or None if the block carries no name.
 
         The name is what confirms the block is app detail at all: more than one
@@ -379,20 +405,24 @@ class GooglePlaySearch(PooledClient):
             name=name,
             developer=scraped_text(self._at(block, self._DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._PRICE)),
+            price=self._parse_price(self._at(block, self._PRICE)),
             version=scraped_text(self._at(block, self._DETAIL_VERSION)) or self.VERSION,
             rating=scraped_rating(self._at(block, self._RATING)),
             rating_count=scraped_rating_count(self._at(block, self._RATING_COUNT)),
-            url=self._url(app_id),
+            url=self._build_store_url(app_id),
             icon_url=scraped_text(self._at(block, self._ICON)),
-            current_version_release_date=self._display_date(
+            current_version_release_date=self._parse_display_date(
                 self._at(block, self._UPDATED_ON)
             ),
-            first_release_date=self._display_date(self._at(block, self._RELEASED_ON)),
-            release_notes=self._release_notes(self._at(block, self._RELEASE_NOTES)),
+            first_release_date=self._parse_display_date(
+                self._at(block, self._RELEASED_ON)
+            ),
+            release_notes=self._parse_release_notes(
+                self._at(block, self._RELEASE_NOTES)
+            ),
         )
 
-    def _release_notes(self, value: Any) -> str | None:
+    def _parse_release_notes(self, value: Any) -> str | None:
         """Play's "What's new" as plain text, or None if the app shows none.
 
         Play renders it as HTML, so ``<br>`` becomes a newline and entities are
@@ -401,10 +431,11 @@ class GooglePlaySearch(PooledClient):
         text = scraped_text(value)
         if text is None:
             return None
-        return scraped_text(html.unescape(self._LINE_BREAK.sub("\n", text)))
+        text_with_newlines = self._LINE_BREAK.sub("\n", text)
+        return scraped_text(html.unescape(text_with_newlines))
 
     @staticmethod
-    def _display_date(value: Any) -> datetime | None:
+    def _parse_display_date(value: Any) -> datetime | None:
         """One of Play's rendered dates as midnight UTC, or None if unreadable.
 
         Play publishes no timestamp for either date, only the day it prints on the
@@ -421,7 +452,7 @@ class GooglePlaySearch(PooledClient):
         except ValueError:
             return None
 
-    def _entry_app(self, entry: Any) -> AppMetadata | None:
+    def _parse_entry_app(self, entry: Any) -> AppMetadata | None:
         """One regular search hit, or None without an id to key it by."""
         block = self._at(entry, self._ENTRY_BLOCK)
         app_id = scraped_text(self._at(block, self._ENTRY_APP_ID))
@@ -434,12 +465,12 @@ class GooglePlaySearch(PooledClient):
             name=scraped_text(self._at(block, self._ENTRY_NAME)) or "Unknown",
             developer=scraped_text(self._at(block, self._ENTRY_DEVELOPER)) or "Unknown",
             category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or "Unknown",
-            price=self._price(self._at(block, self._ENTRY_PRICE)),
+            price=self._parse_price(self._at(block, self._ENTRY_PRICE)),
             version=self.VERSION,
             rating=scraped_rating(self._at(block, self._ENTRY_RATING)),
             # This layout carries no count anywhere; only a detail block does.
             rating_count=0,
-            url=self._url(app_id),
+            url=self._build_store_url(app_id),
             icon_url=scraped_text(self._at(block, self._ENTRY_ICON)),
         )
 
@@ -457,45 +488,74 @@ class GooglePlaySearch(PooledClient):
             node = node[index]
         return node
 
-    def _url(self, app_id: str) -> str:
+    def _build_store_url(self, app_id: str) -> str:
         return f"{self.DETAIL_URL}?id={app_id}"
 
-    def _app_id_from_url(self, url: str | None) -> str | None:
+    def _read_app_id_from_url(self, url: str | None) -> str | None:
         """The package name in a store link's ``id`` parameter."""
         if url is None:
             return None
         ids = parse_qs(urlsplit(url).query).get("id", [])
-        return ids[0] if ids and ids[0] else None
+        if not ids or not ids[0]:
+            return None
+        return ids[0]
 
-    def _price(self, price: Any) -> str:
-        """The storefront's display price, with an ISO-currency fallback."""
+    def _parse_price(self, price: Any) -> str:
+        """The storefront's display price, with an ISO-currency fallback.
+
+        ``price`` is ``[micros, currency, display?]``. Absent price data means a
+        free app; anything malformed is ``"Unknown"`` rather than a guess.
+        """
         if price is None:
             return "Free"
         if not isinstance(price, list) or len(price) < 2:
             return "Unknown"
-        try:
-            micros = price[0]
-            if isinstance(micros, bool):
-                return "Unknown"
-            amount = float(micros)
-            if not math.isfinite(amount):
-                return "Unknown"
-            if amount < 0:
-                return "Unknown"
-            if amount == 0:
-                return "Free"
-            if len(price) > 2 and isinstance(price[2], str) and price[2].strip():
-                formatted = price[2].strip()
-                if (
-                    "-" in formatted
-                    or "\u2212" in formatted
-                    or (formatted.startswith("(") and formatted.endswith(")"))
-                ):
-                    return "Unknown"
-                return formatted
-            currency = price[1]
-            if not isinstance(currency, str) or not currency.strip():
-                return "Unknown"
-            return f"{currency.strip().upper()} {amount / 1_000_000:.2f}"
-        except (TypeError, ValueError):
+
+        amount = self._parse_price_micros(price[0])
+        if amount is None:
             return "Unknown"
+        if amount == 0:
+            return "Free"
+
+        display_price = self._read_display_price(price)
+        if display_price is not None:
+            return display_price
+        return self._format_currency_price(price[1], amount)
+
+    @staticmethod
+    def _parse_price_micros(micros: Any) -> float | None:
+        """The price in micros as a finite, non-negative number, or None."""
+        if isinstance(micros, bool):
+            return None
+        try:
+            amount = float(micros)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(amount) or amount < 0:
+            return None
+        return amount
+
+    @staticmethod
+    def _read_display_price(price: list[Any]) -> str | None:
+        """The storefront's own formatted price, if Play sent one.
+
+        Returns None when there is no display string, so the caller falls back
+        to the currency code. A display string that looks negative is
+        ``"Unknown"``: a paid app cannot cost less than nothing.
+        """
+        if len(price) <= 2 or not isinstance(price[2], str):
+            return None
+        formatted = price[2].strip()
+        if not formatted:
+            return None
+        is_parenthesised = formatted.startswith("(") and formatted.endswith(")")
+        if "-" in formatted or "\u2212" in formatted or is_parenthesised:
+            return "Unknown"
+        return formatted
+
+    def _format_currency_price(self, currency: Any, amount: float) -> str:
+        """``"USD 4.99"`` from the ISO currency code, or ``"Unknown"`` without one."""
+        if not isinstance(currency, str) or not currency.strip():
+            return "Unknown"
+        units = amount / self._PRICE_MICROS_PER_UNIT
+        return f"{currency.strip().upper()} {units:.2f}"

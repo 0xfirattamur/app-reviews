@@ -84,20 +84,20 @@ class GoogleAuth(PooledClient):
         self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
-        self._header: str | None = None
+        self._bearer_header: str | None = None
         self._expires_at = 0.0
 
     def close(self) -> None:
         """Clear cached credentials and close only a pool created here."""
         self._key = None
-        self._header = None
+        self._bearer_header = None
         self._expires_at = 0.0
         super().close()
 
     async def aclose(self) -> None:
         """Async equivalent of :meth:`close`."""
         self._key = None
-        self._header = None
+        self._bearer_header = None
         self._expires_at = 0.0
         await super().aclose()
 
@@ -111,11 +111,11 @@ class GoogleAuth(PooledClient):
         """
         if (cached := self._cached_header()) is not None:
             return cached
-        url, body = self._token_request()
+        url, body = self._build_token_request()
         response = self._http.post(
             url, body=body, headers=self._FORM_HEADERS, follow_redirects=False
         )
-        return self._store(*self._read_token(response))
+        return self._store_token(*self._read_token(response))
 
     async def aauthorization_header(self) -> str:
         """Async equivalent of ``authorization_header``.
@@ -126,11 +126,11 @@ class GoogleAuth(PooledClient):
         """
         if (cached := self._cached_header()) is not None:
             return cached
-        url, body = await asyncio.to_thread(self._token_request)
+        url, body = await asyncio.to_thread(self._build_token_request)
         response = await self._http.apost(
             url, body=body, headers=self._FORM_HEADERS, follow_redirects=False
         )
-        return self._store(*self._read_token(response))
+        return self._store_token(*self._read_token(response))
 
     def _load(self, auth: GooglePlayAuth) -> ServiceAccountCredentials:
         """Read and validate the service-account JSON, as ``AuthError`` if unusable.
@@ -250,7 +250,7 @@ class GoogleAuth(PooledClient):
         )
         return f"{header_b64}.{payload_b64}.{encode_base64url(signature)}"
 
-    def _token_request(self) -> tuple[str, str]:
+    def _build_token_request(self) -> tuple[str, str]:
         """The ``(url, urlencoded_body)`` pair for the exchange.
 
         Shared by the sync and async paths so both send an identical request.
@@ -264,18 +264,18 @@ class GoogleAuth(PooledClient):
         """The held token while it is still worth reusing, else None.
 
         Returns the value rather than answering yes/no. A boolean ``_fresh()``
-        could not narrow ``self._header`` for the caller, so both entry points
+        could not narrow ``self._bearer_header`` for the caller, so both entry points
         needed a ``type: ignore`` on their return, silencing the checker on a
         public method to work around a private one's shape.
         """
-        if self._header is not None and time.time() < self._expires_at:
-            return self._header
+        if self._bearer_header is not None and time.time() < self._expires_at:
+            return self._bearer_header
         return None
 
-    def _store(self, token: str, expires_in: int) -> str:
-        self._header = f"Bearer {token}"
+    def _store_token(self, token: str, expires_in: int) -> str:
+        self._bearer_header = f"Bearer {token}"
         self._expires_at = time.time() + expires_in - self.REFRESH_MARGIN_SECONDS
-        return self._header
+        return self._bearer_header
 
     def _read_token(self, response: HttpResponse) -> tuple[str, int]:
         """The access token and its lifetime, or the error that explains why not.

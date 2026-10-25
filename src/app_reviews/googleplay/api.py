@@ -33,37 +33,37 @@ class PlayAPIClient(PooledClient):
     ) -> None:
         super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._auth = auth
-        self._token: GoogleAuth | None = None
-        self._token_lock = threading.Lock()
+        self._cached_google_auth: GoogleAuth | None = None
+        self._google_auth_lock = threading.Lock()
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": self._google_auth().authorization_header()}
 
     async def _aheaders(self) -> dict[str, str]:
-        token = self._token
-        if token is None:
-            token = await asyncio.to_thread(self._google_auth)
-        return {"Authorization": await token.aauthorization_header()}
+        google_auth = self._cached_google_auth
+        if google_auth is None:
+            google_auth = await asyncio.to_thread(self._google_auth)
+        return {"Authorization": await google_auth.aauthorization_header()}
 
     def _google_auth(self) -> GoogleAuth:
-        if self._token is None:
-            with self._token_lock:
-                if self._token is None:
-                    self._token = GoogleAuth(
+        if self._cached_google_auth is None:
+            with self._google_auth_lock:
+                if self._cached_google_auth is None:
+                    self._cached_google_auth = GoogleAuth(
                         self._auth.service_account_path,
                         service_account_info=self._auth.service_account_info,
                         http=self._http,
                     )
-        return self._token
+        return self._cached_google_auth
 
     def close(self) -> None:
         """Discard the cached token and close only a pool created here."""
-        if self._token is not None:
-            self._token.close()
+        if self._cached_google_auth is not None:
+            self._cached_google_auth.close()
         super().close()
 
     async def aclose(self) -> None:
         """Async equivalent of :meth:`close`."""
-        if self._token is not None:
-            await self._token.aclose()
+        if self._cached_google_auth is not None:
+            await self._cached_google_auth.aclose()
         await super().aclose()

@@ -12,7 +12,9 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils
 
 def encode_base64url(data: bytes) -> str:
     """Base64-URL without padding, which is what RFC 7515 requires."""
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+    encoded = base64.urlsafe_b64encode(data)
+    unpadded = encoded.rstrip(b"=")
+    return unpadded.decode("ascii")
 
 
 def encode_jwt_segment(claims: dict[str, Any]) -> str:

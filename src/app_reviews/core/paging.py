@@ -177,13 +177,13 @@ class StopPolicy:
         initial_cursor: str | None = None,
     ) -> None:
         self._since = to_aware_datetime(since) if since is not None else None
-        self._trust_order = orders_newest_first(source)
+        self._is_newest_first = orders_newest_first(source)
         self._limit = limit
         self._max_pages = max_pages
         self._max_empty_pages = max_empty_pages
-        self._seen = 0
-        self._pages = 0
-        self._empty_streak = 0
+        self._fetched_review_count = 0
+        self._page_count = 0
+        self._empty_page_streak = 0
         # A resumed walk has already consumed ``initial_cursor`` by the time its
         # first response is evaluated. If that response points back to the same
         # cursor, following it would request and duplicate the page again.
@@ -203,41 +203,32 @@ class StopPolicy:
         ``stalled`` and ``max_pages`` rank last for the same reason. They mean
         "the walk gave up on a source that would not end", so any reason the
         source or the caller supplied is the truer answer.
+
+        ``_STOP_REASON_PRIORITY`` restates this order for ``prefer_stop_reason``;
+        change both together.
         """
         if page.error is not None:
             return "error", None
-        self._seen += len(page.reviews)
-        self._pages += 1
-        self._empty_streak = 0 if page.reviews else self._empty_streak + 1
+        self._record_page(page)
         if not page.next_cursor:
             return "exhausted", None
         if self._predates_since(page):
             return "since", None
-        if self._limit is not None and self._seen >= self._limit:
+        if self._limit is not None and self._fetched_review_count >= self._limit:
             return "limit", None
-        if page.next_cursor in self._cursors:
-            _LOG.warning(
-                "Ending the walk: the source repeated cursor %r, so following it "
-                "again would not advance",
-                page.next_cursor,
-            )
-            return "cycle", None
-        if self._empty_streak >= self._max_empty_pages:
-            _LOG.warning(
-                "Ending the walk: the source returned %d consecutive pages with no "
-                "reviews while still issuing cursors, so it is not advancing",
-                self._empty_streak,
-            )
-            return "stalled", None
-        if self._pages >= self._max_pages:
-            _LOG.warning(
-                "Ending the walk: reached the %d-page ceiling with a cursor still "
-                "outstanding. More data may exist; resume from the last cursor",
-                self._max_pages,
-            )
-            return "max_pages", None
+        safety_stop_reason = self._find_safety_stop_reason(page.next_cursor)
+        if safety_stop_reason is not None:
+            return safety_stop_reason, None
         self._cursors.add(page.next_cursor)
         return None, page.next_cursor
+
+    def _record_page(self, page: PageResult) -> None:
+        self._fetched_review_count += len(page.reviews)
+        self._page_count += 1
+        if page.reviews:
+            self._empty_page_streak = 0
+        else:
+            self._empty_page_streak += 1
 
     def _predates_since(self, page: PageResult) -> bool:
         """True if this page's oldest review is older than ``since``.
@@ -245,6 +236,31 @@ class StopPolicy:
         Requires a guaranteed newest-first ordering: without it, a later page
         could still hold reviews inside the window.
         """
-        if self._since is None or not self._trust_order or not page.reviews:
+        if self._since is None or not self._is_newest_first or not page.reviews:
             return False
         return page.reviews[-1].dated_at < self._since
+
+    def _find_safety_stop_reason(self, next_cursor: str) -> StopReason | None:
+        """``cycle``, ``stalled`` or ``max_pages`` when the source will not end."""
+        if next_cursor in self._cursors:
+            _LOG.warning(
+                "Ending the walk: the source repeated cursor %r, so following it "
+                "again would not advance",
+                next_cursor,
+            )
+            return "cycle"
+        if self._empty_page_streak >= self._max_empty_pages:
+            _LOG.warning(
+                "Ending the walk: the source returned %d consecutive pages with no "
+                "reviews while still issuing cursors, so it is not advancing",
+                self._empty_page_streak,
+            )
+            return "stalled"
+        if self._page_count >= self._max_pages:
+            _LOG.warning(
+                "Ending the walk: reached the %d-page ceiling with a cursor still "
+                "outstanding. More data may exist; resume from the last cursor",
+                self._max_pages,
+            )
+            return "max_pages"
+        return None

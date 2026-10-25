@@ -1,8 +1,6 @@
-"""Everything the caller constructs and passes in.
+"""Everything the caller constructs and passes in: credentials and retry policy.
 
-Credentials and retry policy sat in two files of 57 and 21 lines. They are the
-same kind of thing (inputs you build before a fetch, as opposed to the results
-you get back), so they share a module.
+Inputs built before a fetch, as opposed to the results you get back.
 """
 
 from collections.abc import Collection, Mapping
