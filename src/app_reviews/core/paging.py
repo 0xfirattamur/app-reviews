@@ -86,6 +86,7 @@ class CountryCollector:
         self._skipped_reviews = 0
         self._reviews_fetched = 0
         self._feed_format: FeedFormat | None = None
+        self._xml_fallback_error: FetchError | None = None
 
     def add(self, page: PageResult, *, reviews_fetched: int | None = None) -> None:
         """Fold one page in, retaining wire-row accounting after filtering.
@@ -102,6 +103,8 @@ class CountryCollector:
         self._skipped_reviews += page.skipped_reviews
         if self._feed_format != "xml" and page.feed_format is not None:
             self._feed_format = page.feed_format
+        if self._xml_fallback_error is None:
+            self._xml_fallback_error = page.xml_fallback_error
         if page.stopped_because is not None:
             self._reason = page.stopped_because
             self._error = page.error
@@ -117,6 +120,7 @@ class CountryCollector:
             elapsed=time.monotonic() - self._started,
             skipped_reviews=self._skipped_reviews,
             feed_format=self._feed_format,
+            xml_fallback_error=self._xml_fallback_error,
         )
 
 

@@ -66,6 +66,9 @@ class CountryOutcome:
     ``feed_format`` is ``"xml"`` if any App Store RSS page of this walk came
     from the XML fallback, ``"json"`` if every page a feed answered came from
     the JSON feed, and None for other sources or a walk no feed answered.
+
+    ``xml_fallback_error`` carries the first page whose empty JSON answer the XML
+    feed could not confirm. It never changes ``stopped_because`` or ``error``.
     """
 
     country: str | None
@@ -76,6 +79,7 @@ class CountryOutcome:
     error: FetchError | None = None
     skipped_reviews: int = 0
     feed_format: FeedFormat | None = None
+    xml_fallback_error: FetchError | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if not isfinite(self.elapsed) or self.elapsed < 0:
@@ -93,6 +97,11 @@ class CountryOutcome:
             "elapsed": self.elapsed,
             "error": self.error.to_dict() if self.error is not None else None,
             "feed_format": self.feed_format,
+            "xml_fallback_error": (
+                self.xml_fallback_error.to_dict()
+                if self.xml_fallback_error is not None
+                else None
+            ),
         }
 
 
@@ -111,6 +120,19 @@ class FetchResult:
         them: there is one copy, on the outcomes.
         """
         return [o.error for o in self.outcomes if o.error is not None]
+
+    @property
+    def xml_fallback_errors(self) -> list[FetchError]:
+        """Every empty App Store RSS answer the XML feed could not confirm.
+
+        Diagnostics, not failures: these outcomes still count as successful and
+        are absent from ``errors``.
+        """
+        return [
+            outcome.xml_fallback_error
+            for outcome in self.outcomes
+            if outcome.xml_fallback_error is not None
+        ]
 
     @property
     def skipped_reviews(self) -> int:
@@ -197,6 +219,9 @@ class FetchResult:
             "reviews": self.to_dicts(include_raw=include_raw),
             "outcomes": [outcome.to_dict() for outcome in self.outcomes],
             "errors": [error.to_dict() for error in self.errors],
+            "xml_fallback_errors": [
+                error.to_dict() for error in self.xml_fallback_errors
+            ],
             "skipped_reviews": self.skipped_reviews,
         }
 

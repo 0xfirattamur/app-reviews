@@ -22,6 +22,10 @@ class PageResult:
     ``feed_format`` says which App Store RSS feed answered: ``"json"``, or
     ``"xml"`` when the JSON feed came back empty or unreadable and its XML twin
     had the entries. None for other sources, and for a page that failed.
+
+    ``xml_fallback_error`` is set when the JSON feed answered empty and the XML
+    feed asked to confirm it could not be read. The page still counts as the
+    JSON answer; this only says the emptiness went unconfirmed.
     """
 
     reviews: list[Review] = field(default_factory=list)
@@ -30,6 +34,7 @@ class PageResult:
     stopped_because: StopReason | None = None
     skipped_reviews: int = 0
     feed_format: FeedFormat | None = None
+    xml_fallback_error: FetchError | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _validate_non_negative_int(self.skipped_reviews, "skipped_reviews")
@@ -45,4 +50,9 @@ class PageResult:
             "error": self.error.to_dict() if self.error is not None else None,
             "stopped_because": self.stopped_because,
             "feed_format": self.feed_format,
+            "xml_fallback_error": (
+                self.xml_fallback_error.to_dict()
+                if self.xml_fallback_error is not None
+                else None
+            ),
         }

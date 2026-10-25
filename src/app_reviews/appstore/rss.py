@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -189,7 +189,13 @@ class AppStoreScraperProvider(PooledClient):
             entries = atom_entries(response.body)
         except (ElementTree.ParseError, ValueError) as exc:
             _LOG.warning("Unreadable App Store RSS XML for %s: %s", ref, exc)
-            return fallback
+            unreadable_xml = FetchError(
+                country=ref.country,
+                message=f"Unreadable App Store RSS XML: {exc}",
+                kind="parse",
+                status=response.status,
+            )
+            return replace(fallback, xml_fallback_error=unreadable_xml)
         if not entries and fallback.error is None:
             return fallback
         _LOG.info("App Store RSS XML answered %d entries for %s", len(entries), ref)
@@ -254,7 +260,9 @@ class AppStoreScraperProvider(PooledClient):
         Apple sends ``entry`` as a bare object, not a one-element list, when an app
         has exactly one review, and iterating that dict yields its keys instead.
         """
-        entries = body.get("feed", {}).get("entry", [])
+        # ``feed`` is the envelope and must be there; ``entry`` is legitimately
+        # absent on a storefront with no reviews.
+        entries = body["feed"].get("entry", [])
         if isinstance(entries, dict):
             return [entries]
         if not isinstance(entries, list):

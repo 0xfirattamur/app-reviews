@@ -204,10 +204,14 @@ class BaseReviews(PooledClient, abc.ABC):
         resume later. A returned ``next_cursor`` of None means no more pages.
         ``stopped_because`` is always None here, because no page walk is being
         performed. Retries and provider fallbacks may make multiple HTTP requests.
+
+        A failure is reported on ``.error``, never raised, except ``AuthError``:
+        see the class docstring for why an unusable credential raises.
         """
         self._validate_country_argument(country)
         provider = self._ensure_provider()
-        return provider.fetch_page(app_id, self._country_arg(provider, country), cursor)
+        country_arg = self._country_arg(provider, country)
+        return self._page(provider, app_id, country_arg, cursor)
 
     async def afetch_page(
         self,
@@ -219,9 +223,8 @@ class BaseReviews(PooledClient, abc.ABC):
         """Async equivalent of ``fetch_page``."""
         self._validate_country_argument(country)
         provider = await self._aensure_provider()
-        return await provider.afetch_page(
-            app_id, self._country_arg(provider, country), cursor
-        )
+        country_arg = self._country_arg(provider, country)
+        return await self._apage(provider, app_id, country_arg, cursor)
 
     # ---- rung 2: one country, paginated ------------------------------------
 

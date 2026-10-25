@@ -57,6 +57,7 @@ class TestPageResult:
             "error": error.to_dict(),
             "stopped_because": "error",
             "feed_format": "xml",
+            "xml_fallback_error": None,
         }
         json.dumps(serialised, allow_nan=False)
 

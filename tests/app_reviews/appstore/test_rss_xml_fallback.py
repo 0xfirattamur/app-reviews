@@ -290,6 +290,36 @@ class TestBothFeedsEmpty:
         assert page.feed_format == "json"
 
 
+class TestAMissingFeedEnvelope:
+    """A JSON body without ``feed`` is unreadable, not an empty storefront."""
+
+    def test_the_xml_feed_recovers_it(self):
+        page = _provider(_serving({"1/json": "{}", "1/xml": FULL_XML})).fetch_page(
+            "389801252", "us", None
+        )
+
+        assert page.error is None
+        assert page.feed_format == "xml"
+        assert len(page.reviews) == 3
+
+    async def test_the_async_xml_feed_recovers_it(self):
+        provider = _provider(_serving({"1/json": "{}", "1/xml": FULL_XML}))
+
+        page = await provider.afetch_page("389801252", "us", None)
+
+        assert page.error is None
+        assert page.feed_format == "xml"
+
+    def test_with_unreadable_xml_it_is_a_parse_error(self):
+        page = _provider(
+            _serving({"1/json": "{}", "1/xml": "<feed><entry>"})
+        ).fetch_page("389801252", "us", None)
+
+        assert page.error is not None
+        assert page.error.kind == "parse"
+        assert page.next_cursor is None
+
+
 class TestAnUnusableXmlAnswer:
     @pytest.mark.parametrize(
         "xml",
@@ -312,6 +342,46 @@ class TestAnUnusableXmlAnswer:
         assert page.next_cursor is None
         assert page.feed_format == "json"
         assert "Unreadable App Store RSS XML" in caplog.text
+
+    def test_unreadable_xml_is_kept_as_a_diagnostic(self):
+        """The empty JSON answer stands, but the caller can now see that the
+        XML feed meant to confirm it could not be read."""
+        page = _provider(
+            _serving({"1/json": EMPTY_JSON, "1/xml": "<feed><entry>"})
+        ).fetch_page("389801252", "us", None)
+
+        assert page.error is None
+        assert page.xml_fallback_error is not None
+        assert page.xml_fallback_error.kind == "parse"
+        assert page.xml_fallback_error.country == "us"
+        assert page.to_dict()["xml_fallback_error"]["kind"] == "parse"
+
+    async def test_async_unreadable_xml_is_kept_as_a_diagnostic(self):
+        provider = _provider(_serving({"1/json": EMPTY_JSON, "1/xml": "<feed><entry>"}))
+
+        page = await provider.afetch_page("389801252", "us", None)
+
+        assert page.error is None
+        assert page.xml_fallback_error is not None
+
+    def test_the_diagnostic_reaches_the_fetch_result(self):
+        client = _client(_serving({"1/json": EMPTY_JSON, "1/xml": "<feed><entry>"}))
+
+        result = client.fetch("389801252", countries=["us"])
+
+        (outcome,) = result.outcomes
+        assert result.errors == []
+        assert outcome.stopped_because == "exhausted"
+        assert outcome.xml_fallback_error is not None
+        assert result.xml_fallback_errors == [outcome.xml_fallback_error]
+        assert result.to_dict()["xml_fallback_errors"][0]["kind"] == "parse"
+
+    def test_a_readable_xml_answer_leaves_no_diagnostic(self):
+        page = _provider(
+            _serving({"1/json": EMPTY_JSON, "1/xml": FULL_XML})
+        ).fetch_page("389801252", "us", None)
+
+        assert page.xml_fallback_error is None
 
     def test_malformed_xml_after_unreadable_json_is_a_parse_error(self):
         page = _provider(

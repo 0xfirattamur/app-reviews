@@ -78,6 +78,7 @@ from app_reviews import FetchResult
 |-------|------|-------------|
 | `reviews` | `list[Review]` | The fetched reviews, merged across countries, filtered and sorted. |
 | `errors` | `list[FetchError]` | Per-country fetch failures. Derived from `outcomes`, so it can never disagree with them or be lost by a transform. |
+| `xml_fallback_errors` | `list[FetchError]` | App Store RSS pages whose empty JSON answer the XML feed could not confirm. Diagnostics, not failures, so they are not in `errors`. Derived from `outcomes`. |
 | `outcomes` | `list[CountryOutcome]` | One entry per country actually walked. See [CountryOutcome](#countryoutcome). |
 | `skipped_reviews` | `int` | Total malformed or unusable review rows skipped across all outcomes. Derived from `outcomes`. |
 
@@ -92,7 +93,7 @@ from app_reviews import FetchResult
 | `sort(order)` | `FetchResult` | Return a new sorted `FetchResult`. |
 | `limit(n)` | `FetchResult` | Return a new `FetchResult` truncated to `n` reviews. |
 | `to_dicts(include_raw=False)` | `list[dict]` | JSON-serialisable plain dicts: ISO 8601 timestamps, `raw` omitted unless asked. |
-| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `reviews`, `outcomes`, `errors`, and `skipped_reviews`. |
+| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `reviews`, `outcomes`, `errors`, `xml_fallback_errors`, and `skipped_reviews`. |
 
 Use `FetchResult.to_dict(include_raw=False)` for automation and persistence when
 the difference between an empty success and a failed fetch matters. Use
@@ -183,9 +184,10 @@ from app_reviews import CountryOutcome
 | `elapsed` | `float` | Wall-clock seconds spent on this country. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped during this walk. |
 | `feed_format` | `FeedFormat \| None` | App Store RSS only: `"xml"` if any page of this walk came from the XML fallback, `"json"` if every answered page came from the JSON feed. `None` for other sources, or when no feed answered. See [FeedFormat](#feedformat). |
+| `xml_fallback_error` | `FetchError \| None` | App Store RSS only: the first page whose empty JSON answer the XML feed could not confirm. A diagnostic, not a failure: `stopped_because` and `error` are unaffected. See [FeedFormat](#feedformat). |
 
 `CountryOutcome.to_dict()` serializes every field and nests the complete
-`FetchError` dictionary when an error is present.
+`FetchError` dictionary when an error or XML fallback diagnostic is present.
 
 `stopped_because` distinguishes "there is no more data" (`"exhausted"`) from
 "we stopped asking" (`"limit"`, `"since"`), facts that look identical if you
@@ -209,10 +211,11 @@ from app_reviews import PageResult
 | `stopped_because` | `StopReason \| None` | Set only on the final page of an `iter_pages()`/`aiter_pages()` walk. Always `None` on a bare `fetch_page()` call, which has nothing to stop. |
 | `skipped_reviews` | `int` | Malformed or unusable review rows skipped while parsing this page. |
 | `feed_format` | `FeedFormat \| None` | Which App Store RSS feed this page came from: `"json"`, or `"xml"` for the fallback. `None` for other sources and for a failed page. |
+| `xml_fallback_error` | `FetchError \| None` | Set when the JSON feed answered this page empty and the XML feed asked to confirm it could not be read. The page still counts as the JSON answer. |
 
 `PageResult.to_dict(include_raw=False)` returns a JSON-safe page envelope with
-`reviews`, `skipped_reviews`, `next_cursor`, `error`, `stopped_because`, and
-`feed_format`.
+`reviews`, `skipped_reviews`, `next_cursor`, `error`, `stopped_because`,
+`feed_format`, and `xml_fallback_error`.
 
 ---
 
@@ -239,9 +242,14 @@ converted into the JSON feed's shape.
   real end). A walk resumed from a persisted cursor may cost one XML request at
   its end.
 - Both feeds empty is a normal `"exhausted"`, with `feed_format="json"`.
-- An unreadable XML body leaves the JSON feed's answer standing. A failed XML
-  request (a 403, 5xx, or transport failure) is reported as the page's
-  `FetchError`, since the empty JSON answer is the one in doubt.
+- An unreadable XML body leaves the JSON feed's answer standing, and records
+  the parse failure on `xml_fallback_error` (and on
+  `FetchResult.xml_fallback_errors`) so an unconfirmed empty page is
+  distinguishable from a confirmed one. A failed XML request (a 403, 5xx, or
+  transport failure) is reported as the page's `FetchError`, since the empty
+  JSON answer is the one in doubt.
+- A JSON body without the `feed` envelope is unreadable, not empty, and goes
+  through the same XML recovery.
 
 ---
 

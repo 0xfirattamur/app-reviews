@@ -40,6 +40,10 @@ with AppStoreReviews() as client:
 
 `next_cursor is None` means there are no more pages.
 
+A failed page comes back with `page.error` set rather than raising, including a
+credential token exchange that fails mid-request. `AuthError` is the exception:
+an unusable credential raises on every rung.
+
 ---
 
 ## Iterating one country

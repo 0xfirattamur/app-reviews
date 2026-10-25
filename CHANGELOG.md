@@ -6,6 +6,41 @@ recent versions are also kept in
 
 ## Unreleased
 
+### Added
+
+- `PageResult.xml_fallback_error` and `CountryOutcome.xml_fallback_error`, with
+  the derived `FetchResult.xml_fallback_errors`: when the App Store RSS JSON feed
+  answers a page empty and the XML feed asked to confirm it cannot be read, the
+  parse failure is now kept as a diagnostic instead of only logged. The page
+  still counts as the JSON answer; `error` and `stopped_because` are unchanged.
+  `to_dict()` on all three includes the new key.
+
+### Changed
+
+- An iTunes Search or Lookup response without its `results` envelope now raises
+  `ParseError` instead of reading as no results. A valid `{"results": []}` is
+  still empty.
+- An App Store RSS JSON body without its `feed` envelope is a parse failure that
+  goes through the existing XML recovery, instead of reading as an exhausted
+  storefront. A feed with no `entry` is still a valid empty page.
+- Google Play search raises `ParseError` when the results section holds entries
+  but none of them can be read. Genuinely empty results and partly readable
+  pages behave as before.
+
+### Fixed
+
+- `fetch_page()` / `afetch_page()` report a failed token exchange (or any other
+  raised package error except `AuthError`) on `PageResult.error`, as the page
+  walks already did, instead of raising it.
+- Google Play release dates and App Store version-history dates parse under any
+  process locale; a non-English `LC_TIME` used to drop them or raise.
+- A Google Play price too large for a float degrades to `"Unknown"` instead of
+  aborting the whole search or lookup.
+- `max_duration` now also covers a response that arrives late with no body, and
+  each socket wait is capped at the attempt budget. Async attempts are
+  cancelled at the deadline; a sync attempt can still overrun by a few socket
+  waits before it is rejected.
+
 ### Documentation
 
 - Correct outdated reply support, client inventory, authentication setup, token

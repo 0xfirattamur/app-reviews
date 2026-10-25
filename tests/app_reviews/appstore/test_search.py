@@ -381,6 +381,24 @@ class TestMalformedResponsesAreParseErrors:
         assert self._client('{"results": []}').search("x") == []
         assert self._client('{"results": []}').lookup("123") is None
 
+    @pytest.mark.parametrize(
+        "body",
+        ["{}", '{"resultCount": 0}', '{"errorMessage": "Invalid value(s)"}'],
+    )
+    def test_a_missing_results_envelope_is_a_parse_error(self, body):
+        """Without ``results`` the body is not an answer at all, so it must not
+        read as "no such app"."""
+        with pytest.raises(ParseError):
+            self._client(body).search("x")
+        with pytest.raises(ParseError):
+            self._client(body).lookup("123")
+
+    async def test_async_missing_results_envelope_is_a_parse_error(self):
+        with pytest.raises(ParseError):
+            await self._client("{}").asearch("x")
+        with pytest.raises(ParseError):
+            await self._client("{}").alookup("123")
+
     async def test_the_async_paths_raise_too(self):
         with pytest.raises(ParseError):
             await self._client("not json").asearch("x")

@@ -217,8 +217,8 @@ class AppStoreSearch(PooledClient):
         """
         raise_for_http_failure(response, api, credentialed=False)
         try:
-            search_entries = json.loads(response.body).get("results", [])
-        except (AttributeError, json.JSONDecodeError) as exc:
+            search_entries = json.loads(response.body)["results"]
+        except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise ParseError(
                 f"Unreadable response from {api}: {exc}", status=response.status
             ) from exc

@@ -808,3 +808,75 @@ class TestAttemptHasAWallClockDeadline:
 
         assert response.status == 0
         assert "0.05" in (response.transport_error or "")
+
+    def test_a_late_empty_response_is_abandoned(self):
+        """No body chunk arrives to check against, so the deadline must also be
+        checked once the exchange completes."""
+
+        def late_and_empty(_request):
+            time.sleep(0.1)
+            return httpx.Response(200, content=b"")
+
+        response = _client(late_and_empty, max_duration=0.05).get(
+            "https://example.test/x"
+        )
+
+        assert response.status == 0
+        assert "max_duration=0.05" in (response.transport_error or "")
+
+    def test_an_overrun_attempt_is_not_retried(self):
+        attempts: list[int] = []
+
+        def late_and_empty(_request):
+            attempts.append(1)
+            time.sleep(0.1)
+            return httpx.Response(200, content=b"")
+
+        _client(
+            late_and_empty,
+            max_duration=0.05,
+            retry=RetryConfig(max_retries=2, backoff_factor=0),
+        ).get("https://example.test/x")
+
+        assert len(attempts) == 1
+
+    def test_socket_waits_are_capped_by_the_attempt_budget(self):
+        """A connect or read wait longer than the whole attempt's budget could
+        only ever end in an overrun, so httpx is never asked to wait that long."""
+        timeouts: dict[str, float] = {}
+
+        def handler(request):
+            timeouts.update(request.extensions["timeout"])
+            return httpx.Response(200)
+
+        _client(handler, timeout=30.0, max_duration=5.0).get("https://example.test/x")
+
+        assert timeouts == {"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}
+
+    async def test_the_async_path_abandons_a_stalled_exchange(self):
+        async def stalled(_request):
+            await asyncio.sleep(5)
+            return httpx.Response(200)
+
+        started = time.monotonic()
+        response = await _client(stalled, max_duration=0.05).aget(
+            "https://example.test/x"
+        )
+
+        assert time.monotonic() - started < 1
+        assert response.status == 0
+        assert "max_duration=0.05" in (response.transport_error or "")
+
+    async def test_an_outside_cancellation_still_propagates(self):
+        async def stalled(_request):
+            await asyncio.sleep(5)
+            return httpx.Response(200)
+
+        request = asyncio.create_task(
+            _client(stalled, max_duration=10.0).aget("https://example.test/x")
+        )
+        await asyncio.sleep(0.01)
+        request.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await request

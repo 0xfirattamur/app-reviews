@@ -540,6 +540,28 @@ class TestUnusableScrapedValues:
         assert app is not None
         assert app.price == "Unknown"
 
+    @pytest.mark.parametrize("micros", [10**400, -(10**400)])
+    def test_an_overflowing_price_is_unknown(self, micros: int) -> None:
+        """``float()`` on an integer this large raises ``OverflowError``, which
+        must cost the field rather than the whole lookup."""
+        app = _serving(_detail_page(price_micros=micros)).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
+    def test_an_overflowing_search_price_is_unknown(self) -> None:
+        page = _search_page(groups=[[_entry(price_micros=10**400)]])
+
+        results = _serving(page).search("whatsapp")
+
+        assert [app.price for app in results] == ["Unknown"]
+
+    async def test_async_overflowing_price_is_unknown(self) -> None:
+        app = await _serving(_detail_page(price_micros=10**400)).alookup("com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
     @pytest.mark.parametrize(
         "price",
         [
@@ -678,6 +700,55 @@ class TestAnUnrelatedDatasetIsNotAnEmptyResultSet:
         assert _serving(_search_page(groups=[])).search("nope") == []
 
 
+class TestPopulatedResultsWithoutUsableApps:
+    """A results container whose entries all fail to parse means the layout
+    moved. Answering ``[]`` would make that look like a query with no matches."""
+
+    @pytest.mark.parametrize(
+        "groups",
+        [
+            [[_entry(app_id="")]],
+            [[["not", "an", "entry"]]],
+            ["not-a-group"],
+        ],
+    )
+    def test_unusable_entries_raise(self, groups):
+        with pytest.raises(ParseError, match="no usable apps"):
+            _serving(_search_page(groups=groups)).search("whatsapp")
+
+    def test_an_unusable_featured_hit_alone_raises(self):
+        page = _search_page(groups=[], top=["unexpected"])
+
+        with pytest.raises(ParseError, match="no usable apps"):
+            _serving(page).search("whatsapp")
+
+    @pytest.mark.parametrize("groups", [[], [[]]])
+    def test_empty_groups_are_still_no_results(self, groups):
+        assert _serving(_search_page(groups=groups)).search("nope") == []
+
+    def test_one_usable_entry_still_survives(self):
+        groups = [[_entry(app_id=""), _entry(app_id="com.ok")]]
+
+        results = _serving(_search_page(groups=groups)).search("whatsapp")
+
+        assert [app.app_id for app in results] == ["com.ok"]
+
+    def test_a_later_dataset_can_still_supply_the_apps(self):
+        """Google renumbers datasets, so every one is tried before giving up."""
+        unusable = _search_page(groups=[[_entry(app_id="")]])
+        usable = _search_page().replace("'ds:4'", "'ds:7'")
+
+        results = _serving(unusable + usable).search("whatsapp")
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_async_raises_too(self):
+        page = _search_page(groups=[[_entry(app_id="")]])
+
+        with pytest.raises(ParseError, match="no usable apps"):
+            await _serving(page).asearch("whatsapp")
+
+
 class TestReleaseDates:
     """Play renders both dates on the detail page, as display strings.
 
@@ -699,6 +770,17 @@ class TestReleaseDates:
         assert app.first_release_date == datetime(2010, 12, 21, tzinfo=UTC)
         assert app.current_version_release_date == datetime(2026, 7, 30, tzinfo=UTC)
 
+    def test_dates_parse_under_a_non_english_process_locale(self, german_time_locale):
+        """Play is asked for ``hl=en``, so its month names are English whatever
+        ``LC_TIME`` the embedding application runs under."""
+        app = _serving(
+            _detail_page(released_on="Dec 21, 2010", updated_on="Mar 30, 2026")
+        ).lookup("com.whatsapp")
+
+        assert app is not None
+        assert app.first_release_date == datetime(2010, 12, 21, tzinfo=UTC)
+        assert app.current_version_release_date == datetime(2026, 3, 30, tzinfo=UTC)
+
     def test_dates_are_utc_midnight_because_play_gives_no_time(self):
         """Day precision is all Play publishes. Midnight UTC is the stated
         convention, not a real timestamp; see ``AppMetadata``."""
@@ -717,7 +799,18 @@ class TestReleaseDates:
 
     @pytest.mark.parametrize(
         "bad",
-        ["", "yesterday", "30 Jul 2026", "2026-07-30", "Jul 30 2026", None, 0, []],
+        [
+            "",
+            "yesterday",
+            "30 Jul 2026",
+            "2026-07-30",
+            "Jul 30 2026",
+            "Feb 30, 2026",
+            "Dez 21, 2010",
+            None,
+            0,
+            [],
+        ],
     )
     def test_an_unparseable_display_date_costs_the_field_only(self, bad):
         """These indices are Google's and they move. A reshuffle must degrade."""
