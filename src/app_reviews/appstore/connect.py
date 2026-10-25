@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from app_reviews.core.auth import TokenSource
-from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.country import normalise_country
@@ -140,68 +140,67 @@ class AppStoreOfficialProvider(PooledClient):
         ``country`` on any error is None: the Connect API is global, so there is no
         country to attribute a failure to.
         """
-        if response.transport_error is not None:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=response.transport_error,
-                    transport_error=response.transport_error,
-                )
-            )
-        if not response.ok:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=f"HTTP {response.status} from the App Store Connect API",
-                )
-            )
-
+        failure = page_failure_from_response(
+            response, country=None, source_name="the App Store Connect API"
+        )
+        if failure is not None:
+            return failure
         try:
-            data = json.loads(response.body)
-            entries = data.get("data", [])
-            if not isinstance(entries, list):
-                raise TypeError(f"'data' is {type(entries).__name__}, expected a list")
-            next_cursor = self._next_cursor(data)
+            entries, next_cursor = self._parse_envelope(response.body)
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
-            return PageResult(
-                error=FetchError(
-                    country=None,
-                    message=f"Malformed App Store Connect response: {exc}",
-                    kind="parse",
-                    status=response.status,
-                )
+            return malformed_page(
+                country=None,
+                source_name="App Store Connect",
+                status=response.status,
+                exc=exc,
             )
+        return self._map_reviews(entries, next_cursor, app_id)
 
-        mapped = (self._review(entry, app_id) for entry in entries)
-        reviews = [review for review in mapped if review is not None]
+    def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
+        """The review entries and next-page URL; raises on a malformed envelope."""
+        payload = json.loads(body)
+        entries = payload.get("data", [])
+        if not isinstance(entries, list):
+            raise TypeError(f"'data' is {type(entries).__name__}, expected a list")
+        return entries, self._read_next_cursor(payload)
+
+    def _map_reviews(
+        self, entries: list[Any], next_cursor: str | None, app_id: str
+    ) -> PageResult:
+        """The page's reviews; an unusable entry is skipped, not fatal."""
+        reviews: list[Review] = []
+        for entry in entries:
+            review = self._parse_review(entry, app_id)
+            if review is not None:
+                reviews.append(review)
         return PageResult(
             reviews=reviews,
             next_cursor=next_cursor,
             skipped_reviews=len(entries) - len(reviews),
         )
 
-    def _next_cursor(self, data: dict[str, Any]) -> str | None:
+    def _read_next_cursor(self, payload: dict[str, Any]) -> str | None:
         """The ``links.next`` URL, or None on the last page.
 
         Type-checked because it goes straight back out as the next cursor: an
         unhashable value reached the walk's cycle detection and raised
         ``TypeError`` out of ``iter_pages``.
         """
-        links = data.get("links")
+        links = payload.get("links")
         if links is None:
             return None
         if not isinstance(links, dict):
             raise TypeError(f"'links' is {type(links).__name__}, expected an object")
-        nxt = links.get("next")
-        if nxt is None:
+        next_cursor = links.get("next")
+        if next_cursor is None:
             return None
-        if not isinstance(nxt, str):
-            raise TypeError(f"'links.next' is {type(nxt).__name__}, expected a string")
-        return nxt
+        if not isinstance(next_cursor, str):
+            raise TypeError(
+                f"'links.next' is {type(next_cursor).__name__}, expected a string"
+            )
+        return next_cursor
 
-    def _review(self, entry: Any, app_id: str) -> Review | None:
+    def _parse_review(self, entry: Any, app_id: str) -> Review | None:
         """Parse one entry, or None if a field we cannot fake is unusable.
 
         ``id`` keys deduplication, and ``rating``/``createdDate`` cannot be
@@ -209,22 +208,22 @@ class AppStoreOfficialProvider(PooledClient):
         """
         try:
             review_id = entry["id"]
-            attrs = entry["attributes"]
+            attributes = entry["attributes"]
             if not review_id:
                 raise ValueError("no id, which deduplication keys on")
-            if not attrs.get("createdDate"):
+            if not attributes.get("createdDate"):
                 raise ValueError("no createdDate")
 
             return Review(
                 store="appstore",
                 app_id=app_id,
-                country=normalise_country(attrs.get("territory")),
-                rating=self._rating(attrs["rating"]),
-                title=self._text(attrs.get("title")),
-                body=self._text(attrs.get("body")) or "",
-                author_name=self._text(attrs.get("reviewerNickname")) or "",
+                country=normalise_country(attributes.get("territory")),
+                rating=self._rating(attributes["rating"]),
+                title=self._text(attributes.get("title")),
+                body=self._text(attributes.get("body")) or "",
+                author_name=self._text(attributes.get("reviewerNickname")) or "",
                 # Connect reports `createdDate` and nothing about edits.
-                created_at=datetime.fromisoformat(attrs["createdDate"]),
+                created_at=datetime.fromisoformat(attributes["createdDate"]),
                 source="appstore_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),

@@ -23,7 +23,7 @@ from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.errors import ParseError, ReplyRejectedError
 from app_reviews.googleplay.api import PlayAPIClient
-from app_reviews.googleplay.developer_api import protobuf_timestamp
+from app_reviews.googleplay.developer_api import parse_protobuf_timestamp
 from app_reviews.models.reply import ReviewReply
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
@@ -147,7 +147,7 @@ def _reply(review_id: str, text: Any, edited: Any) -> ReviewReply:
         reply_id=None,
         text=text,
         state="published",
-        updated_at=None if edited is None else protobuf_timestamp(edited),
+        updated_at=None if edited is None else parse_protobuf_timestamp(edited),
     )
 
 

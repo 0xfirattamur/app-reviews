@@ -134,16 +134,13 @@ class FetchResult:
         until: date | datetime | None = None,
     ) -> FetchResult:
         """Return a new FetchResult with filtered reviews (non-destructive)."""
-        filtered = list(self.reviews)
-        if ratings is not None:
-            rating_set = set(ratings)
-            filtered = [r for r in filtered if r.rating in rating_set]
-        if since is not None:
-            since_dt = to_aware_datetime(since)
-            filtered = [r for r in filtered if r.dated_at >= since_dt]
-        if until is not None:
-            until_dt = to_aware_datetime(until, end_of_day=True)
-            filtered = [r for r in filtered if r.dated_at <= until_dt]
+        matches_filters = build_review_predicate(
+            ratings=ratings, since=since, until=until
+        )
+        if matches_filters is None:
+            filtered = list(self.reviews)
+        else:
+            filtered = [review for review in self.reviews if matches_filters(review)]
         return FetchResult(reviews=filtered, outcomes=self.outcomes)
 
     def sort(self, order: Sort = Sort.NEWEST) -> FetchResult:
@@ -204,7 +201,40 @@ class FetchResult:
         }
 
 
-def to_aware_datetime(d: date | datetime, *, end_of_day: bool = False) -> datetime:
+def build_review_predicate(
+    *,
+    ratings: list[int] | None = None,
+    since: date | datetime | None = None,
+    until: date | datetime | None = None,
+) -> Callable[[Review], bool] | None:
+    """One test for "does this review pass these filters", or None for no filters.
+
+    Shared by ``FetchResult.filter``, ``fetch``'s early stop and the streaming
+    ``since`` check, so all three agree on inclusive bounds: ``since`` keeps
+    reviews at or after it, and a date ``until`` keeps that whole UTC day.
+    """
+    if ratings is None and since is None and until is None:
+        return None
+
+    rating_set = set(ratings) if ratings is not None else None
+    since_boundary = to_aware_datetime(since) if since is not None else None
+    until_boundary = (
+        to_aware_datetime(until, end_of_day=True) if until is not None else None
+    )
+
+    def matches_filters(review: Review) -> bool:
+        if rating_set is not None and review.rating not in rating_set:
+            return False
+        if since_boundary is not None and review.dated_at < since_boundary:
+            return False
+        return until_boundary is None or review.dated_at <= until_boundary
+
+    return matches_filters
+
+
+def to_aware_datetime(
+    boundary: date | datetime, *, end_of_day: bool = False
+) -> datetime:
     """Convert a date or naive datetime to a UTC-aware datetime.
 
     The one implementation, so the page walk's early stop and ``filter``'s
@@ -212,6 +242,7 @@ def to_aware_datetime(d: date | datetime, *, end_of_day: bool = False) -> dateti
     used as an inclusive upper bound resolves to the final microsecond of that
     UTC day; datetime inputs retain their precise instant.
     """
-    if isinstance(d, datetime):
-        return d if d.tzinfo else d.replace(tzinfo=UTC)
-    return datetime.combine(d, time.max if end_of_day else time.min, tzinfo=UTC)
+    if isinstance(boundary, datetime):
+        return boundary if boundary.tzinfo else boundary.replace(tzinfo=UTC)
+    boundary_time = time.max if end_of_day else time.min
+    return datetime.combine(boundary, boundary_time, tzinfo=UTC)

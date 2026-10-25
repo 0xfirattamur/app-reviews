@@ -20,16 +20,9 @@ _Parsed = TypeVar("_Parsed")
 class SearchClient(Protocol):
     """What a store search client does.
 
-    Structural, so nothing inherits it. This was an ABC whose four abstract
-    methods hid three field assignments: all interface, no behaviour, which is
-    precisely what a Protocol is for. Being structural also removed the reason
-    ``lookup`` had to reach into a private ``_transport`` field: the pool is now
-    a constructor argument of the concrete clients rather than a hole punched
-    into a shared base.
-
-    The behaviour that really is shared lives elsewhere: the connection pool and
-    its lifecycle in ``PooledClient``, and the request-then-parse step in
-    ``get_and_parse`` below.
+    Structural, so nothing inherits it. The behaviour that really is shared
+    lives elsewhere: the connection pool and its lifecycle in ``PooledClient``,
+    and the request-then-parse step in ``get_and_parse`` below.
     """
 
     def search(
@@ -81,9 +74,8 @@ def get_and_parse(
 ) -> _Parsed:
     """GET ``url`` with ``params``, then hand the response to ``parse``.
 
-    Each search client's search/asearch/lookup/alookup quartet was the same
-    three steps (build params, GET, parse) written out eight times across two
-    modules. This is that step, once, with no base class to inherit it from.
+    The one step every search and lookup method shares, as a function rather
+    than a base class to inherit.
     """
     return parse(http.get(url, params=params, headers=headers))
 

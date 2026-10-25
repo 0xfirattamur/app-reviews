@@ -45,23 +45,24 @@ def parse_version_history(response: HttpResponse) -> list[AppVersionEntry]:
     if match is None:
         raise ParseError(f"{_API} carried no embedded page data", status=status)
     try:
-        data = json.loads(match.group(1))
+        page_document = json.loads(match.group(1))
     except json.JSONDecodeError as exc:
         raise ParseError(
             f"Unreadable page data from {_API}: {exc}", status=status
         ) from exc
 
-    action = _version_history_action(data)
+    action = _find_version_history_action(page_document)
     if action is None:
         return []
-    entries = [_entry(item, status) for item in _items(action["pageData"], status)]
+    history_items = _read_history_items(action["pageData"], status)
+    entries = [_parse_history_entry(item, status) for item in history_items]
     entries.sort(key=lambda entry: entry.released_at, reverse=True)
     return entries
 
 
-def _version_history_action(data: Any) -> dict[str, Any] | None:
+def _find_version_history_action(page_document: Any) -> dict[str, Any] | None:
     """The action that opens "Version History", found by content, not by path."""
-    stack = [data]
+    stack = [page_document]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
@@ -73,24 +74,24 @@ def _version_history_action(data: Any) -> dict[str, Any] | None:
     return None
 
 
-def _items(page_data: Any, status: int) -> list[Any]:
+def _read_history_items(page_data: Any, status: int) -> list[Any]:
     shelves = page_data.get("shelves") if isinstance(page_data, dict) else None
     if not isinstance(shelves, list):
         raise ParseError(
             "App Store version history has no list of shelves", status=status
         )
-    items: list[Any] = []
+    history_items: list[Any] = []
     for shelf in shelves:
         shelf_items = shelf.get("items") if isinstance(shelf, dict) else None
         if not isinstance(shelf_items, list):
             raise ParseError(
                 "App Store version history has a shelf without items", status=status
             )
-        items.extend(shelf_items)
-    return items
+        history_items.extend(shelf_items)
+    return history_items
 
 
-def _entry(item: Any, status: int) -> AppVersionEntry:
+def _parse_history_entry(item: Any, status: int) -> AppVersionEntry:
     if not isinstance(item, dict):
         raise ParseError(
             f"App Store version history entry is {type(item).__name__}, "
@@ -103,7 +104,7 @@ def _entry(item: Any, status: int) -> AppVersionEntry:
         raise ParseError(
             "App Store version history entry has no version", status=status
         )
-    released_at = _released_at(scraped_text(item.get("secondarySubtitle")))
+    released_at = _parse_released_at(scraped_text(item.get("secondarySubtitle")))
     if released_at is None:
         raise ParseError(
             f"App Store version history entry {version} has no readable date",
@@ -116,7 +117,7 @@ def _entry(item: Any, status: int) -> AppVersionEntry:
     )
 
 
-def _released_at(text: str | None) -> datetime | None:
+def _parse_released_at(text: str | None) -> datetime | None:
     """``Fri Sep 18 2026 06:25:38 GMT+0000 (Coordinated Universal Time)`` in UTC."""
     if text is None:
         return None

@@ -9,11 +9,10 @@ from typing import Any
 from urllib.parse import quote
 
 from app_reviews.core.auth import TokenSource
-from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
-from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import Source
 
@@ -37,7 +36,7 @@ raises them for a seconds value outside the platform's range, and neither is a
 """
 
 
-def protobuf_timestamp(value: Any) -> datetime:
+def parse_protobuf_timestamp(value: Any) -> datetime:
     """Read a protobuf ``Timestamp`` (``{seconds, nanos}``) as one instant.
 
     ``nanos`` is sub-second precision for that same instant, not a second
@@ -74,7 +73,7 @@ class GooglePlayOfficialProvider(PooledClient):
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. ``cursor`` is the nextPageToken from the last response."""
-        url, params = self._request(app_id, cursor)
+        url, params = self._build_review_request(app_id, cursor)
         response = self._http.get(
             url,
             params=params,
@@ -86,7 +85,7 @@ class GooglePlayOfficialProvider(PooledClient):
         self, app_id: str, country: str, cursor: str | None
     ) -> PageResult:
         """Async equivalent of ``fetch_page``."""
-        url, params = self._request(app_id, cursor)
+        url, params = self._build_review_request(app_id, cursor)
         response = await self._http.aget(
             url,
             params=params,
@@ -94,7 +93,9 @@ class GooglePlayOfficialProvider(PooledClient):
         )
         return self._to_page(response, app_id)
 
-    def _request(self, app_id: str, cursor: str | None) -> tuple[str, dict[str, str]]:
+    def _build_review_request(
+        self, app_id: str, cursor: str | None
+    ) -> tuple[str, dict[str, str]]:
         """The URL and query params for one page.
 
         ``app_id`` is escaped because it lands in the *path* of a request that
@@ -115,61 +116,57 @@ class GooglePlayOfficialProvider(PooledClient):
         ``country`` on any error is None: the Developer API reports no storefront
         per review, so there is no country to attribute a failure to.
         """
-        if response.transport_error is not None:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=response.transport_error,
-                    transport_error=response.transport_error,
-                )
-            )
-        if not response.ok:
-            return PageResult(
-                error=fetch_error_from_response(
-                    country=None,
-                    status=response.status,
-                    message=(
-                        f"HTTP {response.status} from the Google Play Developer API"
-                    ),
-                )
-            )
-
+        failure = page_failure_from_response(
+            response, country=None, source_name="the Google Play Developer API"
+        )
+        if failure is not None:
+            return failure
         try:
-            data = json.loads(response.body)
-            entries = data.get("reviews", [])
-            if not isinstance(entries, list):
-                raise TypeError(
-                    f"'reviews' is {type(entries).__name__}, expected a list"
-                )
-            next_cursor = self._cursor(data)
+            entries, next_cursor = self._parse_envelope(response.body)
         except _UNUSABLE as exc:
-            return PageResult(
-                error=FetchError(
-                    country=None,
-                    message=f"Malformed Google Play Developer API response: {exc}",
-                    kind="parse",
-                    status=response.status,
-                )
+            return malformed_page(
+                country=None,
+                source_name="Google Play Developer API",
+                status=response.status,
+                exc=exc,
             )
+        return self._map_reviews(entries, next_cursor, app_id)
 
-        # A malformed envelope is a page-level error; a single bad entry is not.
-        mapped = (self._review(entry, app_id) for entry in entries)
-        reviews = [review for review in mapped if review is not None]
+    def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
+        """The review entries and next page token; raises on a malformed envelope."""
+        payload = json.loads(body)
+        entries = payload.get("reviews", [])
+        if not isinstance(entries, list):
+            raise TypeError(f"'reviews' is {type(entries).__name__}, expected a list")
+        return entries, self._read_next_cursor(payload)
+
+    def _map_reviews(
+        self, entries: list[Any], next_cursor: str | None, app_id: str
+    ) -> PageResult:
+        """The page's reviews; a single bad entry is skipped, not fatal.
+
+        A malformed envelope fails the whole page, but one bad entry must not:
+        failing the page discards ``next_cursor`` and silently ends the walk.
+        """
+        reviews: list[Review] = []
+        for entry in entries:
+            review = self._parse_review(entry, app_id)
+            if review is not None:
+                reviews.append(review)
         return PageResult(
             reviews=reviews,
             next_cursor=next_cursor,
             skipped_reviews=len(entries) - len(reviews),
         )
 
-    def _cursor(self, data: dict[str, Any]) -> str | None:
+    def _read_next_cursor(self, payload: dict[str, Any]) -> str | None:
         """The next page token, or None on the last page.
 
         Absent and null both mean "no more pages"; anything else present is a
         malformed envelope rather than a cursor. The token's type is checked
         because it goes straight back out on the next request.
         """
-        pagination = data.get("tokenPagination")
+        pagination = payload.get("tokenPagination")
         if pagination is None:
             return None
         if not isinstance(pagination, dict):
@@ -177,16 +174,17 @@ class GooglePlayOfficialProvider(PooledClient):
                 f"'tokenPagination' is {type(pagination).__name__}, expected an object"
             )
 
-        token = pagination.get("nextPageToken")
-        if token is None:
+        next_page_token = pagination.get("nextPageToken")
+        if next_page_token is None:
             return None
-        if not isinstance(token, str):
+        if not isinstance(next_page_token, str):
             raise TypeError(
-                f"'nextPageToken' is {type(token).__name__}, expected a string"
+                f"'nextPageToken' is {type(next_page_token).__name__}, "
+                "expected a string"
             )
-        return token
+        return next_page_token
 
-    def _review(self, entry: Any, app_id: str) -> Review | None:
+    def _parse_review(self, entry: Any, app_id: str) -> Review | None:
         """Parse one entry, or None if a field that cannot be invented is unusable.
 
         Returning None rather than raising keeps one malformed entry from costing
@@ -214,7 +212,7 @@ class GooglePlayOfficialProvider(PooledClient):
                     comment.get("reviewerLanguage"), "reviewerLanguage"
                 ),
                 # The API reports lastModified only; there is no creation date.
-                updated_at=protobuf_timestamp(comment["lastModified"]),
+                updated_at=parse_protobuf_timestamp(comment["lastModified"]),
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
