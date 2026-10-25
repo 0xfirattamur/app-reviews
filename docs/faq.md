@@ -102,8 +102,8 @@ with AppStoreReviews() as client:
 ```
 
 The streaming iterator moves through countries sequentially and does not return
-a `FetchResult`; page failures are logged. Use buffered `fetch()` when your
-automation must receive structured outcomes and errors.
+a `FetchResult`; page failures are logged. Pass `on_page=` to receive each page,
+errors included, as it arrives; see [Streaming reviews](guide/paging.md#streaming-reviews).
 
 ## How should an agent consume a fetch result?
 

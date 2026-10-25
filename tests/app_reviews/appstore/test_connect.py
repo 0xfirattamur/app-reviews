@@ -441,7 +441,8 @@ class TestCursorIsNotAnOpenRedirect:
 
         provider.fetch_page("12345", "", cursor)
 
-        assert seen[-1][0] == cursor
+        # The cursor is followed as Apple sent it, asking for replies too.
+        assert seen[-1][0] == f"{cursor}&include=response"
         assert seen[-1][1] == "Bearer token"
 
     @pytest.mark.parametrize(
@@ -762,7 +763,7 @@ class TestAnUnusableCursorIsReportedNotRaised:
 
         _provider(handler).fetch_page("1", "", good)
 
-        assert seen["url"] == good
+        assert seen["url"] == f"{good}&include=response"
 
 
 class TestANonStringNextLinkIsAParseError:
@@ -811,3 +812,113 @@ class TestTheTimestampIsTheOneAppleSent:
             2026, 1, 15, 9, 30, tzinfo=timezone(timedelta(hours=-7))
         )
         assert page.reviews[0].updated_at is None
+
+
+def _replied_entry(review_id: str, response_id: str) -> dict[str, Any]:
+    entry = _connect_entry(review_id=review_id)
+    entry["relationships"] = {
+        "response": {"data": {"type": "customerReviewResponses", "id": response_id}}
+    }
+    return entry
+
+
+def _response(response_id: str, text: str, state: str = "PUBLISHED") -> dict:
+    return {
+        "type": "customerReviewResponses",
+        "id": response_id,
+        "attributes": {
+            "responseBody": text,
+            "state": state,
+            "lastModifiedDate": "2024-05-02T08:00:00.000+00:00",
+        },
+    }
+
+
+class TestDeveloperRepliesComeWithTheReviews:
+    """``include=response`` puts replies in ``included``; each review names its
+    reply by id under ``relationships.response``."""
+
+    def _page(self, body: dict[str, Any]):
+        provider = _provider(lambda _r: httpx.Response(200, text=json.dumps(body)))
+        return provider.fetch_page("12345", "", None)
+
+    def test_the_first_page_asks_for_replies(self):
+        seen = {}
+
+        def handler(request):
+            seen["url"] = request.url
+            return httpx.Response(200, text=_payload([]))
+
+        _provider(handler).fetch_page("12345", "", None)
+
+        assert seen["url"].params["include"] == "response"
+
+    def test_a_cursor_that_already_asks_for_replies_is_unchanged(self):
+        seen = {}
+        cursor = (
+            "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews"
+            "?cursor=N&include=response"
+        )
+
+        def handler(request):
+            seen["url"] = str(request.url)
+            return httpx.Response(200, text=_payload([]))
+
+        _provider(handler).fetch_page("12345", "", cursor)
+
+        assert seen["url"] == cursor
+
+    def test_replies_are_joined_by_id_not_by_position(self):
+        page = self._page(
+            {
+                "data": [_replied_entry("r1", "a"), _replied_entry("r2", "b")],
+                "included": [
+                    _response("b", "Second", state="PENDING_PUBLISH"),
+                    {"type": "somethingElse", "id": "a"},
+                    _response("a", "First"),
+                ],
+            }
+        )
+
+        replies = {r.id: r.developer_reply for r in page.reviews}
+        assert replies["r1"].text == "First"
+        assert replies["r1"].reply_id == "a"
+        assert replies["r1"].state == "published"
+        assert replies["r2"].text == "Second"
+        assert replies["r2"].state == "pending"
+
+    def test_a_review_without_a_reply_has_none(self):
+        page = self._page({"data": [_connect_entry()]})
+
+        assert page.reviews[0].developer_reply is None
+
+    @pytest.mark.parametrize(
+        "included",
+        [
+            [_response("a", "Hi", state="SOMETHING_NEW")],
+            [{"type": "customerReviewResponses", "id": "a"}],
+            "not-a-list",
+            [],
+        ],
+    )
+    def test_an_unusable_reply_costs_only_the_reply(self, included):
+        page = self._page(
+            {
+                "data": [_replied_entry("r1", "a")],
+                "included": included,
+                "links": {"next": "https://api.appstoreconnect.apple.com/x"},
+            }
+        )
+
+        assert [r.id for r in page.reviews] == ["r1"]
+        assert page.reviews[0].developer_reply is None
+        assert page.skipped_reviews == 0
+        assert page.next_cursor is not None
+
+    async def test_the_async_path_joins_them_too(self):
+        body = {"data": [_replied_entry("r1", "a")], "included": [_response("a", "Hi")]}
+        provider = _provider(lambda _r: httpx.Response(200, text=json.dumps(body)))
+
+        page = await provider.afetch_page("12345", "", None)
+
+        assert page.reviews[0].developer_reply.text == "Hi"

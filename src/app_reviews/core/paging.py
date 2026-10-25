@@ -179,9 +179,13 @@ class StopPolicy:
         max_pages: int = DEFAULT_MAX_PAGES,
         max_empty_pages: int = DEFAULT_MAX_EMPTY_PAGES,
         initial_cursor: str | None = None,
+        is_newest_first: bool | None = None,
     ) -> None:
         self._since = to_aware_datetime(since) if since is not None else None
-        self._is_newest_first = orders_newest_first(source)
+        # The source's documented order, unless the caller reordered it.
+        self._is_newest_first = (
+            orders_newest_first(source) if is_newest_first is None else is_newest_first
+        )
         self._limit = limit
         self._max_pages = max_pages
         self._max_empty_pages = max_empty_pages

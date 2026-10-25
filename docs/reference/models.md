@@ -41,9 +41,33 @@ from app_reviews import Review
 | `language` | `str` or `None` | `None` | Review language. |
 | `fetched_at` | `datetime` or `None` | `None` | When the review was fetched. |
 | `raw` | `dict`, `list` or `None` | `None` | Raw API payload, exactly as the source sent it. Apple and official Play send objects; Play web sends positional arrays. An App Store RSS review read from the XML fallback carries its entry converted to the JSON feed's shape. |
+| `developer_reply` | `ReviewReply` or `None` | `None` | The developer's reply. App Store Connect and the Play Developer API only. See [ReviewReply](#reviewreply). |
+| `original_text` | `str` or `None` | `None` | Play Developer API with `translation_language`: the reviewer's own text, while `body` holds the translation. |
+| `device` | `str` or `None` | `None` | Play Developer API only: the device codename, not its marketing name. |
+| `device_metadata` | `DeviceMetadata` or `None` | `None` | Play Developer API only: structured device details. See below. |
+| `thumbs_up_count` | `int` or `None` | `None` | Play Developer API only: people who found the review helpful. `0` is a real count. |
+| `thumbs_down_count` | `int` or `None` | `None` | Play Developer API only: people who did not. |
+| `app_version_code` | `int` or `None` | `None` | Play Developer API only: the integer `versionCode` beside `app_version`'s name. |
+| `android_os_version` | `int` or `None` | `None` | Play Developer API only: the Android API level, such as `34`. |
 
-Rows are in field order, which is also the positional-constructor order,
-though `Review` is far easier to get right with keywords.
+Rows are in field order. The fields up to `raw` are also the positional-constructor
+order; the ones after it are keyword-only, so 1.2 positional calls keep their
+meaning. `None` in an enrichment field always means "not reported", and an
+unusable value there costs only that field, never the review.
+
+`to_dict()` writes every field (except `raw`, unless asked), with
+`developer_reply` and `device_metadata` as nested dicts.
+
+### DeviceMetadata
+
+The Play Developer API's `deviceMetadata`, in snake case. Every field is
+optional: `product_name`, `manufacturer`, `device_class`, `screen_width_px`,
+`screen_height_px`, `native_platform` (Google's comma-separated ABI list),
+`screen_density_dpi`, `gl_es_version`, `cpu_model`, `cpu_make`, `ram_mb`.
+
+```python
+from app_reviews import DeviceMetadata
+```
 
 ### Review IDs
 
@@ -362,6 +386,21 @@ from app_reviews import Sort
 
 ---
 
+## ConnectSort
+
+A `Literal` naming the orders App Store Connect can page reviews in, for
+`AppStoreReviews(server_sort=...)`: `"-createdDate"` (newest first, the
+default), `"createdDate"`, `"-rating"` (highest first), `"rating"`.
+
+```python
+from app_reviews import ConnectSort
+```
+
+Unlike `Sort`, this orders the pages Connect sends, not the final result. Only
+`"-createdDate"` keeps the newest-first early stops.
+
+---
+
 ## RetryConfig
 
 HTTP retry and timeout settings.
@@ -511,7 +550,9 @@ The official API has no release date. For when versions reached the store, use
 ## ReviewReply
 
 The developer reply to one review, returned by `AppStoreReplies` and
-`GooglePlayReplies`.
+`GooglePlayReplies`, and carried on `Review.developer_reply` by reviews fetched
+through App Store Connect or the Play Developer API. `to_dict()` returns it as a
+JSON-safe dict with `updated_at` in ISO 8601.
 
 | Field | Type | Description |
 |-------|------|-------------|

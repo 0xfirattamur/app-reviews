@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import dataclasses
+import functools
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -324,6 +325,7 @@ class BaseReviews(PooledClient, abc.ABC):
             limit,
             max_pages=max_pages,
             initial_cursor=cursor,
+            is_newest_first=self._is_newest_first(provider),
         )
 
         while True:
@@ -356,6 +358,7 @@ class BaseReviews(PooledClient, abc.ABC):
             limit,
             max_pages=max_pages,
             initial_cursor=cursor,
+            is_newest_first=self._is_newest_first(provider),
         )
 
         while True:
@@ -376,6 +379,7 @@ class BaseReviews(PooledClient, abc.ABC):
         since: date | datetime | None = None,
         limit: int | None = None,
         max_pages: int | None = None,
+        on_page: Callable[[str | None, PageResult], None] | None = None,
     ) -> Iterator[Review]:
         """Stream reviews across countries, one at a time, buffering nothing.
 
@@ -402,8 +406,13 @@ class BaseReviews(PooledClient, abc.ABC):
         this rung exists to avoid.
 
         A country whose walk fails is logged and skipped, because a generator has
-        nowhere to hand a ``FetchError`` back. Use ``fetch`` or ``iter_pages``
-        when you need the failure as data.
+        nowhere to hand a ``FetchError`` back. Pass ``on_page`` to see it anyway:
+        it is called with ``(country, page)`` for every page fetched, including
+        empty and failed ones, before that page's reviews are yielded. ``country``
+        is None for a global source; ``page.reviews`` counts what was fetched,
+        before ``since`` and ``limit`` trim what is yielded. The callback runs
+        inline, also on the async twin, so keep it quick; an exception it raises
+        ends the stream.
         """
         request = self._validate_walk_request(countries, limit, max_pages)
         if request is None:
@@ -425,7 +434,10 @@ class BaseReviews(PooledClient, abc.ABC):
                 limit=walk_limit,
                 max_pages=request.page_budget,
             )
-            for review in self._iter_country_reviews(pages, country, matches_since):
+            country_on_page = self._bind_page_callback(on_page, provider, country)
+            for review in self._iter_country_reviews(
+                pages, country, matches_since, country_on_page
+            ):
                 if limit is not None and yielded_count >= limit:
                     return
                 yield review
@@ -439,6 +451,7 @@ class BaseReviews(PooledClient, abc.ABC):
         since: date | datetime | None = None,
         limit: int | None = None,
         max_pages: int | None = None,
+        on_page: Callable[[str | None, PageResult], None] | None = None,
     ) -> AsyncIterator[Review]:
         """Async equivalent of ``iter_reviews``, with identical semantics."""
         request = self._validate_walk_request(countries, limit, max_pages)
@@ -461,8 +474,9 @@ class BaseReviews(PooledClient, abc.ABC):
                 limit=walk_limit,
                 max_pages=request.page_budget,
             )
+            country_on_page = self._bind_page_callback(on_page, provider, country)
             async for review in self._aiter_country_reviews(
-                pages, country, matches_since
+                pages, country, matches_since, country_on_page
             ):
                 if limit is not None and yielded_count >= limit:
                     return
@@ -537,15 +551,27 @@ class BaseReviews(PooledClient, abc.ABC):
         """
         if limit is None:
             return None
-        if since is not None and not orders_newest_first(provider.source):
+        if since is not None and not self._is_newest_first(provider):
             return None
         return limit - yielded
+
+    def _bind_page_callback(
+        self,
+        on_page: Callable[[str | None, PageResult], None] | None,
+        provider: ReviewProvider,
+        country: str,
+    ) -> Callable[[PageResult], None] | None:
+        """``on_page`` with this walk's reported country already filled in."""
+        if on_page is None:
+            return None
+        return functools.partial(on_page, self._outcome_country(provider, country))
 
     def _iter_country_reviews(
         self,
         pages: Iterator[PageResult],
         country: str,
         matches_since: Callable[[Review], bool] | None,
+        on_page: Callable[[PageResult], None] | None,
     ) -> Iterator[Review]:
         """One country's reviews, page by page, dropping those before ``since``.
 
@@ -558,6 +584,8 @@ class BaseReviews(PooledClient, abc.ABC):
         """
         for page in pages:
             self._log_stream_error(page, country)
+            if on_page is not None:
+                on_page(page)
             for review in page.reviews:
                 if matches_since is None or matches_since(review):
                     yield review
@@ -567,10 +595,13 @@ class BaseReviews(PooledClient, abc.ABC):
         pages: AsyncIterator[PageResult],
         country: str,
         matches_since: Callable[[Review], bool] | None,
+        on_page: Callable[[PageResult], None] | None,
     ) -> AsyncIterator[Review]:
         """Async twin of ``_iter_country_reviews``."""
         async for page in pages:
             self._log_stream_error(page, country)
+            if on_page is not None:
+                on_page(page)
             for review in page.reviews:
                 if matches_since is None or matches_since(review):
                     yield review
@@ -684,13 +715,13 @@ class BaseReviews(PooledClient, abc.ABC):
             since=since,
             page_budget=request.page_budget,
             walk_limit=self._walk_limit(
-                provider.source, sort, limit, ratings=ratings, until=until
+                provider, sort, limit, ratings=ratings, until=until
             ),
             matches_filters=build_review_predicate(
                 ratings=ratings, since=since, until=until
             ),
             matching_limit=self._matching_limit(
-                provider.source, sort, limit, ratings=ratings, until=until
+                provider, sort, limit, ratings=ratings, until=until
             ),
             worker_count=self._workers(countries, concurrency),
         )
@@ -739,7 +770,7 @@ class BaseReviews(PooledClient, abc.ABC):
 
     def _walk_limit(
         self,
-        source: Source,
+        provider: ReviewProvider,
         sort: Sort,
         limit: int | None,
         *,
@@ -774,11 +805,11 @@ class BaseReviews(PooledClient, abc.ABC):
                 limit,
             )
             return None
-        if not orders_newest_first(source):
+        if not self._is_newest_first(provider):
             _LOG.info(
                 "%s does not guarantee newest-first ordering, so limit=%d "
                 "cannot stop the walk early",
-                source,
+                provider.source,
                 limit,
             )
             return None
@@ -786,7 +817,7 @@ class BaseReviews(PooledClient, abc.ABC):
 
     def _matching_limit(
         self,
-        source: Source,
+        provider: ReviewProvider,
         sort: Sort,
         limit: int | None,
         *,
@@ -796,9 +827,17 @@ class BaseReviews(PooledClient, abc.ABC):
         """Limit that may stop a walk by counting filtered matches."""
         if limit is None or (ratings is None and until is None):
             return None
-        if Sort(sort) is not Sort.NEWEST or not orders_newest_first(source):
+        if Sort(sort) is not Sort.NEWEST or not self._is_newest_first(provider):
             return None
         return limit
+
+    def _is_newest_first(self, provider: ReviewProvider) -> bool:
+        """Whether this client's pages arrive newest-first.
+
+        Every early stop (``since``, a newest-first ``limit``) leans on this. A
+        subclass that lets the caller reorder its source overrides it.
+        """
+        return orders_newest_first(provider.source)
 
     def _workers(self, resolved: list[str], concurrency: int | None) -> int:
         """Resolve the fan-out width, conservatively bounded by default."""

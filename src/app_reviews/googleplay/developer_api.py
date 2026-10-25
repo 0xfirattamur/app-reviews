@@ -13,7 +13,8 @@ from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
-from app_reviews.models.review import Review
+from app_reviews.models.reply import ReviewReply
+from app_reviews.models.review import DeviceMetadata, Review
 from app_reviews.models.types import Source
 
 _LOG = logging.getLogger(__name__)
@@ -50,6 +51,43 @@ def parse_protobuf_timestamp(value: Any) -> datetime:
     return datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=nanos // 1000)
 
 
+def parse_developer_reply(review_id: str, text: Any, last_modified: Any) -> ReviewReply:
+    """A Play ``developerComment`` (or a reply write's ``result``) as a reply.
+
+    Play applies a reply immediately and gives it no id of its own, so it is
+    always ``"published"`` with ``reply_id=None``.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"reply text is {type(text).__name__}, expected a string")
+    return ReviewReply(
+        review_id=review_id,
+        reply_id=None,
+        text=text,
+        state="published",
+        updated_at=(
+            None if last_modified is None else parse_protobuf_timestamp(last_modified)
+        ),
+    )
+
+
+_DEVICE_TEXT_FIELDS: dict[str, str] = {
+    "productName": "product_name",
+    "manufacturer": "manufacturer",
+    "deviceClass": "device_class",
+    "nativePlatform": "native_platform",
+    "cpuModel": "cpu_model",
+    "cpuMake": "cpu_make",
+}
+_DEVICE_COUNT_FIELDS: dict[str, str] = {
+    "screenWidthPx": "screen_width_px",
+    "screenHeightPx": "screen_height_px",
+    "screenDensityDpi": "screen_density_dpi",
+    "glEsVersion": "gl_es_version",
+    "ramMb": "ram_mb",
+}
+"""``deviceMetadata`` wire names mapped to ``DeviceMetadata`` fields, by type."""
+
+
 class GooglePlayOfficialProvider(PooledClient):
     """Fetches one page from the Google Play Developer API v3.
 
@@ -67,9 +105,16 @@ class GooglePlayOfficialProvider(PooledClient):
         "/androidpublisher/v3/applications/{app_id}/reviews"
     )
 
-    def __init__(self, auth: TokenSource, *, http: HttpClient | None = None) -> None:
+    def __init__(
+        self,
+        auth: TokenSource,
+        *,
+        http: HttpClient | None = None,
+        translation_language: str | None = None,
+    ) -> None:
         super().__init__(http=http)
         self._auth = auth
+        self._translation_language = translation_language
 
     def fetch_page(self, app_id: str, country: str, cursor: str | None) -> PageResult:
         """Fetch one page. ``cursor`` is the nextPageToken from the last response."""
@@ -108,6 +153,8 @@ class GooglePlayOfficialProvider(PooledClient):
         params = {"maxResults": "100"}
         if cursor:
             params["token"] = cursor
+        if self._translation_language is not None:
+            params["translationLanguage"] = self._translation_language
         return url, params
 
     def _to_page(self, response: HttpResponse, app_id: str) -> PageResult:
@@ -193,6 +240,7 @@ class GooglePlayOfficialProvider(PooledClient):
         """
         try:
             comment = self._user_comment(entry)
+            review_id = self._string(entry["reviewId"], "reviewId")
             title, body = self._text(comment.get("text", ""))
             return Review(
                 store="googleplay",
@@ -216,7 +264,17 @@ class GooglePlayOfficialProvider(PooledClient):
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=self._string(entry["reviewId"], "reviewId"),
+                id=review_id,
+                # Optional enrichments: an unusable one becomes None rather than
+                # costing the review, so none of these helpers raise.
+                developer_reply=self._read_developer_reply(entry, review_id),
+                original_text=_optional_text(comment.get("originalText")),
+                device=_optional_text(comment.get("device")),
+                device_metadata=_parse_device_metadata(comment.get("deviceMetadata")),
+                thumbs_up_count=_optional_count(comment.get("thumbsUpCount")),
+                thumbs_down_count=_optional_count(comment.get("thumbsDownCount")),
+                app_version_code=_optional_count(comment.get("appVersionCode")),
+                android_os_version=_optional_count(comment.get("androidOsVersion")),
             )
         except _UNUSABLE as exc:
             _LOG.warning(
@@ -261,6 +319,32 @@ class GooglePlayOfficialProvider(PooledClient):
                 return comment["userComment"]
         raise KeyError("userComment")
 
+    def _read_developer_reply(
+        self, entry: dict[str, Any], review_id: str
+    ) -> ReviewReply | None:
+        """The ``developerComment`` wherever it sits in ``comments``, or None.
+
+        A reply that cannot be read is logged and dropped; the review it
+        answers is still usable.
+        """
+        reply_comment = _find_developer_comment(entry["comments"])
+        if reply_comment is None:
+            return None
+        developer_comment = reply_comment["developerComment"]
+        try:
+            return parse_developer_reply(
+                review_id,
+                developer_comment["text"],
+                developer_comment.get("lastModified"),
+            )
+        except _UNUSABLE as exc:
+            _LOG.warning(
+                "Ignored an unreadable developer reply on review %r: %s",
+                review_id,
+                exc,
+            )
+            return None
+
     def _id(self, entry: Any) -> Any:
         """This entry's review id, so a warning can name it and nothing else.
 
@@ -268,3 +352,39 @@ class GooglePlayOfficialProvider(PooledClient):
         warning line.
         """
         return entry.get("reviewId") if isinstance(entry, dict) else None
+
+
+def _find_developer_comment(comments: Any) -> dict[str, Any] | None:
+    """The first ``comments`` entry holding a ``developerComment``, or None."""
+    for comment in comments:
+        if isinstance(comment, dict) and "developerComment" in comment:
+            return comment
+    return None
+
+
+def _optional_text(value: Any) -> str | None:
+    """A non-empty string, or None for anything else."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value
+
+
+def _optional_count(value: Any) -> int | None:
+    """A non-negative integer, or None. ``True`` is not a count."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _parse_device_metadata(device_metadata: Any) -> DeviceMetadata | None:
+    """The known ``deviceMetadata`` members, each dropped alone if unusable."""
+    if not isinstance(device_metadata, dict):
+        return None
+    known_fields: dict[str, Any] = {}
+    for wire_name, field_name in _DEVICE_TEXT_FIELDS.items():
+        known_fields[field_name] = _optional_text(device_metadata.get(wire_name))
+    for wire_name, field_name in _DEVICE_COUNT_FIELDS.items():
+        known_fields[field_name] = _optional_count(device_metadata.get(wire_name))
+    if all(field_value is None for field_value in known_fields.values()):
+        return None
+    return DeviceMetadata(**known_fields)

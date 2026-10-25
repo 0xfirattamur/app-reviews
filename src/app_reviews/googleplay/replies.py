@@ -16,14 +16,13 @@ Play has no API to delete a reply. The service account needs the Play Console
 from __future__ import annotations
 
 import json
-from typing import Any
 from urllib.parse import quote
 
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.errors import ParseError, ReplyRejectedError
 from app_reviews.googleplay.api import PlayAPIClient
-from app_reviews.googleplay.developer_api import parse_protobuf_timestamp
+from app_reviews.googleplay.developer_api import parse_developer_reply
 from app_reviews.models.reply import ReviewReply
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
@@ -99,7 +98,9 @@ class GooglePlayReplies(PlayAPIClient):
         raise_for_reply_failure(response, _API, _store_error)
         try:
             result = response.json()["result"]
-            return _reply(review_id, result["replyText"], result.get("lastEdited"))
+            return parse_developer_reply(
+                review_id, result["replyText"], result.get("lastEdited")
+            )
         except (KeyError, OverflowError, OSError, TypeError, ValueError) as exc:
             raise ParseError(
                 f"{_API} accepted the reply but its answer could not be read: {exc}",
@@ -113,7 +114,7 @@ class GooglePlayReplies(PlayAPIClient):
             for comment in response.json().get("comments", []):
                 developer = comment.get("developerComment")
                 if developer is not None:
-                    return _reply(
+                    return parse_developer_reply(
                         review_id, developer["text"], developer.get("lastModified")
                     )
         except (
@@ -137,18 +138,6 @@ def _check_length(text: str) -> None:
             f"this one has {len(text)}. Nothing was sent.",
             reason="too_long",
         )
-
-
-def _reply(review_id: str, text: Any, edited: Any) -> ReviewReply:
-    if not isinstance(text, str):
-        raise TypeError(f"reply text is {type(text).__name__}, expected a string")
-    return ReviewReply(
-        review_id=review_id,
-        reply_id=None,
-        text=text,
-        state="published",
-        updated_at=None if edited is None else parse_protobuf_timestamp(edited),
-    )
 
 
 def _store_error(body: str) -> StoreError:

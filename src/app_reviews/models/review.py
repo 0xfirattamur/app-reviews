@@ -1,10 +1,40 @@
 """Canonical normalized review model."""
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from typing import Any
 
+from app_reviews.models.reply import ReviewReply
 from app_reviews.models.types import Source, Store
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DeviceMetadata:
+    """The reviewer's device, as the Google Play Developer API describes it.
+
+    Every field is optional: Google fills what it knows. Names follow the API's
+    ``deviceMetadata`` object in snake case; ``native_platform`` keeps Google's
+    comma-separated ABI list as sent.
+    """
+
+    product_name: str | None = None
+    manufacturer: str | None = None
+    device_class: str | None = None
+    screen_width_px: int | None = None
+    screen_height_px: int | None = None
+    native_platform: str | None = None
+    screen_density_dpi: int | None = None
+    gl_es_version: int | None = None
+    cpu_model: str | None = None
+    cpu_make: str | None = None
+    ram_mb: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-safe plain dict of every field."""
+        return {name: getattr(self, name) for name in _DEVICE_FIELD_NAMES}
+
+
+_DEVICE_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(DeviceMetadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +83,28 @@ class Review:
     not JSON, so ``raw`` is its ``<entry>`` in the JSON feed's shape, with
     ``{"label": ...}`` values under the same keys.
     """
+
+    # Enrichments some sources report. Keyword-only so the positional
+    # constructor of 1.2 keeps working; None always means "not reported", never
+    # zero or empty.
+    developer_reply: ReviewReply | None = field(default=None, kw_only=True)
+    """The developer's reply, from App Store Connect or the Play Developer API."""
+    original_text: str | None = field(default=None, kw_only=True)
+    """Play Developer API only: the untranslated text when a translation was
+    requested. ``body`` then holds the translation."""
+    device: str | None = field(default=None, kw_only=True)
+    """Play Developer API only: the device codename, not its marketing name."""
+    device_metadata: DeviceMetadata | None = field(default=None, kw_only=True)
+    """Play Developer API only: structured details of the reviewer's device."""
+    thumbs_up_count: int | None = field(default=None, kw_only=True)
+    """Play Developer API only: people who found the review helpful."""
+    thumbs_down_count: int | None = field(default=None, kw_only=True)
+    """Play Developer API only: people who did not find the review helpful."""
+    app_version_code: int | None = field(default=None, kw_only=True)
+    """Play Developer API only: the integer ``versionCode`` beside
+    ``app_version``'s version name."""
+    android_os_version: int | None = field(default=None, kw_only=True)
+    """Play Developer API only: the Android API level, such as 34."""
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -105,9 +157,16 @@ class Review:
         for name in _FIELD_NAMES:
             if name == "raw" and not include_raw:
                 continue
-            value = getattr(self, name)
-            out[name] = value.isoformat() if isinstance(value, datetime) else value
+            out[name] = _to_json_value(getattr(self, name))
         return out
+
+
+def _to_json_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, ReviewReply | DeviceMetadata):
+        return value.to_dict()
+    return value
 
 
 _FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Review))

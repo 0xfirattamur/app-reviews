@@ -17,25 +17,17 @@ https://developer.apple.com/help/app-store-connect/monitor-ratings-and-reviews/r
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import Any
 from urllib.parse import quote
 
 from app_reviews.appstore.api import ConnectAPIClient
+from app_reviews.appstore.connect import parse_review_response
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.errors import ParseError
 from app_reviews.models.reply import ReviewReply
-from app_reviews.models.types import ReplyState
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
 _API = "the App Store Connect API"
-
-_STATES: dict[str, ReplyState] = {
-    "PUBLISHED": "published",
-    "PENDING_PUBLISH": "pending",
-}
-"""Apple's documented ``CustomerReviewResponseV1.state`` values."""
 
 _JSON_HEADERS = {"Content-Type": "application/json"}
 
@@ -124,7 +116,7 @@ class AppStoreReplies(ConnectAPIClient):
     def _written(self, response: HttpResponse, review_id: str) -> ReviewReply:
         raise_for_reply_failure(response, _API, _store_error)
         try:
-            return _reply(response.json()["data"], review_id)
+            return parse_review_response(response.json()["data"], review_id)
         except (KeyError, TypeError, ValueError) as exc:
             raise ParseError(
                 f"{_API} accepted the reply but its answer could not be read: {exc}",
@@ -136,7 +128,7 @@ class AppStoreReplies(ConnectAPIClient):
         raise_for_http_failure(response, _API)
         try:
             data = response.json()["data"]
-            return None if data is None else _reply(data, review_id)
+            return None if data is None else parse_review_response(data, review_id)
         except (KeyError, TypeError, ValueError) as exc:
             raise ParseError(
                 f"Malformed reply from {_API}: {exc}", status=response.status
@@ -161,24 +153,6 @@ def _reply_body(review_id: str, text: str) -> str:
                 },
             }
         }
-    )
-
-
-def _reply(data: Any, review_id: str) -> ReviewReply:
-    attrs = data["attributes"]
-    state = _STATES.get(attrs["state"])
-    if state is None:
-        raise ValueError(f"unknown reply state {attrs['state']!r}")
-    text = attrs["responseBody"]
-    if not isinstance(text, str):
-        raise TypeError(f"responseBody is {type(text).__name__}, expected a string")
-    modified = attrs.get("lastModifiedDate")
-    return ReviewReply(
-        review_id=review_id,
-        reply_id=str(data["id"]),
-        text=text,
-        state=state,
-        updated_at=datetime.fromisoformat(modified) if modified else None,
     )
 
 

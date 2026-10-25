@@ -8,6 +8,28 @@ recent versions are also kept in
 
 ### Added
 
+- `Review.developer_reply`: reviews fetched through App Store Connect (now
+  requested with `include=response`) or the Play Developer API carry the
+  developer's reply as a `ReviewReply`, with no extra request per review.
+- Play Developer API fields on `Review`: `device`, `device_metadata` (a new
+  `DeviceMetadata`), `thumbs_up_count`, `thumbs_down_count`, `app_version_code`
+  and `android_os_version`. `None` means not reported; an unusable value costs
+  only that field.
+- `GooglePlayReviews(translation_language=...)` asks the Developer API to
+  translate reviews; `body` holds the translation and `Review.original_text` the
+  reviewer's own words.
+- `AppStoreReviews(server_ratings=..., server_territories=..., server_sort=...)`
+  makes App Store Connect filter by rating and territory and order the pages
+  before sending them. `ConnectSort` names the orders; any order but
+  `"-createdDate"` turns off the newest-first early stops.
+- `iter_reviews(on_page=...)` / `aiter_reviews(on_page=...)` calls back with
+  `(country, page)` for every fetched page, failures included, so a stream can
+  see what `fetch()` keeps on its outcomes.
+- `ReviewReply.to_dict()` and `DeviceMetadata.to_dict()`.
+
+  All new `Review` fields are keyword-only and default to `None`, so 1.2
+  positional construction is unchanged; `Review.to_dict()` now includes them.
+
 - `PageResult.xml_fallback_error` and `CountryOutcome.xml_fallback_error`, with
   the derived `FetchResult.xml_fallback_errors`: when the App Store RSS JSON feed
   answers a page empty and the XML feed asked to confirm it cannot be read, the

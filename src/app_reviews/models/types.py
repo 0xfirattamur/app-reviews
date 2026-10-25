@@ -46,6 +46,14 @@ ReplyState = Literal[
     "pending",  # accepted, not yet shown; Apple can take up to 24 hours
 ]
 
+ConnectSort = Literal[
+    "-createdDate",  # newest first, the default
+    "createdDate",  # oldest first
+    "-rating",  # highest rating first
+    "rating",  # lowest rating first
+]
+"""The orders App Store Connect can sort customer reviews by, server-side."""
+
 RETRYABLE_KINDS: frozenset[ErrorKind] = frozenset(
     {"rate_limited", "server", "transport"}
 )

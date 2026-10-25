@@ -24,6 +24,11 @@ class GooglePlayReviews(BaseReviews):
     newest-first, while the Developer API documents no ordering, so a ``since``
     or ``limit`` walk can stop early on one and never on the other. Both are
     global, so one request covers every storefront.
+
+    ``translation_language`` (Developer API only) asks Google to translate every
+    review into that language, such as ``"en"`` or ``"de-DE"``: ``body`` then
+    holds the translation and ``original_text`` the reviewer's own words. It is
+    set per client, so every fetching method and page of a walk uses it.
     """
 
     def __init__(
@@ -34,15 +39,21 @@ class GooglePlayReviews(BaseReviews):
         retry: RetryConfig | None = None,
         http: HttpClient | None = None,
         rate_limiter: RequestLimiter | None = None,
+        translation_language: str | None = None,
     ) -> None:
         super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._auth = auth
+        self._translation_language = _normalise_translation_language(
+            translation_language, auth
+        )
 
     def _build_provider(self) -> ReviewProvider:
         if self._auth is None:
             return GooglePlayScraperProvider(**self._provider_kwargs)
         return GooglePlayOfficialProvider(
-            self._build_google_auth(self._auth), **self._provider_kwargs
+            self._build_google_auth(self._auth),
+            translation_language=self._translation_language,
+            **self._provider_kwargs,
         )
 
     async def _abuild_provider(self) -> ReviewProvider:
@@ -83,3 +94,19 @@ class GooglePlayReviews(BaseReviews):
             raise ValueError(
                 "Google Play reviews have no country dimension; omit countries"
             )
+
+
+def _normalise_translation_language(
+    language: str | None, auth: GooglePlayAuth | None
+) -> str | None:
+    """The trimmed language, after checking it can be honoured at all."""
+    if language is None:
+        return None
+    if auth is None:
+        raise ValueError(
+            "translation_language needs auth: only the Google Play Developer API "
+            "translates reviews"
+        )
+    if not isinstance(language, str) or not language.strip():
+        raise ValueError("translation_language must be a non-empty language code")
+    return language.strip()
