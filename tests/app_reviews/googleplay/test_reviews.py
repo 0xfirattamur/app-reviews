@@ -14,6 +14,7 @@ import json
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app_reviews import (
@@ -21,6 +22,7 @@ from app_reviews import (
     AuthError,
     GooglePlayAuth,
     GooglePlayReviews,
+    HttpClient,
 )
 from tests.app_reviews.googleplay.test_auth import _TEST_RSA_KEY
 
@@ -131,3 +133,38 @@ class TestTheProviderSharesTheClientsPool:
         client = GooglePlayReviews()
 
         assert client._build_provider()._http is client._http
+
+
+class TestTranslationLanguage:
+    def test_it_reaches_the_developer_api_request(self):
+        review_requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "oauth2.googleapis.com":
+                return httpx.Response(
+                    200, json={"access_token": "token", "expires_in": 3600}
+                )
+            review_requests.append(request)
+            return httpx.Response(200, json={"reviews": []})
+
+        client = GooglePlayReviews(
+            auth=GooglePlayAuth(service_account_path=_service_account()),
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+            translation_language=" de-DE ",
+        )
+
+        client.fetch("com.example.app")
+
+        assert review_requests[0].url.params["translationLanguage"] == "de-DE"
+
+    def test_it_needs_the_developer_api(self):
+        with pytest.raises(ValueError, match="needs auth"):
+            GooglePlayReviews(translation_language="de")
+
+    @pytest.mark.parametrize("language", ["", "   "])
+    def test_a_blank_language_is_rejected(self, language):
+        with pytest.raises(ValueError, match="non-empty"):
+            GooglePlayReviews(
+                auth=GooglePlayAuth(service_account_path=_service_account()),
+                translation_language=language,
+            )

@@ -9,6 +9,7 @@ it does not subclass ``HttpError``.
 import base64
 import json
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -21,8 +22,10 @@ from app_reviews import (
     AppStoreAuth,
     AppStoreReviews,
     AuthError,
+    Country,
     HttpClient,
 )
+from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
 
 
 def _client(key_path: str) -> AppStoreReviews:
@@ -161,3 +164,108 @@ class TestInMemoryKey:
     def test_exactly_one_key_source_is_required(self, sources):
         with pytest.raises(ValueError, match="exactly one"):
             AppStoreAuth(key_id="K", issuer_id="I", **sources)
+
+
+_CONNECT_AUTH = AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY)
+_NEXT_PAGE = (
+    "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2"
+)
+
+
+def _connect_page(created: str, next_url: str | None) -> dict:
+    body: dict = {
+        "data": [
+            {
+                "id": f"r-{created}",
+                "attributes": {"rating": 3, "body": "ok", "createdDate": created},
+            }
+        ]
+    }
+    if next_url is not None:
+        body["links"] = {"next": next_url}
+    return body
+
+
+class TestServerSideFilters:
+    def _first_request(self, **options) -> httpx.Request:
+        seen: list[httpx.Request] = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(200, json={"data": []})
+
+        client = AppStoreReviews(
+            auth=_CONNECT_AUTH,
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+            **options,
+        )
+        client.fetch("123")
+        return seen[0]
+
+    def test_they_are_sent_to_connect(self):
+        request = self._first_request(
+            server_ratings=[2, 1, 1],
+            server_territories=["us", "GBR", Country.DE],
+            server_sort="-rating",
+        )
+
+        assert request.url.params["filter[rating]"] == "1,2"
+        assert request.url.params["filter[territory]"] == "DEU,GBR,USA"
+        assert request.url.params["sort"] == "-rating"
+
+    def test_without_them_the_query_is_unchanged(self):
+        request = self._first_request()
+
+        assert request.url.params["sort"] == "-createdDate"
+        assert "filter[rating]" not in request.url.params
+        assert "filter[territory]" not in request.url.params
+
+    def test_they_need_the_connect_api(self):
+        with pytest.raises(ValueError, match="need auth"):
+            AppStoreReviews(server_ratings=[1])
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"server_ratings": []},
+            {"server_ratings": [0]},
+            {"server_ratings": [True]},
+            {"server_territories": []},
+            {"server_territories": ["zz"]},
+            {"server_sort": "newest"},
+        ],
+    )
+    def test_unusable_values_are_rejected_up_front(self, options):
+        with pytest.raises(ValueError, match="server_"):
+            AppStoreReviews(auth=_CONNECT_AUTH, **options)
+
+    @pytest.mark.parametrize(
+        ("server_sort", "expected_requests"),
+        [(None, 1), ("-createdDate", 1), ("-rating", 2), ("createdDate", 2)],
+    )
+    def test_only_newest_first_order_stops_a_since_walk_early(
+        self, server_sort, expected_requests
+    ):
+        """A page older than ``since`` ends a newest-first walk; in any other
+        order a later page can still hold newer reviews."""
+        pages = iter(
+            [
+                _connect_page("2020-01-01T00:00:00+00:00", _NEXT_PAGE),
+                _connect_page("2026-01-01T00:00:00+00:00", None),
+            ]
+        )
+        requests: list[httpx.Request] = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json=next(pages))
+
+        client = AppStoreReviews(
+            auth=_CONNECT_AUTH,
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+            server_sort=server_sort,
+        )
+
+        client.fetch("123", since=datetime(2025, 1, 1, tzinfo=UTC))
+
+        assert len(requests) == expected_requests

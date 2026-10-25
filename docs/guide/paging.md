@@ -125,8 +125,24 @@ the cost this rung exists to avoid.
 `iter_pages()`, stopping the walk early where the source guarantees ordering.
 
 Because a generator has nowhere to hand a `FetchError` back, a country whose
-walk fails is logged at WARNING and skipped. Use `fetch()` or `iter_pages()`
-when you need the failure as data.
+walk fails is logged at WARNING and skipped. Pass `on_page` to receive every
+page as data, failures included:
+
+```python
+def on_page(country, page):
+    if page.error is not None:
+        report(country, page.error)
+
+
+for review in client.iter_reviews("324684580", countries=["us", "gb"], on_page=on_page):
+    handle(review)
+```
+
+It is called with `(country, page)` once per fetched page, empty and failed ones
+included, before that page's reviews are yielded. `country` is `None` for a
+global source. `page.reviews` counts what was fetched, before `since` and `limit`
+trim what is yielded. The callback runs inline on both twins, so keep it quick;
+an exception from it ends the stream.
 
 `aiter_reviews()` is the async twin.
 

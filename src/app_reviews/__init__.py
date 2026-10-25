@@ -59,8 +59,9 @@ from app_reviews.models.metadata import AppMetadata, AppVersionEntry
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
 from app_reviews.models.result import CountryOutcome, FetchError, FetchResult
-from app_reviews.models.review import Review
+from app_reviews.models.review import DeviceMetadata, Review
 from app_reviews.models.types import (
+    ConnectSort,
     ErrorKind,
     FeedFormat,
     ReplyState,
@@ -87,8 +88,10 @@ __all__ = [
     "AppVersionEntry",
     "AuthError",
     "ConnectCredentials",
+    "ConnectSort",
     "Country",
     "CountryOutcome",
+    "DeviceMetadata",
     "ErrorKind",
     "FeedFormat",
     "FetchError",
