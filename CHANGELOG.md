@@ -4,7 +4,11 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
-## Unreleased
+## [1.3.0] - 2026-10-25
+
+Developer replies, Play device data and translation on fetched reviews, App
+Store Connect server-side filters, a page callback for streams, and malformed
+store answers reported instead of read as empty. Backward compatible.
 
 ### Added
 
@@ -48,6 +52,10 @@ recent versions are also kept in
 - Google Play search raises `ParseError` when the results section holds entries
   but none of them can be read. Genuinely empty results and partly readable
   pages behave as before.
+- Internal helpers outside every `__all__` were renamed:
+  `app_reviews.googleplay.developer_api.protobuf_timestamp` is now
+  `parse_protobuf_timestamp`, and `models.result.to_aware_datetime` takes
+  `boundary` instead of `d`.
 
 ### Fixed
 
@@ -69,6 +77,8 @@ recent versions are also kept in
   refresh, pagination budgets, filtering, and connection-pooling descriptions.
 - Include replies and version history in the feature overviews and align model
   reference fields with the public API.
+
+See the [v1.3.0 release notes](https://github.com/0xfirattamur/app-reviews/blob/main/.github/release-notes/v1.3.0.md).
 
 ## [1.2.0] - 2026-09-28
 
@@ -275,6 +285,7 @@ Corrected initial package behavior and metadata.
 
 Initial release.
 
+[1.3.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/0xfirattamur/app-reviews/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/0xfirattamur/app-reviews/compare/v0.6.0...v1.0.0
