@@ -561,3 +561,20 @@ def normalise_country(code: str | None, *, warn_unknown: bool = True) -> str | N
     if warn_unknown and alpha2 not in _ALPHA2_CODES:
         _LOG.warning("Unrecognised storefront code %r, passing through", code)
     return alpha2
+
+
+_ALPHA2_TO_ALPHA3: dict[str, str] = {
+    alpha2: alpha3 for alpha3, alpha2 in _ALPHA3_TO_ALPHA2.items()
+}
+
+
+def connect_territory(code: Country | str) -> str | None:
+    """The ISO alpha-3 territory App Store Connect filters by, or None if unknown.
+
+    Connect names territories in alpha-3 (``"USA"``) where ``Country`` uses
+    alpha-2 (``"us"``), so uppercasing is not enough.
+    """
+    alpha2 = normalise_country(code, warn_unknown=False)
+    if alpha2 is None:
+        return None
+    return _ALPHA2_TO_ALPHA3.get(alpha2)

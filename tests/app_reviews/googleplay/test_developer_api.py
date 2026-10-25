@@ -11,6 +11,7 @@ import pytest
 
 from app_reviews.core.http import HttpClient
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
+from app_reviews.models.review import DeviceMetadata
 from tests.app_reviews.factories import StaticToken
 
 
@@ -491,6 +492,170 @@ class TestAReviewWithADeveloperReply:
         page = _serving(body).fetch_page("com.example.app", "", None)
 
         assert [r.id for r in page.reviews] == ["plain"]
+
+    def test_the_reply_is_attached_to_the_review(self):
+        page = _serving(_payload([self._replied()])).fetch_page(
+            "com.example.app", "", None
+        )
+
+        reply = page.reviews[0].developer_reply
+        assert reply is not None
+        assert reply.review_id == "answered"
+        assert reply.text == "Fixed in 5.1"
+        assert reply.state == "published"
+        assert reply.reply_id is None
+        assert reply.updated_at == datetime.fromtimestamp(1710600000, tz=UTC)
+
+    def test_an_unanswered_review_has_no_reply(self):
+        page = _serving(_payload([_dev_entry()])).fetch_page(
+            "com.example.app", "", None
+        )
+
+        assert page.reviews[0].developer_reply is None
+
+    @pytest.mark.parametrize("reply", [{"text": 5}, {}, "not-an-object"])
+    def test_an_unreadable_reply_costs_only_the_reply(self, reply):
+        entry = self._replied()
+        entry["comments"][0]["developerComment"] = reply
+
+        page = _serving(_payload([entry])).fetch_page("com.example.app", "", None)
+
+        assert [r.id for r in page.reviews] == ["answered"]
+        assert page.reviews[0].developer_reply is None
+        assert page.skipped_reviews == 0
+
+
+class TestOptionalPlayFields:
+    """Device, vote and version fields the API reports beside the review text.
+    None means "not reported"; zero is a real count."""
+
+    def _entry_with(self, **user_comment: Any) -> dict[str, Any]:
+        entry = _dev_entry()
+        entry["comments"][0]["userComment"].update(user_comment)
+        return entry
+
+    def test_all_fields_are_mapped(self):
+        entry = self._entry_with(
+            device="oriole",
+            androidOsVersion=34,
+            appVersionCode=5010,
+            thumbsUpCount=12,
+            thumbsDownCount=0,
+            deviceMetadata={
+                "productName": "oriole (Pixel 6)",
+                "manufacturer": "Google",
+                "deviceClass": "phone",
+                "screenWidthPx": 1080,
+                "screenHeightPx": 2400,
+                "nativePlatform": "arm64-v8a,armeabi-v7a",
+                "screenDensityDpi": 420,
+                "glEsVersion": 196610,
+                "cpuModel": "Tensor",
+                "cpuMake": "Google",
+                "ramMb": 8192,
+            },
+        )
+
+        (review,) = _serving(_payload([entry])).fetch_page("app", "", None).reviews
+
+        assert review.device == "oriole"
+        assert review.android_os_version == 34
+        assert review.app_version == "5.0.1"
+        assert review.app_version_code == 5010
+        assert review.thumbs_up_count == 12
+        assert review.thumbs_down_count == 0
+        assert review.device_metadata == DeviceMetadata(
+            product_name="oriole (Pixel 6)",
+            manufacturer="Google",
+            device_class="phone",
+            screen_width_px=1080,
+            screen_height_px=2400,
+            native_platform="arm64-v8a,armeabi-v7a",
+            screen_density_dpi=420,
+            gl_es_version=196610,
+            cpu_model="Tensor",
+            cpu_make="Google",
+            ram_mb=8192,
+        )
+
+    def test_absent_fields_are_none(self):
+        (review,) = (
+            _serving(_payload([_dev_entry()])).fetch_page("app", "", None).reviews
+        )
+
+        assert review.device is None
+        assert review.device_metadata is None
+        assert review.thumbs_up_count is None
+        assert review.app_version_code is None
+
+    @pytest.mark.parametrize("bad", [True, -1, 1.5, "12", None])
+    def test_an_unusable_count_is_none_and_keeps_the_review(self, bad):
+        entry = self._entry_with(thumbsUpCount=bad, appVersionCode=bad)
+
+        page = _serving(_payload([entry])).fetch_page("app", "", None)
+
+        assert page.skipped_reviews == 0
+        assert page.reviews[0].thumbs_up_count is None
+        assert page.reviews[0].app_version_code is None
+
+    def test_partial_device_metadata_keeps_its_usable_members(self):
+        entry = self._entry_with(
+            deviceMetadata={"manufacturer": "Samsung", "ramMb": "lots", "future": 1}
+        )
+
+        (review,) = _serving(_payload([entry])).fetch_page("app", "", None).reviews
+
+        assert review.device_metadata == DeviceMetadata(manufacturer="Samsung")
+
+
+class TestTranslation:
+    def _provider_seeing(self, seen: list[httpx.Request], **kwargs: Any):
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            entry = _dev_entry(body="Es geht")
+            entry["comments"][0]["userComment"]["originalText"] = "It works"
+            return httpx.Response(200, text=_payload([entry]))
+
+        return GooglePlayOfficialProvider(
+            StaticToken("Bearer gtoken"),
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+            **kwargs,
+        )
+
+    def test_no_translation_parameter_by_default(self):
+        seen: list[httpx.Request] = []
+
+        self._provider_seeing(seen).fetch_page("app", "", None)
+
+        assert "translationLanguage" not in seen[0].url.params
+
+    def test_the_language_is_sent_on_every_page(self):
+        seen: list[httpx.Request] = []
+        provider = self._provider_seeing(seen, translation_language="de")
+
+        provider.fetch_page("app", "", None)
+        provider.fetch_page("app", "", "NEXT")
+
+        assert [r.url.params["translationLanguage"] for r in seen] == ["de", "de"]
+
+    async def test_the_async_path_sends_it_too(self):
+        seen: list[httpx.Request] = []
+
+        await self._provider_seeing(seen, translation_language="de").afetch_page(
+            "app", "", None
+        )
+
+        assert seen[0].url.params["translationLanguage"] == "de"
+
+    def test_original_text_is_kept_beside_the_translated_body(self):
+        seen: list[httpx.Request] = []
+
+        page = self._provider_seeing(seen, translation_language="de").fetch_page(
+            "app", "", None
+        )
+
+        assert page.reviews[0].body == "Es geht"
+        assert page.reviews[0].original_text == "It works"
 
 
 class TestTheTimestampIsTheOneGoogleSent:

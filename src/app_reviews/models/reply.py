@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from app_reviews.models.types import ReplyState
 
@@ -30,3 +31,15 @@ class ReviewReply:
     text: str
     state: ReplyState
     updated_at: datetime | None
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-safe plain dict, with ``updated_at`` as ISO 8601."""
+        return {
+            "review_id": self.review_id,
+            "reply_id": self.reply_id,
+            "text": self.text,
+            "state": self.state,
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at is not None else None
+            ),
+        }

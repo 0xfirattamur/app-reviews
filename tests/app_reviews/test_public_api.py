@@ -16,6 +16,8 @@ EXPECTED = {
     "Country",
     "CountryOutcome",
     "ConnectCredentials",
+    "ConnectSort",
+    "DeviceMetadata",
     "ErrorKind",
     "FeedFormat",
     "FetchError",

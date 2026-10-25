@@ -163,6 +163,15 @@ class TestEntries:
         assert entry.released_at == datetime(2026, 9, 18, 6, 25, 38, tzinfo=UTC)
         assert entry.released_at.tzinfo is UTC
 
+    def test_dates_parse_under_a_non_english_process_locale(self, german_time_locale):
+        """The page renders English weekday and month names whatever ``LC_TIME``
+        the embedding application runs under."""
+        page = _history(_item(date="Tue Dec 01 2026 06:25:38 GMT+0000 (UTC)"))
+
+        (entry,) = _serving(page).version_history("1")
+
+        assert entry.released_at == datetime(2026, 12, 1, 6, 25, 38, tzinfo=UTC)
+
     @pytest.mark.parametrize("release_notes", ["", "   ", None, []])
     def test_missing_release_notes_are_none(self, release_notes):
         (entry,) = _serving(

@@ -128,6 +128,42 @@ def scraped_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+_ENGLISH_MONTHS = (
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+)
+_ENGLISH_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def english_month_number(abbreviation: str) -> int | None:
+    """1 for ``"Jan"`` through 12 for ``"Dec"``, in any case; None otherwise.
+
+    Store pages requested in English name months in English whatever the
+    process locale is, while ``strptime``'s ``%b`` follows ``LC_TIME``. Reading
+    the name against this fixed table and handing ``strptime`` the number keeps
+    parsing independent of the locale the embedding application runs under.
+    """
+    lowered = abbreviation.lower()
+    if lowered not in _ENGLISH_MONTHS:
+        return None
+    return _ENGLISH_MONTHS.index(lowered) + 1
+
+
+def is_english_weekday(abbreviation: str) -> bool:
+    """Whether this is ``"Mon"`` through ``"Sun"``, in any case."""
+    return abbreviation.lower() in _ENGLISH_WEEKDAYS
+
+
 def scraped_number(value: Any, default: float) -> float:
     """A float from an untyped payload, or ``default`` if it is unusable.
 

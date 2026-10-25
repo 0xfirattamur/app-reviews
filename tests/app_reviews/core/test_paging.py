@@ -16,7 +16,13 @@ from app_reviews.core.paging import (
     prefer_stop_reason,
 )
 from app_reviews.core.reviews import BaseReviews
-from app_reviews.errors import AuthError, ServerError, TransportError
+from app_reviews.errors import (
+    AuthError,
+    ParseError,
+    RateLimitError,
+    ServerError,
+    TransportError,
+)
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
@@ -816,6 +822,60 @@ class TestARaisedErrorBecomesPageData:
 
         with pytest.raises(KeyError):
             list(FakeClient(provider).iter_pages("123"))
+
+
+_RAISED_PAGE_FAILURES = [
+    (TransportError("token endpoint unreachable", status=0), "transport"),
+    (ServerError("token endpoint returned 503", status=503), "server"),
+    (ParseError("token response had no access_token", status=200), "parse"),
+    (RateLimitError("token endpoint throttled", status=429), "rate_limited"),
+]
+
+
+class TestASinglePageReportsARaisedError:
+    """``fetch_page`` promises failures on ``.error``, as the walks do. A token
+    exchange that fails by raising escaped it while ``iter_pages`` reported the
+    same failure as data."""
+
+    @pytest.mark.parametrize(("exc", "kind"), _RAISED_PAGE_FAILURES)
+    def test_fetch_page_reports_instead_of_raising(self, exc, kind):
+        client = FakeClient(_RaisingProvider(fail_after=0, exc=exc))
+
+        page = client.fetch_page("123", country="us")
+
+        assert page.error is not None
+        assert page.error.kind == kind
+        assert page.error.country == "us"
+        assert page.reviews == []
+        assert page.stopped_because is None
+
+    @pytest.mark.parametrize(("exc", "kind"), _RAISED_PAGE_FAILURES)
+    async def test_afetch_page_reports_instead_of_raising(self, exc, kind):
+        client = FakeClient(_RaisingProvider(fail_after=0, exc=exc))
+
+        page = await client.afetch_page("123", country="us")
+
+        assert page.error is not None
+        assert page.error.kind == kind
+        assert page.stopped_because is None
+
+    def test_an_unusable_credential_still_raises(self):
+        provider = _RaisingProvider(fail_after=0, exc=AuthError("rejected", status=401))
+
+        with pytest.raises(AuthError):
+            FakeClient(provider).fetch_page("123")
+
+    async def test_an_unusable_credential_still_raises_async(self):
+        provider = _RaisingProvider(fail_after=0, exc=AuthError("rejected", status=401))
+
+        with pytest.raises(AuthError):
+            await FakeClient(provider).afetch_page("123")
+
+    def test_a_programming_error_still_propagates(self):
+        provider = _RaisingProvider(fail_after=0, exc=KeyError("attributes"))
+
+        with pytest.raises(KeyError):
+            FakeClient(provider).fetch_page("123")
 
 
 class TestOneFailingCountryKeepsTheRest:

@@ -67,6 +67,11 @@ DEFAULT_MAX_DURATION = 120.0
 answering each read a shade inside the read timeout holds the connection open
 indefinitely without ever timing out. This is the ceiling on the whole attempt,
 so a trickle ends.
+
+Async attempts are cancelled at the deadline. A sync attempt cannot be
+interrupted mid-read, so it is rejected once it completes past the deadline,
+and each socket wait is capped at this budget; one attempt can therefore run
+up to a few socket waits over it before it is abandoned.
 """
 
 
@@ -151,6 +156,9 @@ class HttpClient:
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_duration = max_duration
+        # A socket wait longer than the whole attempt's budget can only end in an
+        # overrun, so no single wait is allowed to exceed it.
+        self._socket_timeout = min(timeout, max_duration)
         self._proxy = proxy
         self._retry = retry
         self._policy = RetryPolicy(retry) if retry else None
@@ -304,7 +312,7 @@ class HttpClient:
             with self._pool_lock:
                 if self._sync_pool is None:
                     self._sync_pool = httpx.Client(
-                        timeout=self._timeout,
+                        timeout=self._socket_timeout,
                         proxy=self._proxy,
                         transport=self._transport,
                         follow_redirects=True,
@@ -316,7 +324,7 @@ class HttpClient:
             with self._pool_lock:
                 if self._async_pool is None:
                     self._async_pool = httpx.AsyncClient(
-                        timeout=self._timeout,
+                        timeout=self._socket_timeout,
                         proxy=self._proxy,
                         transport=self._transport,
                         follow_redirects=True,
@@ -450,12 +458,18 @@ class HttpClient:
     async def _aattempt(
         self, send: Callable[[], AbstractAsyncContextManager[httpx.Response]]
     ) -> tuple[HttpResponse, bool]:
-        """Async twin of ``_attempt``."""
+        """Async twin of ``_attempt``, also cancelled the moment the deadline
+        passes rather than only checked between body chunks."""
         deadline = time.monotonic() + self._max_duration
         try:
-            async with send() as raw:
+            async with asyncio.timeout(self._max_duration), send() as raw:
                 body = await self._aread(raw, deadline)
                 return self._to_response(raw, body), False
+        except TimeoutError:
+            overrun = _AttemptTooSlow(
+                f"attempt exceeded max_duration={self._max_duration}s"
+            )
+            return self._to_error_response(overrun), True
         except (_BodyTooLarge, _AttemptTooSlow) as exc:
             return self._to_error_response(exc), True
         except _PERMANENT_EXCEPTIONS as exc:
@@ -477,14 +491,17 @@ class HttpClient:
 
         Both limits are checked per chunk rather than from ``Content-Length``: a
         chunked response has no length to check, and a declared one is only the
-        server's claim about what it is about to send.
+        server's claim about what it is about to send. The deadline is checked
+        once more at the end, for a response that arrived late with no body.
         """
         buffered: list[bytes] = []
         total_bytes = 0
         for chunk in chunks:
             total_bytes += len(chunk)
-            self._check_response_budget(total_bytes, deadline)
+            self._check_body_size(total_bytes)
+            self._check_deadline(deadline, total_bytes)
             buffered.append(chunk)
+        self._check_deadline(deadline, total_bytes)
         return self._decode_body(buffered, raw)
 
     async def _aread(self, raw: httpx.Response, deadline: float) -> str:
@@ -494,14 +511,17 @@ class HttpClient:
         total_bytes = 0
         async for chunk in raw.aiter_bytes():
             total_bytes += len(chunk)
-            self._check_response_budget(total_bytes, deadline)
+            self._check_body_size(total_bytes)
+            self._check_deadline(deadline, total_bytes)
             buffered.append(chunk)
+        self._check_deadline(deadline, total_bytes)
         return self._decode_body(buffered, raw)
 
-    def _check_response_budget(self, total_bytes: int, deadline: float) -> None:
-        """Raise once the body grows past ``max_bytes`` or the attempt overruns."""
+    def _check_body_size(self, total_bytes: int) -> None:
         if total_bytes > self._max_bytes:
             raise _BodyTooLarge(f"response body exceeded max_bytes={self._max_bytes}")
+
+    def _check_deadline(self, deadline: float, total_bytes: int) -> None:
         if time.monotonic() > deadline:
             raise _AttemptTooSlow(
                 f"attempt exceeded max_duration={self._max_duration}s "

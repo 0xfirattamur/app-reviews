@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app_reviews.models.review import Review
+from app_reviews.models.reply import ReviewReply
+from app_reviews.models.review import DeviceMetadata, Review
 
 
 def _make_review(**overrides):
@@ -153,3 +154,66 @@ class TestToDict:
         import json
 
         json.dumps(_make_review().to_dict())
+
+    def test_enrichments_serialise_as_json_safe_nested_objects(self):
+        import json
+
+        reply = ReviewReply(
+            review_id="r1",
+            reply_id=None,
+            text="Thanks!",
+            state="published",
+            updated_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        )
+        review = _make_review(
+            developer_reply=reply,
+            device_metadata=DeviceMetadata(manufacturer="Google", ram_mb=8192),
+            thumbs_up_count=0,
+        )
+
+        serialised = review.to_dict()
+
+        assert serialised["developer_reply"] == {
+            "review_id": "r1",
+            "reply_id": None,
+            "text": "Thanks!",
+            "state": "published",
+            "updated_at": "2026-09-01T12:00:00+00:00",
+        }
+        assert serialised["device_metadata"]["manufacturer"] == "Google"
+        assert serialised["device_metadata"]["ram_mb"] == 8192
+        assert serialised["thumbs_up_count"] == 0
+        json.dumps(serialised)
+
+
+class TestEnrichmentFields:
+    def test_they_default_to_not_reported(self):
+        review = _make_review()
+
+        assert review.developer_reply is None
+        assert review.original_text is None
+        assert review.device_metadata is None
+        assert review.thumbs_up_count is None
+
+    def test_they_are_keyword_only_so_1_2_positional_calls_still_work(self):
+        """Positional construction stops at ``raw``; nothing after it can be
+        passed positionally, so no 1.2 call changes meaning."""
+        with pytest.raises(TypeError):
+            Review(  # type: ignore[misc]
+                "appstore",
+                "1",
+                "us",
+                5,
+                None,
+                "body",
+                "a",
+                "appstore_scraper",
+                "r1",
+                datetime(2026, 1, 1, tzinfo=UTC),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "positional reply",
+            )

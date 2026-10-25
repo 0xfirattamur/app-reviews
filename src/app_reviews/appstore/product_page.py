@@ -13,7 +13,11 @@ from typing import Any
 
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
-from app_reviews.core.search import scraped_text
+from app_reviews.core.search import (
+    english_month_number,
+    is_english_weekday,
+    scraped_text,
+)
 from app_reviews.errors import ParseError
 from app_reviews.models.metadata import AppVersionEntry
 
@@ -28,6 +32,12 @@ _SERVER_DATA = re.compile(
 
 _VERSION_LABEL = re.compile(r"^Version(?:\s+|$)")
 """The prefix some storefronts render before the number: ``Version 9.1.84``."""
+
+_RELEASED_AT = re.compile(
+    r"(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day_onwards>.+)"
+)
+"""``Fri Sep 18 2026 06:25:38 GMT+0000``, split so the English names are read by
+hand: ``%a`` and ``%b`` follow the process locale, the page does not."""
 
 
 def parse_version_history(response: HttpResponse) -> list[AppVersionEntry]:
@@ -121,8 +131,17 @@ def _parse_released_at(text: str | None) -> datetime | None:
     """``Fri Sep 18 2026 06:25:38 GMT+0000 (Coordinated Universal Time)`` in UTC."""
     if text is None:
         return None
+    without_zone_name = text.split(" (", 1)[0]
+    match = _RELEASED_AT.fullmatch(without_zone_name)
+    if match is None or not is_english_weekday(match["weekday"]):
+        return None
+    month = english_month_number(match["month"])
+    if month is None:
+        return None
     try:
-        parsed = datetime.strptime(text.split(" (", 1)[0], "%a %b %d %Y %H:%M:%S GMT%z")
+        parsed = datetime.strptime(
+            f"{month} {match['day_onwards']}", "%m %d %Y %H:%M:%S GMT%z"
+        )
     except ValueError:
         return None
     return parsed.astimezone(UTC)

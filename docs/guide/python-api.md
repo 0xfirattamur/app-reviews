@@ -69,10 +69,33 @@ client = AppStoreReviews(
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
     rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+    server_ratings=None,      # Collection[int] | None: Connect only, e.g. [1, 2]
+    server_territories=None,  # Collection[Country | str] | None: Connect only
+    server_sort=None,         # ConnectSort | None: Connect only, default "-createdDate"
 )
 ```
 
 Without `auth`, uses the public RSS feed. With `auth`, uses the App Store Connect API.
+
+With `auth`, the three `server_*` options make Connect filter and order reviews
+before it sends them, so asking for one market's one-star reviews does not walk
+the whole corpus. They are set per client and apply to every fetching method;
+resume a cursor with the client that produced it. `server_territories` takes
+`Country` values or codes in either alphabet; `countries=` on the fetching
+methods still has no effect on this global source. Any `server_sort` other than
+`"-createdDate"` turns off the newest-first early stops, so `since` and `limit`
+walks read further. The fetching methods' own `ratings`, `since`, `until` and
+`sort` still apply on top.
+
+```python
+from app_reviews import AppStoreAuth, AppStoreReviews, Country
+
+client = AppStoreReviews(
+    auth=AppStoreAuth(key_id="...", issuer_id="...", key_path="AuthKey.p8"),
+    server_ratings=[1, 2],
+    server_territories=[Country.TR],
+)
+```
 
 ### fetch()
 
@@ -163,10 +186,15 @@ client = GooglePlayReviews(
     retry=None,      # RetryConfig | None: retry settings
     http=None,       # HttpClient | None: supply your own connection pool
     rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+    translation_language=None,  # str | None: Developer API only, e.g. "en"
 )
 ```
 
 Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play Developer API.
+
+`translation_language` asks the Developer API to translate every review into
+that language: `body` holds the translation and `original_text` the reviewer's
+own words. It is set per client and needs `auth`.
 
 ### fetch()
 

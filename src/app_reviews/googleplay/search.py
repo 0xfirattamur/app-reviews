@@ -16,6 +16,7 @@ from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
 from app_reviews.core.search import (
     aget_and_parse,
+    english_month_number,
     get_and_parse,
     scraped_rating,
     scraped_rating_count,
@@ -124,6 +125,10 @@ class GooglePlaySearch(PooledClient):
     """
 
     _LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+    _DISPLAY_DATE = re.compile(
+        r"(?P<month>[A-Za-z]+)\s+(?P<day_and_year>\d{1,2},\s+\d{4})"
+    )
+    """``Dec 21, 2010``, split so the English month name is read by hand."""
 
     # A regular search hit: a smaller block, numbered independently of the detail
     # block above, and carrying no rating count.
@@ -230,11 +235,15 @@ class GooglePlaySearch(PooledClient):
 
         A page with a results section but nothing in it is genuinely empty. A
         page with no results section at all is unreadable, which is a different
-        answer and must not arrive as ``[]``.
+        answer and must not arrive as ``[]``. Neither is a section holding entries
+        that all fail to parse: that is a moved layout, not a query without
+        matches. Every dataset is tried before deciding, since Google renumbers
+        them.
         """
         raise_for_http_failure(response, "Google Play search", credentialed=False)
         datasets = self._extract_datasets_or_raise(response)
         has_readable_results = False
+        has_unusable_results = False
 
         for dataset in self._order_datasets(datasets, self.SEARCH_DATASET):
             sections = self._at(dataset, self._SECTIONS)
@@ -243,7 +252,14 @@ class GooglePlaySearch(PooledClient):
             has_readable_results = True
             if apps := self._collect_apps(sections):
                 return apps
+            if self._has_result_candidates(sections):
+                has_unusable_results = True
 
+        if has_unusable_results:
+            raise ParseError(
+                "Google Play returned search results with no usable apps",
+                status=response.status,
+            )
         if has_readable_results:
             return []
         raise ParseError(
@@ -343,6 +359,24 @@ class GooglePlaySearch(PooledClient):
                 return True
         return False
 
+    def _has_result_candidates(self, sections: list[Any]) -> bool:
+        """Whether any section holds a featured hit or an entry, usable or not."""
+        for section in sections:
+            if not isinstance(section, list):
+                continue
+            if self._at(section, self._TOP_RESULT) is not None:
+                return True
+            if self._has_populated_group(self._at(section, self._ENTRY_GROUPS)):
+                return True
+        return False
+
+    @staticmethod
+    def _has_populated_group(groups: Any) -> bool:
+        """Whether any result group holds something; ``[]`` and ``[[]]`` do not."""
+        if not isinstance(groups, list):
+            return False
+        return any(group not in (None, []) for group in groups)
+
     def _collect_apps(self, sections: list[Any]) -> list[AppMetadata]:
         """The apps across every section, the first mention of each id winning."""
         apps_by_id: dict[str, AppMetadata] = {}
@@ -434,8 +468,7 @@ class GooglePlaySearch(PooledClient):
         text_with_newlines = self._LINE_BREAK.sub("\n", text)
         return scraped_text(html.unescape(text_with_newlines))
 
-    @staticmethod
-    def _parse_display_date(value: Any) -> datetime | None:
+    def _parse_display_date(self, value: Any) -> datetime | None:
         """One of Play's rendered dates as midnight UTC, or None if unreadable.
 
         Play publishes no timestamp for either date, only the day it prints on the
@@ -443,14 +476,24 @@ class GooglePlaySearch(PooledClient):
         the fields. Parsing is deliberately strict about the one format Play sends
         for ``hl=en``: a value in some other shape means the payload moved, and
         guessing at it would invent a date rather than report none.
+
+        The month name is English because ``hl`` is, so it is looked up by hand
+        rather than through ``%b``, which follows the process locale.
         """
         text = scraped_text(value)
         if text is None:
             return None
+        match = self._DISPLAY_DATE.fullmatch(text)
+        if match is None:
+            return None
+        month = english_month_number(match["month"])
+        if month is None:
+            return None
         try:
-            return datetime.strptime(text, "%b %d, %Y").replace(tzinfo=UTC)
+            parsed = datetime.strptime(f"{month} {match['day_and_year']}", "%m %d, %Y")
         except ValueError:
             return None
+        return parsed.replace(tzinfo=UTC)
 
     def _parse_entry_app(self, entry: Any) -> AppMetadata | None:
         """One regular search hit, or None without an id to key it by."""
@@ -529,7 +572,7 @@ class GooglePlaySearch(PooledClient):
             return None
         try:
             amount = float(micros)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             return None
         if not math.isfinite(amount) or amount < 0:
             return None

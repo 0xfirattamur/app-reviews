@@ -264,6 +264,7 @@ class TestStructuredSerialization:
             "elapsed": 0.75,
             "error": error.to_dict(),
             "feed_format": "json",
+            "xml_fallback_error": None,
         }
 
     def test_fetch_result_is_a_complete_json_safe_envelope(self):
@@ -287,6 +288,7 @@ class TestStructuredSerialization:
             "reviews": [make_review().to_dict()],
             "outcomes": [outcome.to_dict()],
             "errors": [error.to_dict()],
+            "xml_fallback_errors": [],
             "skipped_reviews": 3,
         }
         json.dumps(serialised, allow_nan=False)

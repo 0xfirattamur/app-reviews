@@ -264,3 +264,124 @@ class TestAsyncParity:
 
         assert [r.id async for r in stream] == ["a", "b"]
         assert len(provider.calls) == 2
+
+
+class TestOnPage:
+    """``on_page`` gives a stream the per-page diagnostics ``fetch`` keeps on its
+    outcomes: the country, the page, and any error, as it happens."""
+
+    def test_it_runs_before_the_pages_reviews_are_yielded(self):
+        provider = FakeProvider(
+            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+        )
+        seen: list[str | None] = []
+
+        stream = FakeClient(provider).iter_reviews(
+            "123",
+            countries=["us"],
+            on_page=lambda country, page: seen.append(page.next_cursor),
+        )
+        next(stream)
+
+        assert seen == ["1"]
+        assert len(provider.calls) == 1
+
+    def test_failed_and_empty_pages_are_reported_with_their_country(self):
+        error = FetchError(country="us", message="boom", kind="transport")
+        provider = MultiCountryProvider(
+            {
+                "us": [PageResult(error=error)],
+                "gb": [_page([], None)],
+            }
+        )
+        seen: list[tuple[str | None, PageResult]] = []
+
+        reviews = list(
+            FakeClient(provider).iter_reviews(
+                "123",
+                countries=["us", "gb"],
+                on_page=lambda country, page: seen.append((country, page)),
+            )
+        )
+
+        assert reviews == []
+        assert [country for country, _ in seen] == ["us", "gb"]
+        assert seen[0][1].error is error
+        assert seen[0][1].stopped_because == "error"
+        assert seen[1][1].stopped_because == "exhausted"
+
+    def test_a_global_source_reports_no_country(self):
+        provider = FakeProvider(
+            [_page([_review(NOW, "a")], None)], source="appstore_official"
+        )
+        countries: list[str | None] = []
+
+        list(
+            FakeClient(provider).iter_reviews(
+                "123", on_page=lambda country, page: countries.append(country)
+            )
+        )
+
+        assert countries == [None]
+
+    def test_page_rows_are_counted_before_since_trims_them(self):
+        old = NOW - timedelta(days=10)
+        provider = FakeProvider(
+            [_page([_review(NOW, "new"), _review(old, "old")], None)]
+        )
+        row_counts: list[int] = []
+
+        reviews = list(
+            FakeClient(provider).iter_reviews(
+                "123",
+                countries=["us"],
+                since=NOW - timedelta(days=1),
+                on_page=lambda country, page: row_counts.append(len(page.reviews)),
+            )
+        )
+
+        assert [r.id for r in reviews] == ["new"]
+        assert row_counts == [2]
+
+    def test_an_exception_from_the_callback_ends_the_stream(self):
+        provider = FakeProvider(
+            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+        )
+
+        def refuse(country, page):
+            raise RuntimeError("stop")
+
+        with pytest.raises(RuntimeError, match="stop"):
+            list(
+                FakeClient(provider).iter_reviews(
+                    "123", countries=["us"], on_page=refuse
+                )
+            )
+        assert len(provider.calls) == 1
+
+    async def test_the_async_twin_reports_the_same_pages(self):
+        pages = [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+        sync_seen: list[tuple[str | None, str | None]] = []
+        async_seen: list[tuple[str | None, str | None]] = []
+
+        list(
+            FakeClient(FakeProvider(pages)).iter_reviews(
+                "123",
+                countries=["us"],
+                on_page=lambda country, page: sync_seen.append(
+                    (country, page.next_cursor)
+                ),
+            )
+        )
+        [
+            review
+            async for review in FakeClient(FakeProvider(pages)).aiter_reviews(
+                "123",
+                countries=["us"],
+                on_page=lambda country, page: async_seen.append(
+                    (country, page.next_cursor)
+                ),
+            )
+        ]
+
+        assert async_seen == sync_seen == [("us", "1"), ("us", None)]
