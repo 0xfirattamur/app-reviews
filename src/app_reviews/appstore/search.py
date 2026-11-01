@@ -12,9 +12,8 @@ from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
-from app_reviews.core.search import (
-    aget_and_parse,
-    get_and_parse,
+from app_reviews.core.scraped import (
+    UNKNOWN,
     scraped_datetime,
     scraped_rating,
     scraped_rating_count,
@@ -63,12 +62,10 @@ class AppStoreSearch(PooledClient):
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
-        return get_and_parse(
-            self._http,
-            self.SEARCH_URL,
-            self._search_params(query, country, limit),
-            self._parse_search,
+        response = self._http.get(
+            self.SEARCH_URL, params=self._search_params(query, country, limit)
         )
+        return self._parse_search(response)
 
     async def asearch(
         self,
@@ -81,12 +78,10 @@ class AppStoreSearch(PooledClient):
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
-        return await aget_and_parse(
-            self._http,
-            self.SEARCH_URL,
-            self._search_params(query, country, limit),
-            self._parse_search,
+        response = await self._http.aget(
+            self.SEARCH_URL, params=self._search_params(query, country, limit)
         )
+        return self._parse_search(response)
 
     def lookup(
         self,
@@ -99,12 +94,10 @@ class AppStoreSearch(PooledClient):
         None when the store has no such app. A result this cannot turn into an
         app raises ``ParseError``.
         """
-        return get_and_parse(
-            self._http,
-            self.LOOKUP_URL,
-            self._lookup_params(app_id, country),
-            self._parse_lookup,
+        response = self._http.get(
+            self.LOOKUP_URL, params=self._lookup_params(app_id, country)
         )
+        return self._parse_lookup(response)
 
     async def alookup(
         self,
@@ -113,12 +106,10 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
     ) -> AppMetadata | None:
         """Async equivalent of ``lookup``."""
-        return await aget_and_parse(
-            self._http,
-            self.LOOKUP_URL,
-            self._lookup_params(app_id, country),
-            self._parse_lookup,
+        response = await self._http.aget(
+            self.LOOKUP_URL, params=self._lookup_params(app_id, country)
         )
+        return self._parse_lookup(response)
 
     def version_history(
         self,
@@ -137,13 +128,12 @@ class AppStoreSearch(PooledClient):
         the current version: best-effort, and may break when Apple changes it.
         ``AppStoreVersions`` has the official versions, but without dates.
         """
-        return get_and_parse(
-            self._http,
+        response = self._http.get(
             self._product_page_url(app_id, country),
-            {},
-            parse_version_history,
+            params={},
             headers={"User-Agent": self.USER_AGENT},
         )
+        return parse_version_history(response)
 
     async def aversion_history(
         self,
@@ -152,13 +142,12 @@ class AppStoreSearch(PooledClient):
         country: Country | str = Country.US,
     ) -> list[AppVersionEntry]:
         """Async equivalent of ``version_history``."""
-        return await aget_and_parse(
-            self._http,
+        response = await self._http.aget(
             self._product_page_url(app_id, country),
-            {},
-            parse_version_history,
+            params={},
             headers={"User-Agent": self.USER_AGENT},
         )
+        return parse_version_history(response)
 
     def _product_page_url(self, app_id: str, country: Country | str) -> str:
         """The product page only exists under the numeric trackId."""
@@ -275,11 +264,11 @@ class AppStoreSearch(PooledClient):
         return AppMetadata(
             app_id=app_id,
             store="appstore",
-            name=scraped_text(search_entry.get("trackName")) or "Unknown",
-            developer=scraped_text(search_entry.get("artistName")) or "Unknown",
-            category=scraped_text(search_entry.get("primaryGenreName")) or "Unknown",
-            price=scraped_text(search_entry.get("formattedPrice")) or "Unknown",
-            version=scraped_text(search_entry.get("version")) or "Unknown",
+            name=scraped_text(search_entry.get("trackName")) or UNKNOWN,
+            developer=scraped_text(search_entry.get("artistName")) or UNKNOWN,
+            category=scraped_text(search_entry.get("primaryGenreName")) or UNKNOWN,
+            price=scraped_text(search_entry.get("formattedPrice")) or UNKNOWN,
+            version=scraped_text(search_entry.get("version")) or UNKNOWN,
             rating=scraped_rating(search_entry.get("averageUserRating")),
             rating_count=scraped_rating_count(search_entry.get("userRatingCount")),
             url=scraped_text(search_entry.get("trackViewUrl"))

@@ -1,10 +1,10 @@
-"""Tests for the SearchClient protocol and the shared request-and-parse step.
+"""Tests for the SearchClient protocol.
 
 What used to live here tested that ``abc`` works, that instantiating the ABC
 raises TypeError, and that its ``__init__`` stored the three attributes it was
 handed. None of that was about this package. A Protocol has nothing to
 instantiate, so what matters instead is that the two real clients satisfy it and
-that the step they share behaves.
+nothing more.
 """
 
 from unittest.mock import AsyncMock, Mock
@@ -14,14 +14,8 @@ import pytest
 
 from app_reviews.appstore.search import AppStoreSearch
 from app_reviews.core.http import HttpClient
-from app_reviews.core.search import (
-    SearchClient,
-    aget_and_parse,
-    get_and_parse,
-    scraped_number,
-)
+from app_reviews.core.search import SearchClient
 from app_reviews.googleplay.search import GooglePlaySearch
-from tests.app_reviews.transport import Recorder, query_of
 
 _METHODS = ("search", "asearch", "lookup", "alookup")
 
@@ -89,71 +83,3 @@ class TestPoolOwnership:
 
         pool.close.assert_not_called()
         pool.aclose.assert_not_awaited()
-
-
-class TestGetAndParse:
-    def test_sends_params_and_returns_what_parse_returns(self):
-        record = Recorder(httpx.Response(200, text="body-text"))
-
-        result = get_and_parse(
-            _pool(record),
-            "https://example.test/x",
-            {"q": "1"},
-            lambda response: response.body.upper(),
-        )
-
-        assert result == "BODY-TEXT"
-        assert query_of(record.last)["q"] == ["1"]
-
-    def test_forwards_headers(self):
-        record = Recorder(httpx.Response(200, text=""))
-
-        get_and_parse(
-            _pool(record),
-            "https://example.test/x",
-            {},
-            lambda response: response.body,
-            headers={"User-Agent": "custom-agent"},
-        )
-
-        assert record.last.headers.get("user-agent") == "custom-agent"
-
-    async def test_async_twin_matches(self):
-        def handler(_request):
-            return httpx.Response(200, text="body-text")
-
-        assert await aget_and_parse(
-            _pool(handler),
-            "https://example.test/x",
-            {},
-            lambda response: response.body.upper(),
-        ) == get_and_parse(
-            _pool(handler),
-            "https://example.test/x",
-            {},
-            lambda response: response.body.upper(),
-        )
-
-    def test_a_raising_parse_propagates(self):
-        """``_parse_search``/``_parse_lookup`` raise HttpError on a bad
-        response; the helper must not swallow that."""
-
-        def handler(_request):
-            return httpx.Response(500, text="")
-
-        def parse(_response):
-            raise RuntimeError("parse said no")
-
-        with pytest.raises(RuntimeError, match="parse said no"):
-            get_and_parse(_pool(handler), "https://example.test/x", {}, parse)
-
-
-class TestScrapedNumber:
-    @pytest.mark.parametrize(
-        "value", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"]
-    )
-    def test_non_finite_values_fall_back_to_the_default(self, value):
-        assert scraped_number(value, 0.0) == 0.0
-
-    def test_an_integer_too_large_for_a_float_falls_back_to_the_default(self):
-        assert scraped_number(10**400, 7.0) == 7.0

@@ -14,10 +14,9 @@ from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
-from app_reviews.core.search import (
-    aget_and_parse,
+from app_reviews.core.scraped import (
+    UNKNOWN,
     english_month_number,
-    get_and_parse,
     scraped_rating,
     scraped_rating_count,
     scraped_text,
@@ -157,13 +156,12 @@ class GooglePlaySearch(PooledClient):
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
-        return get_and_parse(
-            self._http,
+        response = self._http.get(
             self.SEARCH_URL,
-            self._search_params(query, country),
-            self._parse_search,
+            params=self._search_params(query, country),
             headers={"User-Agent": self.USER_AGENT},
-        )[:limit]
+        )
+        return self._parse_search(response)[:limit]
 
     async def asearch(
         self,
@@ -176,15 +174,12 @@ class GooglePlaySearch(PooledClient):
         require_non_negative(limit, "limit")
         if limit == 0:
             return []
-        return (
-            await aget_and_parse(
-                self._http,
-                self.SEARCH_URL,
-                self._search_params(query, country),
-                self._parse_search,
-                headers={"User-Agent": self.USER_AGENT},
-            )
-        )[:limit]
+        response = await self._http.aget(
+            self.SEARCH_URL,
+            params=self._search_params(query, country),
+            headers={"User-Agent": self.USER_AGENT},
+        )
+        return self._parse_search(response)[:limit]
 
     def lookup(
         self,
@@ -193,13 +188,12 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
     ) -> AppMetadata | None:
         """Look up an app by package name, or None if Play has no such app."""
-        return get_and_parse(
-            self._http,
+        response = self._http.get(
             self.DETAIL_URL,
-            self._lookup_params(app_id, country),
-            lambda response: self._parse_lookup(response, app_id),
+            params=self._lookup_params(app_id, country),
             headers={"User-Agent": self.USER_AGENT},
         )
+        return self._parse_lookup(response, app_id)
 
     async def alookup(
         self,
@@ -208,13 +202,12 @@ class GooglePlaySearch(PooledClient):
         country: Country | str = Country.US,
     ) -> AppMetadata | None:
         """Async equivalent of ``lookup``."""
-        return await aget_and_parse(
-            self._http,
+        response = await self._http.aget(
             self.DETAIL_URL,
-            self._lookup_params(app_id, country),
-            lambda response: self._parse_lookup(response, app_id),
+            params=self._lookup_params(app_id, country),
             headers={"User-Agent": self.USER_AGENT},
         )
+        return self._parse_lookup(response, app_id)
 
     def _search_params(self, query: str, country: Country | str) -> dict[str, str]:
         return {"q": query, "c": "apps", "hl": "en", "gl": self._market(country)}
@@ -453,8 +446,8 @@ class GooglePlaySearch(PooledClient):
             app_id=app_id,
             store="googleplay",
             name=name,
-            developer=scraped_text(self._at(block, self._DEVELOPER)) or "Unknown",
-            category=scraped_text(self._at(block, self._CATEGORY)) or "Unknown",
+            developer=scraped_text(self._at(block, self._DEVELOPER)) or UNKNOWN,
+            category=scraped_text(self._at(block, self._CATEGORY)) or UNKNOWN,
             price=self._parse_price(self._at(block, self._PRICE)),
             version=scraped_text(self._at(block, self._DETAIL_VERSION)) or self.VERSION,
             rating=scraped_rating(self._at(block, self._RATING)),
@@ -521,9 +514,9 @@ class GooglePlaySearch(PooledClient):
         return AppMetadata(
             app_id=app_id,
             store="googleplay",
-            name=scraped_text(self._at(block, self._ENTRY_NAME)) or "Unknown",
-            developer=scraped_text(self._at(block, self._ENTRY_DEVELOPER)) or "Unknown",
-            category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or "Unknown",
+            name=scraped_text(self._at(block, self._ENTRY_NAME)) or UNKNOWN,
+            developer=scraped_text(self._at(block, self._ENTRY_DEVELOPER)) or UNKNOWN,
+            category=scraped_text(self._at(block, self._ENTRY_CATEGORY)) or UNKNOWN,
             price=self._parse_price(self._at(block, self._ENTRY_PRICE)),
             version=self.VERSION,
             rating=scraped_rating(self._at(block, self._ENTRY_RATING)),
@@ -576,11 +569,11 @@ class GooglePlaySearch(PooledClient):
         if price is None:
             return "Free"
         if not isinstance(price, list) or len(price) < 2:
-            return "Unknown"
+            return UNKNOWN
 
         amount = self._parse_price_micros(price[0])
         if amount is None:
-            return "Unknown"
+            return UNKNOWN
         if amount == 0:
             return "Free"
 
@@ -617,12 +610,12 @@ class GooglePlaySearch(PooledClient):
             return None
         is_parenthesised = formatted.startswith("(") and formatted.endswith(")")
         if "-" in formatted or "\u2212" in formatted or is_parenthesised:
-            return "Unknown"
+            return UNKNOWN
         return formatted
 
     def _format_currency_price(self, currency: Any, amount: float) -> str:
         """``"USD 4.99"`` from the ISO currency code, or ``"Unknown"`` without one."""
         if not isinstance(currency, str) or not currency.strip():
-            return "Unknown"
+            return UNKNOWN
         units = amount / self._PRICE_MICROS_PER_UNIT
         return f"{currency.strip().upper()} {units:.2f}"

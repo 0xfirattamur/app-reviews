@@ -379,7 +379,7 @@ class AppStoreOfficialProvider(PooledClient):
     def _text(self, value: Any) -> str | None:
         """Trimmed text, or None for anything absent, blank, or not a string.
 
-        Stricter than ``core.search.scraped_text``, which stringifies a number: a
+        Stricter than ``core.scraped.scraped_text``, which stringifies a number: a
         version of ``1.5`` is worth reporting as ``"1.5"``, but a review title
         that arrives as a number is nonsense and is better dropped than shown.
         """

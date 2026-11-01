@@ -14,7 +14,7 @@ from typing import Any
 from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
-from app_reviews.core.search import (
+from app_reviews.core.scraped import (
     english_month_number,
     is_english_weekday,
     scraped_text,
