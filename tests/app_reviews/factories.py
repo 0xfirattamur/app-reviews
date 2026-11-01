@@ -6,7 +6,8 @@ from typing import Any
 
 from app_reviews.core.provider import ReviewProvider
 from app_reviews.core.reviews import BaseReviews
-from app_reviews.models.config import ConnectCredentials, ServiceAccountCredentials
+from app_reviews.googleplay.auth import ServiceAccountCredentials
+from app_reviews.models.config import ConnectCredentials
 from app_reviews.models.page import PageResult
 from app_reviews.models.review import Review
 
