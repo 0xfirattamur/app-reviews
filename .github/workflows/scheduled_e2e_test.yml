@@ -96,9 +96,26 @@ jobs:
           [ "$REVIEWS_EXIT" = "0" ] || REVIEWS_STATUS="failed"
           [ "$SEARCH_EXIT" = "0" ] || SEARCH_STATUS="failed"
 
-          # Defensive: if a suite died before tee created its log, still report.
-          REVIEWS_OUTPUT=$(tail -80 reports/e2e_reviews_output.txt 2>/dev/null || echo "(no output captured)")
-          SEARCH_OUTPUT=$(tail -80 reports/e2e_search_output.txt 2>/dev/null || echo "(no output captured)")
+          # Test ids come from the JUnit reports; raw pytest output stays in the
+          # artifact, where it cannot leak response bodies into a public issue.
+          failing_tests() {
+            local report="$1"
+            [ -f "$report" ] || { echo "- (no JUnit report; the suite did not finish)"; return; }
+            python3 - "$report" <<'PYEOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse(sys.argv[1]).getroot().iter("testcase")
+          failed = [
+              f"- `{case.get('classname')}::{case.get('name')}`"
+              for case in cases
+              if case.find("failure") is not None or case.find("error") is not None
+          ]
+          print("\n".join(failed) or "- (suite exited non-zero without a failing test)")
+          PYEOF
+          }
+          REVIEWS_FAILURES=$(failing_tests reports/e2e_reviews.xml)
+          SEARCH_FAILURES=$(failing_tests reports/e2e_search.xml)
 
           cat > issue_body.md << ENDOFBODY
           ## Scheduled E2E Test Failed
@@ -113,20 +130,16 @@ jobs:
           | Reviews | ${REVIEWS_STATUS} |
           | Search | ${SEARCH_STATUS} |
 
-          ### Reviews Test Output
+          ### Failing reviews tests
 
-          \`\`\`
-          ${REVIEWS_OUTPUT}
-          \`\`\`
+          ${REVIEWS_FAILURES}
 
-          ### Search Test Output
+          ### Failing search tests
 
-          \`\`\`
-          ${SEARCH_OUTPUT}
-          \`\`\`
+          ${SEARCH_FAILURES}
 
-          Complete text logs and JUnit XML reports are available in the
-          \`e2e-diagnostics\` artifact on the run page.
+          Complete text logs and JUnit XML reports are in the
+          \`e2e-diagnostics\` artifact on the [run page](${RUN_URL}).
 
           > Auto-reported by the [Scheduled E2E Test](${WORKFLOW_URL}) workflow.
           ENDOFBODY

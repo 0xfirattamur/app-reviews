@@ -241,6 +241,19 @@ def test_release_workflow_never_restores_or_saves_the_uv_cache() -> None:
     assert all(step["with"].get("enable-cache") is False for step in setups)
 
 
+def test_e2e_failure_issue_links_the_run_and_never_inlines_test_output() -> None:
+    e2e, _ = _workflow("scheduled_e2e_test.yml")
+    job = e2e["jobs"]["e2e"]
+    steps = _steps(job)
+    report = next(step for step in steps if "gh issue" in str(step.get("run", "")))
+    command = report["run"]
+
+    assert "github.run_id" in report["env"]["RUN_URL"]
+    assert "${RUN_URL}" in command
+    assert "_output.txt" not in command
+    assert _steps_using(job, "actions/upload-artifact")
+
+
 def test_release_matrix_is_complete_and_gates_build_and_publication() -> None:
     release, _ = _workflow("release.yml")
     jobs = release["jobs"]
