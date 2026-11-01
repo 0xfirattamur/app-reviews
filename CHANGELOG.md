@@ -16,6 +16,10 @@ recent versions are also kept in
   `LookupError`.
 - `HttpResponse.body` is left out of `repr()`, so a token-exchange body cannot
   leak through logs or tracebacks.
+- `Retry-After` reads only plain ASCII digits as seconds and ignores an
+  overflowing date, so a hostile header (`1_0`, `inf`, `Sun, 06 Nov 1994
+  08:49:37 +9999999999999999`) no longer crashes a request, and retry schedules
+  past 1023 attempts no longer overflow.
 
 ## [1.3.0] - 2026-10-25
 

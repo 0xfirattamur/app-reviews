@@ -23,6 +23,7 @@ from app_reviews import (
     GooglePlaySearch,
 )
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.retry import retry_after_seconds
 from app_reviews.models.config import RetryConfig
 from tests.app_reviews.transport import Recorder, query_of
 
@@ -496,16 +497,16 @@ class TestRetryAfterIsHonoured:
 
         assert delays == [0.5, 1.0, 2.0]
 
-    def test_an_infinite_delay_is_still_capped(self, no_sleep):
-        """``inf`` names an instant, just an absurd one, so it caps like 86400
-        rather than falling back. Waiting longer is the safe error for a 429."""
+    def test_an_infinite_delay_falls_back_to_the_schedule(self, no_sleep):
+        """Only plain digits are seconds. ``inf`` parsed as a float, but it names
+        no usable delay, so the exponential schedule applies."""
         delays = _slept(
             _throttling(1, "inf"),
-            RetryConfig(max_retries=3, max_backoff=60),
+            RetryConfig(max_retries=3, backoff_factor=0.5, max_backoff=60),
             no_sleep,
         )
 
-        assert delays == [60.0]
+        assert delays == [0.5]
 
     def test_an_http_date_is_accepted(self, no_sleep):
         """RFC 9110 allows a date as well as a delay. A past one means "now"."""
@@ -527,6 +528,33 @@ class TestRetryAfterIsHonoured:
         assert delays == [0.5, 1.0]
 
 
+class TestRetryAfterParsing:
+    """``Retry-After`` is untrusted input: unusable must mean None, never a raise."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "Sun, 06 Nov 1994 08:49:37 +9999999999999999",
+            "1_0",
+            "\u0661\u0660",
+            "1e400",
+            "1e3",
+            "0x10",
+            "inf",
+            "-inf",
+        ],
+    )
+    def test_an_unusable_value_is_none(self, value):
+        assert retry_after_seconds(value) is None
+
+    @pytest.mark.parametrize("value", ["0", "30", " 30 ", "007"])
+    def test_plain_digits_are_seconds(self, value):
+        assert retry_after_seconds(value) == float(value)
+
+    def test_a_negative_delay_means_now(self):
+        assert retry_after_seconds("-10") == 0.0
+
+
 class TestBackoffIsCapped:
     """``backoff_factor * 2**attempt`` grows without bound.
 
@@ -540,6 +568,14 @@ class TestBackoffIsCapped:
         policy = RetryPolicy(RetryConfig(max_retries=20, backoff_factor=0.5))
 
         assert policy.get_delay(19) <= RetryConfig().max_backoff
+
+    @pytest.mark.parametrize("attempt", [1023, 1024, 10_000])
+    def test_a_huge_attempt_number_does_not_overflow(self, attempt):
+        from app_reviews.core.retry import RetryPolicy
+
+        policy = RetryPolicy(RetryConfig(max_retries=attempt + 1, max_backoff=60))
+
+        assert policy.get_delay(attempt) == 60.0
 
     def test_a_long_schedule_never_exceeds_the_cap(self, no_sleep):
         delays = _slept(
