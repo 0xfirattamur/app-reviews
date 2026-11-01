@@ -78,6 +78,8 @@ recent versions are also kept in
 - `AppStoreVersions` refuses a `links.next` carrying control characters, a
   fragment or user-info, the same way `AppStoreReviews` does, instead of
   following it with the JWT.
+- `Review` now raises `ValueError` when its `source` does not belong to its
+  `store`.
 
 ## [1.3.0] - 2026-10-25
 

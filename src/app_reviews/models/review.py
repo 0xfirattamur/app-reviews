@@ -43,6 +43,10 @@ class Review:
     pair and **not** comparable across sources. Key deduplication on
     ``(store, source, id)``.
 
+    ``source`` must belong to ``store`` (``appstore_*`` with ``"appstore"``,
+    ``googleplay_*`` with ``"googleplay"``); a contradiction raises
+    ``ValueError``.
+
     ``country`` is the storefront that was queried, not the reviewer's
     location. ``None`` means the source does not report it.
 
@@ -107,6 +111,10 @@ class Review:
     def __post_init__(self) -> None:
         if not self.id.strip():
             raise ValueError("id must not be empty")
+        if not self.source.startswith(f"{self.store}_"):
+            raise ValueError(
+                f"source {self.source!r} does not belong to store {self.store!r}"
+            )
         if isinstance(self.rating, bool) or not isinstance(self.rating, int):
             raise ValueError("rating must be an integer")
         if not 1 <= self.rating <= 5:

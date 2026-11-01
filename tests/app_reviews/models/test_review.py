@@ -1,11 +1,13 @@
 """Tests for Review model validation."""
 
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 
 from app_reviews.models.reply import ReviewReply
 from app_reviews.models.review import DeviceMetadata, Review
+from app_reviews.models.types import Source
 from tests.app_reviews.factories import make_review
 
 
@@ -55,6 +57,24 @@ class TestReviewIdentityAndTimestampValidation:
     def test_id_must_not_be_empty(self, empty_id):
         with pytest.raises(ValueError, match="id must not be empty"):
             make_review(id=empty_id)
+
+    @pytest.mark.parametrize(
+        ("store", "source"),
+        [
+            ("appstore", "googleplay_scraper"),
+            ("appstore", "googleplay_official"),
+            ("googleplay", "appstore_scraper"),
+            ("googleplay", "appstore_official"),
+        ],
+    )
+    def test_source_must_belong_to_store(self, store, source):
+        with pytest.raises(ValueError, match="does not belong to store"):
+            make_review(store=store, source=source)
+
+    @pytest.mark.parametrize("source", get_args(Source))
+    def test_every_source_is_accepted_with_its_own_store(self, source):
+        store = source.split("_")[0]
+        assert make_review(store=store, source=source).source == source
 
     def test_exactly_one_source_timestamp_is_required(self):
         with pytest.raises(ValueError, match="exactly one"):

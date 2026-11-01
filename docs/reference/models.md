@@ -33,7 +33,7 @@ from app_reviews import Review
 | `title` | `str \| None` | Required | Review title. Google Play web has none; the official API may expose a legacy title. |
 | `body` | `str` | Required | Review body text. |
 | `author_name` | `str` | Required | Author display name. |
-| `source` | `Source` | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`. |
+| `source` | `Source` | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`. Must belong to `store`: a `googleplay_*` source with `store="appstore"` raises `ValueError`. |
 | `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `created_at` | `datetime` or `None` | `None` | When the review was posted. `None` where the source reports no creation date. |
 | `updated_at` | `datetime` or `None` | `None` | Last edit time. `None` where the source reports no modification date. |
