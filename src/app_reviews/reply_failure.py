@@ -20,6 +20,10 @@ __all__ = ["StoreError", "json_object", "raise_for_reply_failure"]
 DETAIL_CHARS = 200
 """How much of a store's error text reaches an exception message."""
 
+_UNKNOWN_OUTCOME_CLIENT_STATUSES = frozenset({408, 425})
+"""The 4xx statuses that say the store timed out or deferred the request, not that
+it refused it: the write may still have gone through."""
+
 
 @dataclass(frozen=True, slots=True)
 class StoreError:
@@ -48,7 +52,8 @@ def raise_for_reply_failure(
 ) -> None:
     """Raise unless the store accepted the write sent with ``send_once``.
 
-    - no answer, 3xx or 5xx: ``ReplyOutcomeUnknownError``, it may have applied;
+    - no answer, 3xx, 408, 425 or 5xx: ``ReplyOutcomeUnknownError``, it may have
+      applied;
     - 429, 401, 403: ``RateLimitError`` or ``AuthError``;
     - any other 4xx: ``ReplyRejectedError``, with the store's code as ``reason``.
     """
@@ -70,7 +75,7 @@ def raise_for_reply_failure(
             f"before sending again.",
             status=status,
         )
-    if status >= 500:
+    if status >= 500 or status in _UNKNOWN_OUTCOME_CLIENT_STATUSES:
         raise ReplyOutcomeUnknownError(
             f"{message}. The write may or may not have been applied; check "
             f"get_reply() before sending again.",

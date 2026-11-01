@@ -51,6 +51,9 @@ recent versions are also kept in
 - `AppStoreSearch.lookup()` and `alookup()` now raise `ParseError` when the
   store returns a result with no usable app, instead of returning `None` as if
   the app did not exist.
+- `reply()` and `areply()` on `AppStoreReplies` and `GooglePlayReplies` now
+  raise `ReplyOutcomeUnknownError` for HTTP 408 and 425 instead of
+  `ReplyRejectedError`, since the store may have applied the write.
 
 ## [1.3.0] - 2026-10-25
 

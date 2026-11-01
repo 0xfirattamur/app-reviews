@@ -400,3 +400,20 @@ class TestTheKeyIsLoadedOnceUnderConcurrentFirstRequests:
             second.result(timeout=2)
 
         assert len(loads) == 1
+
+
+class TestATimeoutStatusMeansTheOutcomeIsUnknown:
+    """A 408 or 425 on a write says the store gave up or declined to process it
+    now; it may still have applied the reply, so a caller must not resend blindly."""
+
+    @pytest.mark.parametrize("status", [408, 425])
+    async def test_the_write_is_sent_once_and_its_outcome_is_unknown(
+        self, twin, status
+    ):
+        record = Recorder(httpx.Response(status))
+
+        with pytest.raises(ReplyOutcomeUnknownError) as caught:
+            await twin.call(_replies(record), "reply", "review-9", "Thanks!")
+
+        assert len(record.requests) == 1
+        assert caught.value.status == status
