@@ -34,6 +34,8 @@ recent versions are also kept in
 - `fetch()` / `afetch()` stop starting queued country walks after a fatal error
   such as `AuthError`, instead of running every remaining country against the
   rejected credential.
+- `HttpClient(retry=RetryConfig(timeout=...))` now uses `RetryConfig.timeout`
+  for requests; an explicit `HttpClient(timeout=...)` still wins.
 
 ## [1.3.0] - 2026-10-25
 

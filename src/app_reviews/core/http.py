@@ -51,6 +51,10 @@ transport failures is the safer default: a real bug in ``_read`` fails loudly in
 the suite long before it reaches a retry.
 """
 
+DEFAULT_TIMEOUT = 30.0
+"""Seconds per socket operation when neither ``timeout`` nor a ``RetryConfig``
+names one."""
+
 DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 """Bytes of one response body this client will hold in memory.
 
@@ -148,7 +152,7 @@ class HttpClient:
     def __init__(
         self,
         *,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         transport: Any = None,
@@ -156,6 +160,7 @@ class HttpClient:
         max_duration: float = DEFAULT_MAX_DURATION,
         rate_limiter: RequestLimiter | None = None,
     ) -> None:
+        timeout = self._resolve_timeout(timeout, retry)
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_duration = max_duration
@@ -171,6 +176,19 @@ class HttpClient:
         self._async_pool: httpx.AsyncClient | None = None
         self._async_pool_loop: asyncio.AbstractEventLoop | None = None
         self._pool_lock = threading.Lock()
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None, retry: RetryConfig | None) -> float:
+        """An explicit ``timeout`` wins, then ``retry.timeout``, then the default.
+
+        ``RetryConfig`` documents ``timeout`` as the per-request timeout, so a
+        client built from one honours it without the caller saying it twice.
+        """
+        if timeout is not None:
+            return timeout
+        if retry is not None:
+            return retry.timeout
+        return DEFAULT_TIMEOUT
 
     def get(
         self,

@@ -282,6 +282,31 @@ class TestConfiguration:
         assert http._pool().timeout.read == pytest.approx(1.5)
 
 
+class TestTimeoutSources:
+    """``RetryConfig.timeout`` is documented as the per-request timeout, so a
+    client given only a ``RetryConfig`` has to use it."""
+
+    @pytest.mark.parametrize(
+        ("client_arguments", "expected"),
+        [
+            ({}, 30.0),
+            ({"retry": RetryConfig(timeout=5)}, 5.0),
+            ({"retry": RetryConfig(timeout=5), "timeout": 2}, 2.0),
+            ({"timeout": 2}, 2.0),
+        ],
+    )
+    async def test_requests_use_the_resolved_timeout(
+        self, twin, client_arguments, expected
+    ):
+        seen = Recorder(httpx.Response(200, text="{}"))
+
+        await twin.call(
+            _client(seen, **client_arguments), "get", "https://example.test/x"
+        )
+
+        assert seen.last.extensions["timeout"]["read"] == pytest.approx(expected)
+
+
 class TestAsyncPoolFollowsTheEventLoop:
     """``asyncio.run`` builds a fresh loop each call. A pooled connection belongs to
     the loop that opened it, so reusing it from the next loop raised
