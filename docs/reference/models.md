@@ -462,6 +462,12 @@ with AppStoreSearch() as client:
 | `first_release_date` | `datetime \| None` | When the app first appeared on the store. |
 | `release_notes` | `str \| None` | "What's New" text for the current version. |
 
+!!! warning "`url` and `icon_url` are untrusted"
+    Both come straight from the store's response and are not validated, so a
+    hostile or compromised response can put any scheme in them, such as
+    `javascript:` or `data:`. Check the scheme (accept `https`, or `http`) before
+    rendering either as a link or an image source.
+
 Text and number fields are non-optional, so a store that does not report one gets
 a stated placeholder rather than `None`. The two dates are the exception: a date
 has no honest placeholder, and a sentinel would sort, filter and diff as though it
