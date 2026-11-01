@@ -32,6 +32,20 @@ _BAD_SERVICE_ACCOUNT_INFO = {
         "private_key": _PEM_SHAPED,
         "token_uri": "https://evil.test/token",
     },
+    "bytes_private_key": {
+        "client_email": "a@b.iam.gserviceaccount.com",
+        "private_key": SECRET.encode(),
+    },
+    "int_private_key": {
+        "client_email": "a@b.iam.gserviceaccount.com",
+        "private_key": 7,
+    },
+    "int_token_uri": {
+        "client_email": "a@b.iam.gserviceaccount.com",
+        "private_key": _PEM_SHAPED,
+        "token_uri": 7,
+    },
+    "list_client_email": {"client_email": ["a@b"], "private_key": _PEM_SHAPED},
 }
 
 
@@ -126,6 +140,16 @@ class TestTheAppStoreKeyDoesNotReachATraceback:
         assert SECRET not in str(caught.value)
         assert _frames_holding(caught.value, SECRET) == []
 
+    def test_a_bytes_private_key_is_an_auth_error_without_the_key(self):
+        """``"-----BEGIN" in b"..."`` would otherwise raise a bare ``TypeError``."""
+        auth = AppStoreAuth(key_id="k", issuer_id="i", private_key=SECRET.encode())  # type: ignore[arg-type]
+
+        with pytest.raises(AuthError, match="private_key must be a str") as caught:
+            load_connect_credentials(auth)
+
+        assert SECRET not in str(caught.value)
+        assert _frames_holding(caught.value, SECRET) == []
+
     def test_passing_both_sources_fails_without_carrying_the_key(self):
         with pytest.raises(ValueError) as caught:
             AppStoreAuth(key_id="k", issuer_id="i", key_path="k.p8", private_key=SECRET)
@@ -200,6 +224,14 @@ class TestTheGoogleKeyDoesNotReachATraceback:
 
         assert SECRET not in str(caught.value)
         assert _frames_holding(caught.value, SECRET) == []
+
+    def test_a_non_string_field_is_named_without_its_value(self):
+        with pytest.raises(AuthError, match="private_key_pem must be a str") as caught:
+            GoogleAuth(
+                service_account_info=_BAD_SERVICE_ACCOUNT_INFO["bytes_private_key"]
+            )
+
+        assert SECRET not in str(caught.value)
 
     def test_google_auth_given_both_sources_fails_without_carrying_the_key(self):
         with pytest.raises(ValueError) as caught:

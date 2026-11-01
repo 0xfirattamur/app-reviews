@@ -31,9 +31,9 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
     """Read and validate the .p8 key; any failure is an ``AuthError``.
 
     No failure may leave the PEM reachable from the error: the key is unbound
-    before raising, and the ``ValueError`` is re-raised outside its ``except`` so
-    no ``__context__`` points at the dataclass frame that holds it. Pinned by
-    ``tests/app_reviews/test_credential_hygiene.py``.
+    before raising, and the ``TypeError`` or ``ValueError`` is re-raised outside
+    its ``except`` so no ``__context__`` points at the dataclass frame that holds
+    it. Pinned by ``tests/app_reviews/test_credential_hygiene.py``.
     """
     private_key: str | None
     if auth.key_path is None:
@@ -60,7 +60,7 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
             issuer_id=auth.issuer_id,
             private_key=private_key,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         reason = str(exc)
     del private_key
 

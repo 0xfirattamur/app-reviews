@@ -209,7 +209,7 @@ class GoogleAuth(PooledClient):
                 private_key_pem=private_key_pem,
                 token_uri=token_uri,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             reason = str(exc)
         del private_key_pem
 

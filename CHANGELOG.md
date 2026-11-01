@@ -4,6 +4,14 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## Unreleased
+
+### Fixed
+
+- A non-string App Store `private_key`, or a non-string `client_email`,
+  `private_key` or `token_uri` in a Google service account, now raises
+  `AuthError` when the key is loaded instead of a bare `TypeError`.
+
 ## [1.3.0] - 2026-10-25
 
 Developer replies, Play device data and translation on fetched reviews, App
