@@ -7,12 +7,11 @@ from typing import Any
 import httpx
 import pytest
 
-from app_reviews.core.http import HttpClient
 from app_reviews.errors import HttpError, ParseError, RequestError
 from app_reviews.googleplay.search import GooglePlaySearch
-from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 _ICON = "https://play-lh.googleusercontent.com/icon1.png"
 
@@ -118,28 +117,11 @@ def _search_page(
 
 
 def _client(handler):
-    # max_retries=0: these tests assert on the first failure, not on retry
-    # behaviour (covered by tests/app_reviews/core/test_http.py); the default
-    # RetryConfig would sleep through real backoff on every failure test.
-    return GooglePlaySearch(
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=RetryConfig(max_retries=0),
-        )
-    )
+    return client_for(GooglePlaySearch, handler)
 
 
 def _serving(text: str, status: int = 200):
     return _client(lambda request: httpx.Response(status, text=text))
-
-
-class TestConstruction:
-    def test_default(self) -> None:
-        assert GooglePlaySearch() is not None
-
-    def test_with_proxy(self) -> None:
-        client = GooglePlaySearch(proxy="http://proxy:8080")
-        assert client._http._proxy == "http://proxy:8080"
 
 
 class TestDatasets:
@@ -191,25 +173,17 @@ class TestSearch:
         assert app.url == "https://play.google.com/store/apps/details?id=com.whatsapp"
 
     def test_sends_query_params(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp")
-        assert "q=whatsapp" in seen["url"]
-        assert "c=apps" in seen["url"]
+        _client(record).search("whatsapp")
+        assert query_of(record.last)["q"] == ["whatsapp"]
+        assert query_of(record.last)["c"] == ["apps"]
 
     def test_sends_the_requested_country_as_gl(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp", country=Country.JP)
-        assert "gl=jp" in seen["url"]
+        _client(record).search("whatsapp", country=Country.JP)
+        assert query_of(record.last)["gl"] == ["jp"]
 
     def test_accepts_a_play_market_outside_the_itunes_enum(self, caplog) -> None:
         """The enum is Apple's 155 storefronts; Play serves markets it omits.
@@ -220,27 +194,19 @@ class TestSearch:
         """
         import logging
 
-        seen = {}
-
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
         with caplog.at_level(logging.WARNING):
-            _client(handler).search("whatsapp", country="rs")
+            _client(record).search("whatsapp", country="rs")
 
-        assert "gl=rs" in seen["url"]
+        assert query_of(record.last)["gl"] == ["rs"]
         assert "Unrecognised storefront" not in caplog.text
 
     def test_normalises_a_string_country(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp", country="  DEU  ")
-        assert "gl=de" in seen["url"]
+        _client(record).search("whatsapp", country="  DEU  ")
+        assert query_of(record.last)["gl"] == ["de"]
 
     def test_no_matching_apps_returns_empty(self) -> None:
         """A readable page with no results is empty, not a failure."""
@@ -867,3 +833,156 @@ class TestReleaseNotes:
         results = _serving(_search_page(groups=[[_entry()]])).search("whatsapp")
 
         assert [a.release_notes for a in results] == [None]
+
+
+def _results_page(*sections: Any) -> str:
+    """A search page whose sections slot holds exactly ``sections``."""
+    return _page("ds:4", [[None, list(sections)]])
+
+
+def _results_section(
+    *, groups: Any = None, featured: list[Any] | None = None
+) -> list[Any]:
+    """One results section with its entry groups and featured slot set verbatim."""
+    section: list[Any] = [None] * 24
+    section[22] = groups
+    if featured is not None:
+        slot: list[Any] = [None] * 17
+        slot[16] = featured
+        section[23] = slot
+    return section
+
+
+class TestOddlyShapedPagesStillAnswerSearch:
+    """Play's layout is undocumented, so a section or a block of the wrong shape
+    costs only itself: the readable parts of the page still answer."""
+
+    async def test_a_callback_block_without_data_is_skipped(self, twin) -> None:
+        dataless = "<script>AF_initDataCallback({key: 'ds:3', hash: '1'});</script>"
+        keyless = "<script>AF_initDataCallback({data:[1], sideChannel: {}});</script>"
+
+        results = await twin.call(
+            _serving(dataless + keyless + _search_page()), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_a_section_with_no_results_in_it_is_skipped(self, twin) -> None:
+        sections = [
+            None,
+            ["a list", "with neither slot"],
+            _results_section(groups=[[_entry()]]),
+        ]
+
+        results = await twin.call(
+            _serving(_results_page(*sections)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_a_featured_hit_is_returned_when_the_groups_are_missing(
+        self, twin
+    ) -> None:
+        section = _results_section(groups=None, featured=[None, None, _detail_block()])
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_groups_of_the_wrong_type_beside_an_empty_section_are_no_results(
+        self, twin
+    ) -> None:
+        sections = [
+            _results_section(groups=[]),
+            _results_section(groups="not a list of groups"),
+        ]
+
+        results = await twin.call(
+            _serving(_results_page(*sections)), "search", "whatsapp"
+        )
+
+        assert results == []
+
+    async def test_a_featured_hit_without_a_link_is_skipped(self, twin) -> None:
+        block = _detail_block()
+        block[41] = None
+        section = _results_section(
+            groups=[[_entry(app_id="com.other")]], featured=[None, None, block]
+        )
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.other"]
+
+    @pytest.mark.parametrize(
+        "link",
+        [
+            "https://play.google.com/store/apps/details",
+            "https://play.google.com/store/apps/details?id=",
+        ],
+    )
+    async def test_a_featured_hit_whose_link_names_no_package_is_skipped(
+        self, twin, link
+    ) -> None:
+        block = _detail_block()
+        block[41] = [[None, None, link]]
+        section = _results_section(
+            groups=[[_entry(app_id="com.other")]], featured=[None, None, block]
+        )
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.other"]
+
+
+class TestPricesWithoutADisplayString:
+    """Play usually sends the storefront's own formatted price; without one the
+    price falls back to the currency code and the amount."""
+
+    async def test_an_entry_with_no_price_slot_is_free(self, twin) -> None:
+        entry = _entry()
+        entry[0][8] = None
+
+        results = await twin.call(
+            _serving(_search_page(groups=[[entry]])), "search", "whatsapp"
+        )
+
+        assert [app.price for app in results] == ["Free"]
+
+    @pytest.mark.parametrize("display", [None, "", "   ", 5])
+    async def test_a_paid_app_falls_back_to_currency_and_amount(
+        self, twin, display
+    ) -> None:
+        page = _detail_page(
+            price_micros=4_990_000, currency=" usd ", formatted_price=display
+        )
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "USD 4.99"
+
+    @pytest.mark.parametrize("currency", [None, "", "  ", 3])
+    async def test_a_paid_app_without_a_usable_currency_is_unknown(
+        self, twin, currency
+    ) -> None:
+        page = _detail_page(price_micros=4_990_000, currency=currency)
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
+    async def test_a_boolean_amount_is_unknown_not_one_micro(self, twin) -> None:
+        page = _detail_page(price_micros=True)
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"

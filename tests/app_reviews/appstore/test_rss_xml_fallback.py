@@ -20,6 +20,7 @@ import pytest
 from app_reviews import AppStoreReviews, RetryConfig
 from app_reviews.appstore.rss import AppStoreScraperProvider
 from app_reviews.core.http import HttpClient
+from tests.app_reviews.transport import client_for
 
 FIXTURES = Path(__file__).parents[2] / "fixtures/rss"
 
@@ -59,7 +60,7 @@ def _provider(handler, **kwargs) -> AppStoreScraperProvider:
 
 
 def _client(handler) -> AppStoreReviews:
-    return AppStoreReviews(http=HttpClient(transport=httpx.MockTransport(handler)))
+    return client_for(AppStoreReviews, handler)
 
 
 def _json_page(count: int, start: int = 0) -> str:

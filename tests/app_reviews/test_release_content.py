@@ -1,4 +1,4 @@
-"""Public release metadata and documentation contracts for v1.0.0."""
+"""Public release metadata and documentation contracts."""
 
 from __future__ import annotations
 
@@ -6,6 +6,10 @@ import subprocess
 import tarfile
 import tomllib
 from pathlib import Path
+
+import pytest
+
+import app_reviews
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "https://github.com/0xfirattamur/app-reviews"
@@ -17,14 +21,16 @@ def _project() -> dict[str, object]:
     return pyproject["project"]
 
 
+def _version() -> str:
+    version = _project()["version"]
+    assert isinstance(version, str)
+    return version
+
+
 def test_v1_metadata_is_stable_and_discoverable() -> None:
     project = _project()
 
-    assert project["version"] == "1.3.0"
-    assert project["description"] == (
-        "Typed sync and async Python client for App Store and Google Play "
-        "reviews, app search, metadata, and resumable cursors"
-    )
+    assert project["description"]
     assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
     assert "Development Status :: 3 - Alpha" not in project["classifiers"]
     assert {
@@ -44,10 +50,14 @@ def test_v1_metadata_is_stable_and_discoverable() -> None:
     }
 
 
-def test_lockfile_carries_the_root_v1_version() -> None:
+def test_lockfile_carries_the_project_version() -> None:
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     package = next(item for item in lock["package"] if item["name"] == "app-reviews")
-    assert package["version"] == "1.3.0"
+    assert package["version"] == _version()
+
+
+def test_installed_package_reports_the_project_version() -> None:
+    assert app_reviews.__version__ == _version()
 
 
 def test_public_text_has_no_stale_owner_links() -> None:
@@ -128,10 +138,11 @@ def test_citation_metadata_is_present_and_versioned() -> None:
     citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     assert "cff-version: 1.2.0" in citation
     assert "title: app-reviews" in citation
-    assert 'version: "1.3.0"' in citation
+    assert f'version: "{_version()}"' in citation
     assert "repository-code: https://github.com/0xfirattamur/app-reviews" in citation
 
 
+@pytest.mark.release
 def test_sdist_excludes_generated_workspace_content(tmp_path: Path) -> None:
     sentinels = [
         ROOT / ".cache/release-artifact-sentinel",

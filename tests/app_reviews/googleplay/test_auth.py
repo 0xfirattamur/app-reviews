@@ -22,56 +22,20 @@ from app_reviews.errors import (
 )
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.models.config import GooglePlayAuth, RetryConfig
-
-# RSA 2048 test key in PKCS8 format, generated for testing only, not real credentials.
-_TEST_RSA_KEY = """\
------BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCsfsIYt4li+qCP
-ItkaZbm3f6siEa0ItRF98Il4dwdwn1ahSTZNKiY6IVpdkEJSjancWKSrTkRm8RM4
-lCSvuxWhYgAfrNtc5cmFbidxBZOlfCtK+uvzNdPKUGALPSorp5BUWALt64T9i2Sb
-nNFZy4uDXzcnry0/+Ktacss9JfUzKX8r8sDa20YRvCBftpwJK/nQeNQXT2IbI2IG
-f4r2b4UDcrTusA/CGrC8kzV795R0F1rs+ZZf/Q4xZOButuyjm9JUIyP0gPRoOFnN
-v8PhbM4l+InKalbSpgJ4poIpnzoCLtTrPly1wzjuDLVbC1vqTkQN66a/ifu3hkET
-bMQ9eEw/AgMBAAECggEACmR+tDeGnwCDoOwUEXuUg2I9QMm415/1JFXUKn5dY+Mt
-uHztORvzfqgYxi9VV5zyYXSzwyBtjZgztMJ0LWRDqtv5Lu9erguoJxJabPxNh3hi
-MVvJ0HbrQjKyfqraOhQX5YUB9Cyu8Amwb5G0qUjSqIEZlRoAS2zjggkNhqsdSU46
-5E6ogKXhkpTrAa7KSNOom5llqk8eAkbpbCxWko7Hh/2RGzBrXvPjEe0fIp4JmL9J
-n8fvTP8QCndDhyOB3R4DsKckHyvRECZ5bX89zTuCZEHoACRNfl5X4M3ie+WdV0MU
-UGiVl7cDRx67NSX/sfgy2G0NKZxFXQQ3ZOFVd2VAgQKBgQDap7KPQSqzdwl/8+hF
-geGrKp0hUZjQOZF2SFxamHYxZiSXFWUspqNgGToARAxR92DE+rrQazw8ikFiIXti
-3O8i0AmQEgYoJefLyWRdDPDnwBPhZ/udALarE8VobnzFnj7IRGWddZ6jO3WkXp/9
-hxyLuCDxGFKV1+BiIrTZbpmbgQKBgQDJ9Mz2WpzyJASzo1mjOGwnuvYqioh78QF9
-EHXvP1ETHmrMuVPMSzM8rluinJBQquIQ1gnMSCwFUwc5z2LT8F8GrOyhH4aM2lE6
-/3vEa7Dcp8+R2e+LMVmOn6rY+alLplVp4oices+/u/2UzYfPEoOmmEEPRtgHGVh/
-E2wzPvzHvwKBgQDH3xFO9+/TmxV4+/kvSFmDwHFf2pnIhUcdi2m4erNX1pnN7YXN
-egnPt1+YjJuCdZHknZkVGWE3qd24mQiTx4dlGCwVoRQ1sOihFNgEYub3wVGq8wVC
-cDuKSIlkO9McRdn38OW+OJ0pcxnHhaPT+aSzZz3dhTFAvdPjgPw14W7SgQKBgQDF
-osqd38ktcbAkOBx1jbbSHrXepdmxKQZi5KP1MQpfYmnz1P27tG/810iX1w2n08MN
-5NiL0Kk7wKgWm+xEKjxkZP/hId/joZbS3Mi7TQQ0vAh23Eb++ZmB6KEiWxihDrMR
-vv4f3FPId+lOIODh9WVeuCsbDyJDuDsRiOlfMSnhMwKBgDh3v+7dI2E9pIWDzW6R
-BGvqX5FnWN4OCbyl98cSo99qXFnLqifFpVfJjhdxk5uDsD5mqwl9GbhNhDFrSVst
-OZyyCpMAriwhjl+6B6UT9xwDaqIq+8wxl4zjn4ekjZuT5q19kNC5kWqBKxZs61hG
-sFAt2f21YJ6sthPw/SAGgy8t
------END PRIVATE KEY-----
-"""
-
-_SERVICE_ACCOUNT_JSON = {
-    "client_email": "test@test.iam.gserviceaccount.com",
-    "private_key": _TEST_RSA_KEY,
-    "token_uri": "https://oauth2.googleapis.com/token",
-}
+from tests.app_reviews.factories import TEST_RSA_PRIVATE_KEY, service_account_json
+from tests.app_reviews.transport import Recorder
 
 
 def _write_service_account(tmp_path: Path) -> Path:
     """Write a minimal service-account JSON key file and return its path."""
     key_file = tmp_path / "service-account.json"
-    key_file.write_text(json.dumps(_SERVICE_ACCOUNT_JSON))
+    key_file.write_text(json.dumps(service_account_json()))
     return key_file
 
 
 class TestGoogleAuthInit:
     def test_loads_service_account_from_file(self):
-        data = json.dumps(_SERVICE_ACCOUNT_JSON)
+        data = json.dumps(service_account_json())
         with patch("builtins.open", mock_open(read_data=data)):
             auth = GoogleAuth("/fake/path.json")
         assert auth._credentials.client_email == "test@test.iam.gserviceaccount.com"
@@ -85,14 +49,14 @@ class TestGoogleAuthInit:
             GoogleAuth(service_account_path=key_file),
         ):
             assert (
-                auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+                auth._credentials.client_email == service_account_json()["client_email"]
             )
 
     def test_service_account_info_needs_no_file(self):
         with patch("builtins.open", side_effect=AssertionError("file read")):
-            auth = GoogleAuth(service_account_info=_SERVICE_ACCOUNT_JSON)
+            auth = GoogleAuth(service_account_info=service_account_json())
 
-        assert auth._credentials.client_email == _SERVICE_ACCOUNT_JSON["client_email"]
+        assert auth._credentials.client_email == service_account_json()["client_email"]
 
     @pytest.mark.parametrize(
         "sources",
@@ -103,7 +67,7 @@ class TestGoogleAuthInit:
             GoogleAuth(**sources)
 
     def test_a_key_file_missing_client_email_is_an_auth_error(self):
-        data = json.dumps({"private_key": _TEST_RSA_KEY})
+        data = json.dumps({"private_key": TEST_RSA_PRIVATE_KEY})
         with (
             patch("builtins.open", mock_open(read_data=data)),
             pytest.raises(AuthError, match="client_email"),
@@ -113,7 +77,7 @@ class TestGoogleAuthInit:
 
 class TestGoogleAuthBuildJwt:
     def _make_auth(self):
-        data = json.dumps(_SERVICE_ACCOUNT_JSON)
+        data = json.dumps(service_account_json())
         with patch("builtins.open", mock_open(read_data=data)):
             return GoogleAuth("/fake/path.json")
 
@@ -150,7 +114,7 @@ class TestGoogleAuthBuildJwt:
 
 def _auth_on(handler):
     """A GoogleAuth whose token exchange runs on a MockTransport-backed pool."""
-    data = json.dumps(_SERVICE_ACCOUNT_JSON)
+    data = json.dumps(service_account_json())
     with patch("builtins.open", mock_open(read_data=data)):
         return GoogleAuth(
             "/fake/path.json",
@@ -170,16 +134,13 @@ class TestGoogleAuthAuthorizationHeader:
         assert _auth_on(_token()).authorization_header() == "Bearer ya29.test-token"
 
     def test_sends_jwt_assertion_in_body(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, json={"access_token": "tok"}))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, json={"access_token": "tok"})
+        _auth_on(record).authorization_header()
 
-        _auth_on(handler).authorization_header()
-
-        assert "assertion=" in seen["body"]
-        assert "grant_type=" in seen["body"]
+        form = urllib.parse.parse_qs(record.last.content.decode())
+        assert form["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
+        assert form["assertion"][0].count(".") == 2
 
     def test_posts_to_the_token_uri_as_a_form(self):
         seen = {}
@@ -233,15 +194,14 @@ class TestGoogleAuthAuthorizationHeader:
 
         assert calls == ["https://oauth2.googleapis.com/token"]
 
-    def test_retry_config_on_the_pool_governs_the_exchange(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+    def test_retry_config_on_the_pool_governs_the_exchange(self, no_sleep):
         attempts = []
 
         def handler(_request):
             attempts.append(1)
             return httpx.Response(503, text="")
 
-        data = json.dumps(_SERVICE_ACCOUNT_JSON)
+        data = json.dumps(service_account_json())
         with patch("builtins.open", mock_open(read_data=data)):
             auth = GoogleAuth(
                 "/fake/path.json",
@@ -416,14 +376,14 @@ class TestTheReviewClientSharesItsPool:
 
         with patch("builtins.open", side_effect=AssertionError("file read")):
             client = GooglePlayReviews(
-                auth=GooglePlayAuth(service_account_info=dict(_SERVICE_ACCOUNT_JSON)),
+                auth=GooglePlayAuth(service_account_info=dict(service_account_json())),
                 http=HttpClient(transport=httpx.MockTransport(handler)),
             )
             client.fetch("com.example.app")
 
         assertion = urllib.parse.parse_qs(seen[0].content.decode())["assertion"][0]
         claims = json.loads(base64.urlsafe_b64decode(assertion.split(".")[1] + "=="))
-        assert claims["iss"] == _SERVICE_ACCOUNT_JSON["client_email"]
+        assert claims["iss"] == service_account_json()["client_email"]
         assert seen[1].headers["authorization"] == "Bearer tok"
 
     @pytest.mark.parametrize(
@@ -437,7 +397,7 @@ class TestTheReviewClientSharesItsPool:
 
 def _sa(**overrides) -> str:
     """A service-account document as JSON text, with fields overridden."""
-    document = {**_SERVICE_ACCOUNT_JSON, **overrides}
+    document = {**service_account_json(), **overrides}
     return json.dumps(document)
 
 

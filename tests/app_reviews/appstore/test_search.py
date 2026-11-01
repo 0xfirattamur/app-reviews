@@ -7,10 +7,9 @@ import httpx
 import pytest
 
 from app_reviews.appstore.search import AppStoreSearch
-from app_reviews.core.http import HttpClient
 from app_reviews.errors import AppReviewsError, HttpError, ParseError, RequestError
-from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 
 def _itunes_result(
@@ -36,26 +35,7 @@ def _payload(results):
 
 
 def _client(handler):
-    # max_retries=0: these tests assert on the first failure, not on retry
-    # behaviour (already covered by tests/app_reviews/http/test_client.py);
-    # the default RetryConfig would otherwise sleep through real backoff
-    # delays on every error-status/transport-failure test.
-    return AppStoreSearch(
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=RetryConfig(max_retries=0),
-        )
-    )
-
-
-class TestConstruction:
-    def test_default(self):
-        client = AppStoreSearch()
-        assert client is not None
-
-    def test_with_proxy(self):
-        client = AppStoreSearch(proxy="http://proxy:8080")
-        assert client._http._proxy == "http://proxy:8080"
+    return client_for(AppStoreSearch, handler)
 
 
 class TestSearch:
@@ -102,42 +82,30 @@ class TestSearch:
         assert app.icon_url == "https://is1-ssl.mzstatic.com/image/512x512.jpg"
 
     def test_sends_query_params(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        _client(record).search("whatsapp", country=Country.GB, limit=5)
 
-        _client(handler).search("whatsapp", country=Country.GB, limit=5)
-
-        assert "term=whatsapp" in seen["url"]
-        assert "country=gb" in seen["url"]
-        assert "limit=5" in seen["url"]
-        assert "entity=software" in seen["url"]
+        assert query_of(record.last)["term"] == ["whatsapp"]
+        assert query_of(record.last)["country"] == ["gb"]
+        assert query_of(record.last)["limit"] == ["5"]
+        assert query_of(record.last)["entity"] == ["software"]
 
     def test_accepts_a_plain_string_country(self):
         """The enum is a convenience, not the only accepted form."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        _client(record).search("whatsapp", country="jp", limit=5)
 
-        _client(handler).search("whatsapp", country="jp", limit=5)
-
-        assert "country=jp" in seen["url"]
+        assert query_of(record.last)["country"] == ["jp"]
 
     def test_normalises_a_string_country(self):
         """Case, whitespace and alpha-3 all resolve to the alpha-2 form."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        _client(record).search("whatsapp", country="  GBR  ", limit=5)
 
-        _client(handler).search("whatsapp", country="  GBR  ", limit=5)
-
-        assert "country=gb" in seen["url"]
+        assert query_of(record.last)["country"] == ["gb"]
 
     def test_empty_results_returns_empty_list(self):
         def handler(request):
@@ -216,38 +184,26 @@ class TestSearch:
 
 class TestLookup:
     def test_numeric_id_uses_the_id_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_itunes_result()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([_itunes_result()]))
+        _client(record).lookup("310633997")
 
-        _client(handler).lookup("310633997")
-
-        assert "id=310633997" in seen["url"]
-        assert "bundleId=" not in seen["url"]
+        assert query_of(record.last)["id"] == ["310633997"]
+        assert "bundleId" not in query_of(record.last)
 
     def test_reverse_dns_id_uses_the_bundle_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_itunes_result()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([_itunes_result()]))
+        _client(record).lookup("com.whatsapp.WhatsApp")
 
-        _client(handler).lookup("com.whatsapp.WhatsApp")
-
-        assert "bundleId=com.whatsapp.WhatsApp" in seen["url"]
+        assert query_of(record.last)["bundleId"] == ["com.whatsapp.WhatsApp"]
 
     def test_passes_country_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_itunes_result()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([_itunes_result()]))
+        _client(record).lookup("com.whatsapp.WhatsApp", country=Country.JP)
 
-        _client(handler).lookup("com.whatsapp.WhatsApp", country=Country.JP)
-
-        assert "country=jp" in seen["url"]
+        assert query_of(record.last)["country"] == ["jp"]
 
     def test_maps_result(self):
         def handler(request):
@@ -350,13 +306,7 @@ class TestMalformedResponsesAreParseErrors:
     """
 
     def _client(self, body: str, status: int = 200):
-        return AppStoreSearch(
-            http=HttpClient(
-                transport=httpx.MockTransport(
-                    lambda r: httpx.Response(status, text=body)
-                )
-            )
-        )
+        return _client(lambda r: httpx.Response(status, text=body))
 
     @pytest.mark.parametrize("body", ["not json", "", "<html>nope</html>"])
     def test_search_raises_on_unreadable_json(self, body):
@@ -414,15 +364,8 @@ class TestNullsDoNotBecomeValues:
     """
 
     def _one(self, result: dict):
-        client = AppStoreSearch(
-            http=HttpClient(
-                transport=httpx.MockTransport(
-                    lambda r: httpx.Response(
-                        200, text=json.dumps({"results": [result]})
-                    )
-                )
-            )
-        )
+        body = json.dumps({"results": [result]})
+        client = _client(lambda r: httpx.Response(200, text=body))
         return client.search("x")
 
     def test_a_null_name_does_not_become_none(self):
@@ -469,13 +412,8 @@ class TestResultsWithoutAnIdAreSkipped:
     """``str(None)`` produced the literal app id ``"None"``."""
 
     def _search(self, results: list[dict]):
-        client = AppStoreSearch(
-            http=HttpClient(
-                transport=httpx.MockTransport(
-                    lambda r: httpx.Response(200, text=json.dumps({"results": results}))
-                )
-            )
-        )
+        body = json.dumps({"results": results})
+        client = _client(lambda r: httpx.Response(200, text=body))
         return client.search("x")
 
     @pytest.mark.parametrize(
@@ -499,15 +437,8 @@ class TestResultsWithoutAnIdAreSkipped:
 
     def test_lookup_returns_none_rather_than_raising(self):
         """``lookup`` already signals "no usable app" with None."""
-        client = AppStoreSearch(
-            http=HttpClient(
-                transport=httpx.MockTransport(
-                    lambda r: httpx.Response(
-                        200, text=json.dumps({"results": [{"trackName": "A"}]})
-                    )
-                )
-            )
-        )
+        body = json.dumps({"results": [{"trackName": "A"}]})
+        client = _client(lambda r: httpx.Response(200, text=body))
 
         assert client.lookup("123") is None
 
@@ -518,17 +449,13 @@ class TestTheAsyncPathSendsTheSameQuery:
     request, so ``asearch`` sending no ``term`` at all looked identical."""
 
     async def test_asearch_sends_the_query_parameters(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"results": []})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"results": []}))
+        await _client(record).asearch("whatsapp", country=Country.DE, limit=7)
 
-        await _client(handler).asearch("whatsapp", country=Country.DE, limit=7)
-
-        assert "term=whatsapp" in seen["url"]
-        assert "country=de" in seen["url"]
-        assert "limit=7" in seen["url"]
+        assert query_of(record.last)["term"] == ["whatsapp"]
+        assert query_of(record.last)["country"] == ["de"]
+        assert query_of(record.last)["limit"] == ["7"]
 
     async def test_asearch_zero_limit_returns_without_io(self):
         calls = 0
@@ -558,16 +485,12 @@ class TestTheAsyncPathSendsTheSameQuery:
             await _client(lambda request: httpx.Response(401)).asearch("whatsapp")
 
     async def test_alookup_sends_the_identifier(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"results": []})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"results": []}))
+        await _client(record).alookup("389801252", country=Country.GB)
 
-        await _client(handler).alookup("389801252", country=Country.GB)
-
-        assert "id=389801252" in seen["url"]
-        assert "country=gb" in seen["url"]
+        assert query_of(record.last)["id"] == ["389801252"]
+        assert query_of(record.last)["country"] == ["gb"]
 
 
 class TestAnUnusableNameFallsBackRatherThanStringifying:

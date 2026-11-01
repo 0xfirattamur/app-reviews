@@ -12,11 +12,11 @@ from app_reviews import (
     AppStoreAuth,
     AppStoreVersion,
     AppStoreVersions,
-    HttpClient,
     NotFoundError,
     ParseError,
 )
-from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
+from tests.app_reviews.transport import client_for
 
 _URL = "https://api.appstoreconnect.apple.com/v1/apps/123/appStoreVersions"
 
@@ -62,10 +62,8 @@ def _localization(loc_id: str, locale: str, whats_new: str | None) -> dict:
 
 
 def _client(handler) -> AppStoreVersions:
-    return AppStoreVersions(
-        AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY),
-        http=HttpClient(transport=httpx.MockTransport(handler)),
-    )
+    auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY)
+    return client_for(AppStoreVersions, handler, auth=auth)
 
 
 class TestVersions:
@@ -119,7 +117,7 @@ class TestVersions:
         assert "appStoreState" not in fields
         assert request.headers["authorization"].startswith("Bearer ")
 
-    def test_follows_links_next_and_sorts_newest_created_first(self):
+    async def test_follows_links_next_and_sorts_newest_created_first(self, twin):
         pages = [
             {
                 "data": [_version("v1", "1.0", "2025-01-01T00:00:00Z")],
@@ -133,7 +131,7 @@ class TestVersions:
             urls.append(str(request.url))
             return httpx.Response(200, json=pages[len(urls) - 1])
 
-        versions = _client(handler).versions("123")
+        versions = await twin.call(_client(handler), "versions", "123")
 
         assert [v.version for v in versions] == ["1.1", "1.0"]
         assert urls[1] == _URL + "?cursor=2"
@@ -147,7 +145,9 @@ class TestVersions:
             "https://user@api.appstoreconnect.apple.com/v1/apps/123/appStoreVersions",
         ],
     )
-    def test_a_next_link_elsewhere_is_refused_without_following_it(self, next_url):
+    async def test_a_next_link_elsewhere_is_refused_without_following_it(
+        self, twin, next_url
+    ):
         calls = []
 
         def handler(request):
@@ -161,11 +161,11 @@ class TestVersions:
             )
 
         with pytest.raises(ParseError, match=r"links\.next"):
-            _client(handler).versions("123")
+            await twin.call(_client(handler), "versions", "123")
 
         assert len(calls) == 1
 
-    def test_a_repeated_next_link_ends_the_walk(self):
+    async def test_a_repeated_next_link_ends_the_walk(self, twin):
         calls = []
 
         def handler(request):
@@ -178,13 +178,13 @@ class TestVersions:
                 },
             )
 
-        _client(handler).versions("123")
+        await twin.call(_client(handler), "versions", "123")
 
         assert len(calls) == 2
 
-    def test_an_unknown_app_is_not_found(self):
+    async def test_an_unknown_app_is_not_found(self, twin):
         with pytest.raises(NotFoundError):
-            _client(lambda r: httpx.Response(404)).versions("123")
+            await twin.call(_client(lambda r: httpx.Response(404)), "versions", "123")
 
     @pytest.mark.parametrize(
         "body",
@@ -195,9 +195,13 @@ class TestVersions:
         ],
         ids=["no-data", "no-versionString", "naive-date"],
     )
-    def test_an_unreadable_page_is_a_parse_error_not_a_partial_list(self, body):
+    async def test_an_unreadable_page_is_a_parse_error_not_a_partial_list(
+        self, twin, body
+    ):
         with pytest.raises(ParseError):
-            _client(lambda r: httpx.Response(200, json=body)).versions("123")
+            await twin.call(
+                _client(lambda r: httpx.Response(200, json=body)), "versions", "123"
+            )
 
     async def test_async_versions_matches(self):
         body = {"data": [_version("v1", "1.0", "2025-01-01T00:00:00Z")]}

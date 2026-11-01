@@ -21,7 +21,7 @@ from app_reviews.core.search import (
     scraped_number,
 )
 from app_reviews.googleplay.search import GooglePlaySearch
-from app_reviews.models.config import RetryConfig
+from tests.app_reviews.transport import Recorder, query_of
 
 _METHODS = ("search", "asearch", "lookup", "alookup")
 
@@ -51,12 +51,13 @@ class TestPoolOwnership:
     """Search clients own a pool the same way review clients do."""
 
     @pytest.mark.parametrize("factory", [AppStoreSearch, GooglePlaySearch])
-    def test_proxy_and_retry_configure_the_pool(self, factory):
-        retry = RetryConfig(max_retries=5)
-        client = factory(proxy="http://proxy:8080", retry=retry)
+    def test_proxy_reaches_the_pool(self, factory):
+        """Not observable through a recording transport (it only changes how httpx
+        dials), so the pool's attribute is the one thing to read. The retry half is
+        covered by behaviour in ``core/test_http.py``."""
+        client = factory(proxy="http://proxy:8080")
 
         assert client._http._proxy == "http://proxy:8080"
-        assert client._http._retry is retry
 
     @pytest.mark.parametrize("factory", [AppStoreSearch, GooglePlaySearch])
     def test_an_injected_pool_is_used_as_given(self, factory):
@@ -92,38 +93,30 @@ class TestPoolOwnership:
 
 class TestGetAndParse:
     def test_sends_params_and_returns_what_parse_returns(self):
-        seen = {}
-
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text="body-text")
+        record = Recorder(httpx.Response(200, text="body-text"))
 
         result = get_and_parse(
-            _pool(handler),
+            _pool(record),
             "https://example.test/x",
             {"q": "1"},
             lambda response: response.body.upper(),
         )
 
         assert result == "BODY-TEXT"
-        assert "q=1" in seen["url"]
+        assert query_of(record.last)["q"] == ["1"]
 
     def test_forwards_headers(self):
-        seen = {}
-
-        def handler(request):
-            seen["ua"] = request.headers.get("user-agent")
-            return httpx.Response(200, text="")
+        record = Recorder(httpx.Response(200, text=""))
 
         get_and_parse(
-            _pool(handler),
+            _pool(record),
             "https://example.test/x",
             {},
             lambda response: response.body,
             headers={"User-Agent": "custom-agent"},
         )
 
-        assert seen["ua"] == "custom-agent"
+        assert record.last.headers.get("user-agent") == "custom-agent"
 
     async def test_async_twin_matches(self):
         def handler(_request):

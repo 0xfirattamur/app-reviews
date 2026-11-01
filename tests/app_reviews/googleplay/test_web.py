@@ -9,9 +9,9 @@ from typing import Any
 import httpx
 import pytest
 
-from app_reviews.core.http import HttpClient
-from app_reviews.core.paging import is_per_country, orders_newest_first
+from app_reviews.core.paging import orders_newest_first
 from app_reviews.googleplay.web import GooglePlayScraperProvider
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 
 def _gp_entry(
@@ -45,9 +45,7 @@ def _gp_body(entries: list[list[Any]], token: str | None = None) -> str:
 
 def _provider(handler, **kwargs):
     """Build a provider whose pooled HTTP client uses a MockTransport."""
-    return GooglePlayScraperProvider(
-        http=HttpClient(transport=httpx.MockTransport(handler)), **kwargs
-    )
+    return client_for(GooglePlayScraperProvider, handler, **kwargs)
 
 
 def _serving(text: str, status: int = 200):
@@ -60,63 +58,35 @@ def _sent_payload(body: str) -> Any:
     return json.loads(json.loads(f_req)[0][0][1])
 
 
-class TestSource:
-    def test_source(self):
-        assert GooglePlayScraperProvider().source == "googleplay_scraper"
-
-    def test_is_not_per_country(self):
-        """Play has one global review corpus, so there is only ever one call to
-        make. That fact lives solely in ``core.paging``; see the reasoning on
-        ``_PER_COUNTRY`` there.
-        """
-        assert is_per_country(GooglePlayScraperProvider().source) is False
-
-
 class TestRequestShape:
     def test_country_shapes_the_storefront_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "de", None)
 
-        _provider(handler).fetch_page("com.example.app", "de", None)
-
-        assert "gl=de" in seen["url"]
+        assert query_of(record.last)["gl"] == ["de"]
 
     def test_language_is_always_english(self):
         """``hl`` picks the store's presentation locale, not a review filter."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "de", None)
 
-        _provider(handler).fetch_page("com.example.app", "de", None)
-
-        assert "hl=en" in seen["url"]
+        assert query_of(record.last)["hl"] == ["en"]
 
     def test_empty_country_falls_back_to_us(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "", None)
 
-        _provider(handler).fetch_page("com.example.app", "", None)
-
-        assert "gl=us" in seen["url"]
+        assert query_of(record.last)["gl"] == ["us"]
 
     def test_cursor_is_sent_as_the_page_token(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", "TOKEN123")
 
-        _provider(handler).fetch_page("com.example.app", "us", "TOKEN123")
-
-        assert "TOKEN123" in seen["body"]
+        assert "TOKEN123" in record.last.content.decode()
 
 
 class TestSortOrder:
@@ -128,15 +98,11 @@ class TestSortOrder:
     """
 
     def test_requests_are_always_sorted_newest_first(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", None)
 
-        _provider(handler).fetch_page("com.example.app", "us", None)
-
-        assert _sent_payload(seen["body"])[1][1] == (
+        assert _sent_payload(record.last.content.decode())[1][1] == (
             GooglePlayScraperProvider.SORT_NEWEST
         )
 
@@ -194,9 +160,11 @@ class TestFieldMapping:
 
         assert page.reviews[0].raw == entry
 
-    def test_unparseable_entry_is_skipped_not_fatal(self):
+    async def test_unparseable_entry_is_skipped_not_fatal(self, twin):
         body = _gp_body([["broken"], _gp_entry()])
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert len(page.reviews) == 1
         assert page.error is None
@@ -215,11 +183,13 @@ class TestFieldMapping:
             (10, False),
         ],
     )
-    def test_wrong_typed_present_scalar_skips_the_review(self, slot, value):
+    async def test_wrong_typed_present_scalar_skips_the_review(self, twin, slot, value):
         entry = _gp_entry()
         entry[slot] = value
 
-        page = _serving(_gp_body([entry])).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.reviews == []
         assert page.skipped_reviews == 1
@@ -238,9 +208,13 @@ class TestUnusableTimestamps:
             ("yesterday", "not a number at all"),
         ],
     )
-    def test_an_unusable_timestamp_costs_only_that_review(self, seconds, label):
+    async def test_an_unusable_timestamp_costs_only_that_review(
+        self, twin, seconds, label
+    ):
         body = _gp_body([_gp_entry(review_id="bad", created_ts=seconds), _gp_entry()])
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert [r.id for r in page.reviews] == ["abc123"], label
         assert page.error is None
@@ -271,34 +245,48 @@ class TestSkippedReviewLogging:
 
 
 class TestPagination:
-    def test_next_cursor_comes_from_the_token(self):
+    async def test_next_cursor_comes_from_the_token(self, twin):
         body = _gp_body([_gp_entry()], token="NEXT")
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.next_cursor == "NEXT"
 
-    def test_missing_token_ends_pagination(self):
-        page = _serving(_gp_body([_gp_entry()])).fetch_page(
-            "com.example.app", "us", None
+    async def test_missing_token_ends_pagination(self, twin):
+        page = await twin.call(
+            _serving(_gp_body([_gp_entry()])),
+            "fetch_page",
+            "com.example.app",
+            "us",
+            None,
         )
 
         assert page.next_cursor is None
 
     @pytest.mark.parametrize("container", ["reviews", {"review": []}, 42])
-    def test_present_non_list_reviews_container_is_a_parse_error(self, container):
+    async def test_present_non_list_reviews_container_is_a_parse_error(
+        self, twin, container
+    ):
         inner = json.dumps([container, None, [None]])
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
 
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None and page.error.kind == "parse"
 
     @pytest.mark.parametrize("pagination", ["next", {"token": "x"}, [None, 42]])
-    def test_present_malformed_pagination_is_a_parse_error(self, pagination):
+    async def test_present_malformed_pagination_is_a_parse_error(
+        self, twin, pagination
+    ):
         inner = json.dumps([[], pagination, [None]])
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
 
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None and page.error.kind == "parse"
 
@@ -314,8 +302,10 @@ class TestErrorClassification:
             (503, "server"),
         ],
     )
-    def test_status_maps_to_kind(self, status, kind):
-        page = _serving("", status=status).fetch_page("com.example.app", "us", None)
+    async def test_status_maps_to_kind(self, twin, status, kind):
+        page = await twin.call(
+            _serving("", status=status), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == kind
@@ -323,47 +313,59 @@ class TestErrorClassification:
         # official providers.
         assert page.error.country is None
 
-    def test_transport_failure_carries_the_real_message(self):
+    async def test_transport_failure_carries_the_real_message(self, twin):
         def handler(request):
             raise httpx.ReadTimeout("read timed out")
 
-        page = _provider(handler).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _provider(handler), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error.kind == "transport"
         assert "read timed out" in page.error.message
 
-    def test_missing_response_prefix_is_a_parse_error(self):
-        page = _serving("garbage without the prefix").fetch_page(
-            "com.example.app", "us", None
+    async def test_missing_response_prefix_is_a_parse_error(self, twin):
+        page = await twin.call(
+            _serving("garbage without the prefix"),
+            "fetch_page",
+            "com.example.app",
+            "us",
+            None,
         )
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_null_body_without_prefix_is_a_parse_error(self):
+    async def test_null_body_without_prefix_is_a_parse_error(self, twin):
         """A bare "null" body never matches the batchexecute prefix regex."""
-        page = _serving("null").fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving("null"), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_null_inner_payload_with_prefix_is_a_parse_error(self):
+    async def test_null_inner_payload_with_prefix_is_a_parse_error(self, twin):
         """The prefix and envelope wrapper are present, but the RPC payload
         itself parses to ``null`` instead of the expected array, so `len(data)`
         on that ``None`` must not escape as an uncaught TypeError."""
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", "null", None, "generic"]])
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_no_matching_envelope_is_a_parse_error(self):
+    async def test_no_matching_envelope_is_a_parse_error(self, twin):
         """The prefix is present and the outer array parses, but it contains
         no ``wrb.fr``/``oCPfdb`` item. This must surface as a parse error,
         not a silently empty page."""
-        page = _serving(")]}'\n\n[]").fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(")]}'\n\n[]"), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
@@ -385,16 +387,12 @@ class TestTheStorefrontIsFullyEscaped:
     ``safe="/"``, so a slash in the country survived into the query string."""
 
     def test_a_slash_in_the_country_is_escaped(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "../../us/rss/x", None)
 
-        _provider(handler).fetch_page("com.example.app", "../../us/rss/x", None)
-
-        assert "gl=..%2F..%2Fus%2Frss%2Fx" in seen["url"]
-        assert "/rss/" not in seen["url"]
+        assert query_of(record.last)["gl"] == ["../../us/rss/x"]
+        assert "/rss/" not in str(record.last.url)
 
 
 class TestTheTimestampIsTheOneGoogleSent:
@@ -421,28 +419,20 @@ class TestTheRequestNamesTheAppAskedlFor:
     come back confidently labelled with yours."""
 
     def test_the_app_id_is_in_the_rpc_argument(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", None)
 
-        _provider(handler).fetch_page("com.example.app", "us", None)
-
-        assert _sent_payload(seen["body"])[2][0] == "com.example.app"
+        assert _sent_payload(record.last.content.decode())[2][0] == "com.example.app"
 
     def test_the_cursor_lands_in_the_pagination_slot(self):
         """A substring check on the urlencoded blob passes even when the cursor
         is put in the wrong slot: Play then re-serves page 1 forever."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", "TOKEN123")
 
-        _provider(handler).fetch_page("com.example.app", "us", "TOKEN123")
-
-        assert _sent_payload(seen["body"])[1][2][2] == "TOKEN123"
+        assert _sent_payload(record.last.content.decode())[1][2][2] == "TOKEN123"
 
 
 class TestTheSortConstantIsThePlayValueForNewest:
@@ -451,3 +441,128 @@ class TestTheSortConstantIsThePlayValueForNewest:
 
     def test_newest_is_two(self):
         assert GooglePlayScraperProvider.SORT_NEWEST == 2
+
+
+def _rpc_row(payload: Any) -> list[Any]:
+    """The envelope row this provider reads, wrapping ``payload`` as Play does."""
+    return ["wrb.fr", "oCPfdb", json.dumps(payload), None, "generic"]
+
+
+def _envelope(*rows: Any) -> str:
+    return ")]}'\n\n" + json.dumps(list(rows))
+
+
+class TestTheEnvelopeIsReadStrictly:
+    """A body we cannot read is a classified error; a body that says "nothing
+    more" is an honest empty page. Neither may raise, and neither may be
+    mistaken for the other."""
+
+    async def test_an_rpc_answered_with_null_is_an_empty_last_page(self, twin):
+        body = _envelope(["wrb.fr", "oCPfdb", None, None, "generic"])
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is None
+        assert page.reviews == []
+        assert page.next_cursor is None
+
+    async def test_a_body_that_is_not_json_is_a_parse_error(self, twin):
+        page = await twin.call(
+            _serving(")]}'\n\nthis is not json"), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    async def test_unrelated_rows_are_passed_over_to_find_the_rpc(self, twin):
+        junk = [
+            "not a row",
+            ["wrb.fr"],
+            ["di", "oCPfdb", "{}"],
+            ["wrb.fr", "someOtherRpc", "[]"],
+        ]
+        real = _rpc_row([[_gp_entry()], None, [None]])
+
+        page = await twin.call(
+            _serving(_envelope(*junk, real)), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is None
+        assert [review.id for review in page.reviews] == ["abc123"]
+
+    async def test_only_unrelated_rows_is_a_parse_error(self, twin):
+        body = _envelope("not a row", ["wrb.fr", "someOtherRpc", "[]"])
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+
+class TestAbsentSlotsAreNotErrors:
+    """Slots Play leaves out or nulls mean "none", and only a slot present with
+    the wrong shape is malformed."""
+
+    @pytest.mark.parametrize("payload", [[], [None], [None, None, [None]]])
+    async def test_a_payload_with_no_review_container_is_an_empty_page(
+        self, twin, payload
+    ):
+        page = await twin.call(
+            _serving(_envelope(_rpc_row(payload))), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is None
+        assert page.reviews == []
+
+    async def test_a_payload_without_a_pagination_slot_has_no_next_page(self, twin):
+        body = _envelope(_rpc_row([[_gp_entry()]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert len(page.reviews) == 1
+        assert page.next_cursor is None
+
+    async def test_a_pagination_pair_with_a_null_token_has_no_next_page(self, twin):
+        body = _envelope(_rpc_row([[_gp_entry()], [None, None], [None]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert len(page.reviews) == 1
+        assert page.next_cursor is None
+
+    async def test_a_pagination_pair_missing_its_token_slot_is_a_parse_error(
+        self, twin
+    ):
+        body = _envelope(_rpc_row([[_gp_entry()], [None], [None]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    async def test_a_review_with_no_text_keeps_an_empty_body(self, twin):
+        entry = _gp_entry()
+        entry[4] = None
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.body for review in page.reviews] == [""]
+
+    @pytest.mark.parametrize("version_slot", [None, ""])
+    async def test_a_review_without_an_app_version_has_none(self, twin, version_slot):
+        entry = _gp_entry()
+        entry[10] = version_slot
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.app_version for review in page.reviews] == [None]
+
+    async def test_a_review_that_stops_before_the_version_slot_has_none(self, twin):
+        entry = _gp_entry()[:10]
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.app_version for review in page.reviews] == [None]

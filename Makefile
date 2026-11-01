@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := all
 
-.PHONY: install lint format typecheck test test-ci build clean all docs docs-serve
+.PHONY: install lint format typecheck test test-ci test-release build clean all docs docs-serve
 
 install:
 	uv sync --group dev
@@ -18,9 +18,15 @@ typecheck:
 
 test:
 	uv run pytest --cov --cov-report=term-missing
+	$(MAKE) test-release
 
 test-ci:
 	uv run pytest --cov --cov-report=xml --junitxml=junit.xml
+	$(MAKE) test-release
+
+# Builds distributions and runs the release scripts; deselected by default.
+test-release:
+	uv run pytest -m release
 
 build:
 	uv build

@@ -1,9 +1,9 @@
 """Tests for the full fetch: rung 3 of the client ladder."""
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event, Lock
+from typing import Literal
 
 import pytest
 
@@ -11,57 +11,89 @@ from app_reviews.models.country import Country
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError, FetchResult
 from app_reviews.models.types import Sort
+from tests.app_reviews.factories import (
+    NOW,
+    FakeClient,
+    FakeProvider,
+    MultiCountryProvider,
+    make_page,
+    make_review,
+)
 
-from .test_paging import NOW, FakeClient, FakeProvider, _page, _review
 
+class _Signal:
+    """A flag a worker thread or a task can set and either one can wait on.
 
-class MultiCountryProvider:
-    """Serves a different scripted page list per country.
-
-    ``calls`` records every request regardless of entry point. ``async_calls``
-    records only requests that went through ``afetch_page``, so a test can
-    prove the async path actually used it instead of the sync ``fetch_page``
-    body.
+    The async wait polls, so one signal serves a provider that is driven from
+    threads (sync ``fetch``) and from the event loop (``afetch``) alike.
     """
 
-    def __init__(self, pages_by_country, source="appstore_scraper"):
-        self._pages = pages_by_country
-        self.source = source
-        self.calls: list[tuple[str, str | None]] = []
-        self.async_calls: list[tuple[str, str | None]] = []
+    _POLL_SECONDS: float = 0.005
 
-    def fetch_page(self, app_id, country, cursor):
-        self.calls.append((country, cursor))
-        return self._page_for(country, cursor)
+    def __init__(self) -> None:
+        self._flag: Event = Event()
 
-    async def afetch_page(self, app_id, country, cursor):
-        self.calls.append((country, cursor))
-        self.async_calls.append((country, cursor))
-        return self._page_for(country, cursor)
+    def set(self) -> None:
+        self._flag.set()
 
-    def _page_for(self, country, cursor):
-        pages = self._pages.get(country, [])
-        index = 0 if cursor is None else int(cursor)
-        if index >= len(pages):
-            return PageResult()
-        return pages[index]
+    def wait(self, timeout: float) -> bool:
+        return self._flag.wait(timeout)
+
+    async def wait_async(self, timeout: float) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not self._flag.is_set():
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(self._POLL_SECONDS)
+        return True
 
 
 class BlockingInFlightProvider:
-    """Hold sync requests open so a public fetch's real fan-out is observable."""
+    """Hold requests open so a public fetch's real fan-out is observable.
+
+    One provider serves both entry points. ``path`` names the one the test
+    drives (``"sync"`` or ``"async"``); the other raises, so a walk that
+    silently fell back to the wrong twin fails the test.
+    """
 
     source = "appstore_scraper"
+    _BLOCK_SECONDS: float = 2
 
-    def __init__(self, expected: int):
+    def __init__(self, expected: int, path: Literal["sync", "async"]):
         self.expected = expected
+        self.path: Literal["sync", "async"] = path
         self.active = 0
         self.maximum = 0
-        self.lock = Lock()
-        self.reached = Event()
-        self.exceeded = Event()
-        self.release = Event()
+        self.lock: Lock = Lock()
+        self.reached: _Signal = _Signal()
+        self.exceeded: _Signal = _Signal()
+        self.release: _Signal = _Signal()
 
     def fetch_page(self, app_id, country, cursor):
+        self._require_path("sync")
+        self._enter()
+        try:
+            if not self.release.wait(self._BLOCK_SECONDS):
+                raise AssertionError("fetch did not release blocked provider calls")
+        finally:
+            self._leave()
+        return PageResult()
+
+    async def afetch_page(self, app_id, country, cursor):
+        self._require_path("async")
+        self._enter()
+        try:
+            if not await self.release.wait_async(self._BLOCK_SECONDS):
+                raise AssertionError("afetch did not release blocked provider calls")
+        finally:
+            self._leave()
+        return PageResult()
+
+    def _require_path(self, entry: str) -> None:
+        if entry != self.path:
+            raise AssertionError(f"{self.path} concurrency test used the {entry} path")
+
+    def _enter(self) -> None:
         with self.lock:
             self.active += 1
             self.maximum = max(self.maximum, self.active)
@@ -69,52 +101,18 @@ class BlockingInFlightProvider:
                 self.reached.set()
             if self.active > self.expected:
                 self.exceeded.set()
-        if not self.release.wait(timeout=2):
-            raise AssertionError("fetch did not release blocked provider calls")
+
+    def _leave(self) -> None:
         with self.lock:
             self.active -= 1
-        return PageResult()
-
-    async def afetch_page(self, app_id, country, cursor):
-        raise AssertionError("sync concurrency test used the async provider path")
-
-
-class AsyncBlockingInFlightProvider:
-    """Async twin of BlockingInFlightProvider."""
-
-    source = "appstore_scraper"
-
-    def __init__(self, expected: int):
-        self.expected = expected
-        self.active = 0
-        self.maximum = 0
-        self.reached = asyncio.Event()
-        self.exceeded = asyncio.Event()
-        self.release = asyncio.Event()
-
-    def fetch_page(self, app_id, country, cursor):
-        raise AssertionError("async concurrency test used the sync provider path")
-
-    async def afetch_page(self, app_id, country, cursor):
-        self.active += 1
-        self.maximum = max(self.maximum, self.active)
-        if self.active >= self.expected:
-            self.reached.set()
-        if self.active > self.expected:
-            self.exceeded.set()
-        try:
-            await asyncio.wait_for(self.release.wait(), timeout=2)
-        finally:
-            self.active -= 1
-        return PageResult()
 
 
 class TestSingleCountry:
     def test_collects_reviews_across_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
             ]
         )
         result = FakeClient(provider).fetch("123", countries=["us"])
@@ -122,7 +120,7 @@ class TestSingleCountry:
         assert [r.id for r in result.reviews] == ["a", "b"]
 
     def test_reports_one_outcome_per_country(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         result = FakeClient(provider).fetch("123", countries=["us"])
 
@@ -135,9 +133,9 @@ class TestSingleCountry:
     def test_outcome_records_page_count(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
         result = FakeClient(provider).fetch("123", countries=["us"])
@@ -148,12 +146,12 @@ class TestSingleCountry:
         provider = FakeProvider(
             [
                 PageResult(
-                    reviews=[_review(NOW, "a")],
+                    reviews=[make_review(created_at=NOW, id="a")],
                     next_cursor="1",
                     skipped_reviews=2,
                 ),
                 PageResult(
-                    reviews=[_review(NOW, "b")],
+                    reviews=[make_review(created_at=NOW, id="b")],
                     skipped_reviews=1,
                 ),
             ]
@@ -171,8 +169,14 @@ class TestStopReasons:
     def test_limit_is_reported_as_the_stop_reason(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], None),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
         result = FakeClient(provider).fetch("123", countries=["us"], limit=2)
@@ -181,7 +185,7 @@ class TestStopReasons:
         assert len(result.reviews) == 2
 
     def test_exhausted_when_the_provider_runs_out(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         result = FakeClient(provider).fetch("123", countries=["us"], limit=100)
 
@@ -190,7 +194,10 @@ class TestStopReasons:
     def test_since_is_reported_as_the_stop_reason(self):
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
-            [_page([_review(NOW, "new")], "1"), _page([_review(old, "old")], "2")]
+            [
+                make_page([make_review(created_at=NOW, id="new")], "1"),
+                make_page([make_review(created_at=old, id="old")], "2"),
+            ]
         )
         result = FakeClient(provider).fetch(
             "123", countries=["us"], since=NOW - timedelta(days=2)
@@ -211,7 +218,10 @@ class TestStopReasons:
     def test_partial_success_keeps_reviews_and_reports_the_error(self):
         error = FetchError(country="us", message="boom", kind="server", status=503)
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], "1"), PageResult(error=error)]
+            [
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                PageResult(error=error),
+            ]
         )
 
         result = FakeClient(provider).fetch("123", countries=["us"])
@@ -225,8 +235,8 @@ class TestMultipleCountries:
     def test_merges_reviews_from_every_country(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us1")], None)],
-                "gb": [_page([_review(NOW, "gb1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb1")], None)],
             }
         )
         result = FakeClient(provider).fetch("123", countries=["us", "gb"])
@@ -236,8 +246,8 @@ class TestMultipleCountries:
     def test_one_outcome_per_country(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us1")], None)],
-                "gb": [_page([_review(NOW, "gb1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb1")], None)],
             }
         )
         result = FakeClient(provider).fetch("123", countries=["us", "gb"])
@@ -247,7 +257,7 @@ class TestMultipleCountries:
     def test_one_country_failing_does_not_lose_the_others(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
                 "gb": [
                     PageResult(error=FetchError(country="gb", message="x", kind="auth"))
                 ],
@@ -262,8 +272,8 @@ class TestMultipleCountries:
     def test_concurrency_one_is_sequential(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us1")], None)],
-                "gb": [_page([_review(NOW, "gb1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb1")], None)],
             }
         )
         result = FakeClient(provider).fetch(
@@ -275,7 +285,7 @@ class TestMultipleCountries:
 
     def test_global_provider_makes_one_call_regardless_of_countries(self):
         provider = FakeProvider(
-            [_page([_review(NOW)], None)],
+            [make_page([make_review(created_at=NOW)], None)],
             source="googleplay_official",
         )
 
@@ -292,8 +302,14 @@ class TestSortAndLimit:
     def test_newest_with_limit_stops_paging_early(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], "2"),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], "2"),
             ]
         )
         FakeClient(provider).fetch("123", countries=["us"], sort=Sort.NEWEST, limit=2)
@@ -301,10 +317,14 @@ class TestSortAndLimit:
         assert len(provider.calls) == 1
 
     def test_rating_with_limit_exhausts_pagination_first(self):
-        newest_low = _review(NOW, "newest_low", rating=1)
-        oldest_high = _review(NOW - timedelta(days=5), "oldest_high", rating=5)
+        newest_low = make_review(created_at=NOW, id="newest_low", rating=1)
+        oldest_high = make_review(
+            created_at=NOW - timedelta(days=5), id="oldest_high", rating=5
+        )
 
-        provider = FakeProvider([_page([newest_low], "1"), _page([oldest_high], None)])
+        provider = FakeProvider(
+            [make_page([newest_low], "1"), make_page([oldest_high], None)]
+        )
         result = FakeClient(provider).fetch(
             "123", countries=["us"], sort=Sort.RATING, limit=1
         )
@@ -315,8 +335,11 @@ class TestSortAndLimit:
     def test_oldest_with_limit_exhausts_pagination_first(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "newest")], "1"),
-                _page([_review(NOW - timedelta(days=10), "oldest")], None),
+                make_page([make_review(created_at=NOW, id="newest")], "1"),
+                make_page(
+                    [make_review(created_at=NOW - timedelta(days=10), id="oldest")],
+                    None,
+                ),
             ]
         )
         result = FakeClient(provider).fetch(
@@ -329,8 +352,10 @@ class TestSortAndLimit:
     def test_newest_with_limit_cannot_early_stop_without_ordering(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW - timedelta(days=10), "old")], "1"),
-                _page([_review(NOW, "new")], None),
+                make_page(
+                    [make_review(created_at=NOW - timedelta(days=10), id="old")], "1"
+                ),
+                make_page([make_review(created_at=NOW, id="new")], None),
             ],
             source="googleplay_official",
         )
@@ -349,7 +374,15 @@ class TestFilters:
 
         monkeypatch.setattr(FetchResult, "filter", late_filter)
         provider = FakeProvider(
-            [_page([_review(NOW, "keep", rating=1), _review(NOW, "drop")], None)]
+            [
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="keep", rating=1),
+                        make_review(created_at=NOW, id="drop"),
+                    ],
+                    None,
+                )
+            ]
         )
 
         result = FakeClient(provider).fetch("123", ratings=[1])
@@ -359,8 +392,11 @@ class TestFilters:
     def test_until_filters_the_returned_set(self):
         provider = FakeProvider(
             [
-                _page(
-                    [_review(NOW, "new"), _review(NOW - timedelta(days=10), "old")],
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="new"),
+                        make_review(created_at=NOW - timedelta(days=10), id="old"),
+                    ],
                     None,
                 )
             ]
@@ -372,8 +408,10 @@ class TestFilters:
         assert [r.id for r in result.reviews] == ["old"]
 
     def test_since_filters_the_boundary_exactly(self):
-        old = _review(NOW - timedelta(days=10), "old")
-        provider = FakeProvider([_page([_review(NOW, "new"), old], None)])
+        old = make_review(created_at=NOW - timedelta(days=10), id="old")
+        provider = FakeProvider(
+            [make_page([make_review(created_at=NOW, id="new"), old], None)]
+        )
         result = FakeClient(provider).fetch(
             "123", countries=["us"], since=NOW - timedelta(days=2)
         )
@@ -381,8 +419,10 @@ class TestFilters:
         assert [r.id for r in result.reviews] == ["new"]
 
     def test_ratings_filter(self):
-        low = _review(NOW, "low", rating=1)
-        provider = FakeProvider([_page([_review(NOW, "high"), low], None)])
+        low = make_review(created_at=NOW, id="low", rating=1)
+        provider = FakeProvider(
+            [make_page([make_review(created_at=NOW, id="high"), low], None)]
+        )
 
         result = FakeClient(provider).fetch("123", countries=["us"], ratings=[1])
 
@@ -391,11 +431,15 @@ class TestFilters:
     def test_outcome_counts_wire_rows_while_only_matches_are_retained(self):
         provider = FakeProvider(
             [
-                _page(
+                make_page(
                     [
-                        _review(NOW, "keep", rating=1),
-                        _review(NOW, "drop-rating", rating=5),
-                        _review(NOW - timedelta(days=20), "drop-date", rating=1),
+                        make_review(created_at=NOW, id="keep", rating=1),
+                        make_review(created_at=NOW, id="drop-rating", rating=5),
+                        make_review(
+                            created_at=NOW - timedelta(days=20),
+                            id="drop-date",
+                            rating=1,
+                        ),
                     ],
                     None,
                 )
@@ -412,10 +456,10 @@ class TestFilters:
     async def test_async_outcome_counts_wire_rows_without_retaining_rejections(self):
         provider = FakeProvider(
             [
-                _page(
+                make_page(
                     [
-                        _review(NOW, "keep", rating=1),
-                        _review(NOW, "drop", rating=5),
+                        make_review(created_at=NOW, id="keep", rating=1),
+                        make_review(created_at=NOW, id="drop", rating=5),
                     ],
                     None,
                 )
@@ -431,12 +475,19 @@ class TestFilters:
         provider = MultiCountryProvider(
             {
                 "us": [
-                    _page(
-                        [_review(NOW, "us-keep", 1), _review(NOW, "us-drop", 5)],
+                    make_page(
+                        [
+                            make_review(created_at=NOW, id="us-keep", rating=1),
+                            make_review(created_at=NOW, id="us-drop", rating=5),
+                        ],
                         None,
                     )
                 ],
-                "gb": [_page([_review(NOW, "gb-drop", 5)], None)],
+                "gb": [
+                    make_page(
+                        [make_review(created_at=NOW, id="gb-drop", rating=5)], None
+                    )
+                ],
             }
         )
 
@@ -467,19 +518,19 @@ class TestLimitWithFilters:
         # reaches page 2, where the matching reviews live.
         provider = FakeProvider(
             [
-                _page(
+                make_page(
                     [
-                        _review(NOW, "new1"),
-                        _review(NOW, "new2"),
-                        _review(NOW, "new3"),
-                        _review(NOW, "new4"),
+                        make_review(created_at=NOW, id="new1"),
+                        make_review(created_at=NOW, id="new2"),
+                        make_review(created_at=NOW, id="new3"),
+                        make_review(created_at=NOW, id="new4"),
                     ],
                     "1",
                 ),
-                _page(
+                make_page(
                     [
-                        _review(NOW - timedelta(days=12), "old1"),
-                        _review(NOW - timedelta(days=13), "old2"),
+                        make_review(created_at=NOW - timedelta(days=12), id="old1"),
+                        make_review(created_at=NOW - timedelta(days=13), id="old2"),
                     ],
                     None,
                 ),
@@ -497,12 +548,18 @@ class TestLimitWithFilters:
     def test_ratings_with_limit_does_not_return_empty_when_matches_exist_later(self):
         provider = FakeProvider(
             [
-                _page(
-                    [_review(NOW, "r5_a", rating=5), _review(NOW, "r5_b", rating=5)],
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="r5_a", rating=5),
+                        make_review(created_at=NOW, id="r5_b", rating=5),
+                    ],
                     "1",
                 ),
-                _page(
-                    [_review(NOW, "r1_a", rating=1), _review(NOW, "r1_b", rating=1)],
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="r1_a", rating=1),
+                        make_review(created_at=NOW, id="r1_b", rating=1),
+                    ],
                     None,
                 ),
             ]
@@ -517,12 +574,12 @@ class TestLimitWithFilters:
     def test_until_with_limit_returns_the_n_most_recent_matches(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "too_new")], "1"),
-                _page(
+                make_page([make_review(created_at=NOW, id="too_new")], "1"),
+                make_page(
                     [
-                        _review(NOW - timedelta(days=6), "old1"),
-                        _review(NOW - timedelta(days=7), "old2"),
-                        _review(NOW - timedelta(days=8), "old3"),
+                        make_review(created_at=NOW - timedelta(days=6), id="old1"),
+                        make_review(created_at=NOW - timedelta(days=7), id="old2"),
+                        make_review(created_at=NOW - timedelta(days=8), id="old3"),
                     ],
                     None,
                 ),
@@ -539,8 +596,14 @@ class TestLimitWithFilters:
         exhaustion."""
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], "2"),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], "2"),
             ]
         )
         FakeClient(provider).fetch(
@@ -572,14 +635,23 @@ class TestLimitWithFilters:
     ):
         provider = FakeProvider(
             [
-                _page(
+                make_page(
                     [
-                        _review(NOW, "new-low", rating=1),
-                        _review(NOW - timedelta(days=1), "new-high", rating=5),
+                        make_review(created_at=NOW, id="new-low", rating=1),
+                        make_review(
+                            created_at=NOW - timedelta(days=1), id="new-high", rating=5
+                        ),
                     ],
                     "1",
                 ),
-                _page([_review(NOW - timedelta(days=2), "old-low", rating=1)], None),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=2), id="old-low", rating=1
+                        )
+                    ],
+                    None,
+                ),
             ]
         )
 
@@ -593,8 +665,15 @@ class TestLimitWithFilters:
     def test_unordered_source_remains_exhaustive_with_a_filter_and_limit(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW - timedelta(days=2), "old", rating=1)], "1"),
-                _page([_review(NOW, "new", rating=1)], None),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=2), id="old", rating=1
+                        )
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="new", rating=1)], None),
             ],
             source="googleplay_official",
         )
@@ -623,14 +702,23 @@ class TestLimitWithFilters:
     ):
         provider = FakeProvider(
             [
-                _page(
+                make_page(
                     [
-                        _review(NOW, "new-low", rating=1),
-                        _review(NOW - timedelta(days=1), "new-high", rating=5),
+                        make_review(created_at=NOW, id="new-low", rating=1),
+                        make_review(
+                            created_at=NOW - timedelta(days=1), id="new-high", rating=5
+                        ),
                     ],
                     "1",
                 ),
-                _page([_review(NOW - timedelta(days=2), "old-low", rating=1)], None),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=2), id="old-low", rating=1
+                        )
+                    ],
+                    None,
+                ),
             ]
         )
 
@@ -644,8 +732,15 @@ class TestLimitWithFilters:
     async def test_async_unordered_source_remains_exhaustive(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW - timedelta(days=2), "old", rating=1)], "1"),
-                _page([_review(NOW, "new", rating=1)], None),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=2), id="old", rating=1
+                        )
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="new", rating=1)], None),
             ],
             source="googleplay_official",
         )
@@ -658,12 +753,21 @@ class TestLimitWithFilters:
     @pytest.mark.parametrize("collision", ["max_pages", "cycle"])
     def test_satisfied_filtered_limit_outranks_safety_stop(self, collision):
         if collision == "max_pages":
-            pages = [_page([_review(NOW, "match", rating=1)], "more")]
+            pages = [
+                make_page([make_review(created_at=NOW, id="match", rating=1)], "more")
+            ]
             max_pages = 1
         else:
             pages = [
-                _page([_review(NOW, "skip", rating=5)], "1"),
-                _page([_review(NOW - timedelta(days=1), "match", rating=1)], "1"),
+                make_page([make_review(created_at=NOW, id="skip", rating=5)], "1"),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=1), id="match", rating=1
+                        )
+                    ],
+                    "1",
+                ),
             ]
             max_pages = None
         provider = FakeProvider(pages)
@@ -678,12 +782,21 @@ class TestLimitWithFilters:
     @pytest.mark.parametrize("collision", ["max_pages", "cycle"])
     async def test_async_satisfied_filtered_limit_outranks_safety_stop(self, collision):
         if collision == "max_pages":
-            pages = [_page([_review(NOW, "match", rating=1)], "more")]
+            pages = [
+                make_page([make_review(created_at=NOW, id="match", rating=1)], "more")
+            ]
             max_pages = 1
         else:
             pages = [
-                _page([_review(NOW, "skip", rating=5)], "1"),
-                _page([_review(NOW - timedelta(days=1), "match", rating=1)], "1"),
+                make_page([make_review(created_at=NOW, id="skip", rating=5)], "1"),
+                make_page(
+                    [
+                        make_review(
+                            created_at=NOW - timedelta(days=1), id="match", rating=1
+                        )
+                    ],
+                    "1",
+                ),
             ]
             max_pages = None
         provider = FakeProvider(pages)
@@ -705,7 +818,9 @@ class TestEmptyCountries:
     """
 
     def test_an_empty_countries_list_does_no_io(self):
-        provider = FakeProvider([_page([_review(NOW, "a")], None)])
+        provider = FakeProvider(
+            [make_page([make_review(created_at=NOW, id="a")], None)]
+        )
 
         result = FakeClient(provider).fetch("123", countries=[])
 
@@ -714,7 +829,9 @@ class TestEmptyCountries:
         assert provider.calls == []
 
     def test_blank_countries_do_no_io(self):
-        provider = FakeProvider([_page([_review(NOW, "a")], None)])
+        provider = FakeProvider(
+            [make_page([make_review(created_at=NOW, id="a")], None)]
+        )
 
         result = FakeClient(provider).fetch("123", countries=["", "   "])
 
@@ -723,55 +840,24 @@ class TestEmptyCountries:
 
 
 class TestRequestBounds:
-    def test_default_concurrency_is_capped_at_eight(self):
-        client = FakeClient(FakeProvider([]))
-
-        assert client._workers([str(i) for i in range(155)], None) == 8
-
-    def test_explicit_concurrency_override_is_honoured(self):
-        client = FakeClient(FakeProvider([]))
-
-        assert client._workers([str(i) for i in range(20)], 12) == 12
-
     @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
-    def test_fetch_enforces_real_cross_country_concurrency(self, concurrency, expected):
-        provider = BlockingInFlightProvider(expected)
-        client = FakeClient(provider)
-
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            future = caller.submit(
-                client.fetch,
-                "123",
-                countries=Country.ALL,
-                concurrency=concurrency,
-            )
-            try:
-                assert provider.reached.wait(timeout=2)
-                assert not provider.exceeded.wait(timeout=0.1)
-            finally:
-                provider.release.set()
-            result = future.result(timeout=2)
-
-        assert provider.maximum == expected
-        assert len(result.outcomes) == len(Country.ALL)
-
-    @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
-    async def test_afetch_enforces_real_cross_country_concurrency(
-        self, concurrency, expected
+    async def test_fetch_enforces_real_cross_country_concurrency(
+        self, twin, concurrency, expected
     ):
-        provider = AsyncBlockingInFlightProvider(expected)
-        task = asyncio.create_task(
-            FakeClient(provider).afetch(
-                "123", countries=Country.ALL, concurrency=concurrency
-            )
+        provider = BlockingInFlightProvider(expected, path=twin.mode)
+        walk = twin.start(
+            FakeClient(provider),
+            "fetch",
+            "123",
+            countries=Country.ALL,
+            concurrency=concurrency,
         )
         try:
-            await asyncio.wait_for(provider.reached.wait(), timeout=2)
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(provider.exceeded.wait(), timeout=0.1)
+            assert await provider.reached.wait_async(timeout=2)
+            assert not await provider.exceeded.wait_async(timeout=0.1)
         finally:
             provider.release.set()
-        result = await asyncio.wait_for(task, timeout=2)
+        result = await asyncio.wait_for(walk, timeout=2)
 
         assert provider.maximum == expected
         assert len(result.outcomes) == len(Country.ALL)
@@ -779,9 +865,9 @@ class TestRequestBounds:
     def test_filtered_fetch_stops_at_public_max_pages_budget(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "r5-a", rating=5)], "1"),
-                _page([_review(NOW, "r5-b", rating=5)], "2"),
-                _page([_review(NOW, "r1", rating=1)], None),
+                make_page([make_review(created_at=NOW, id="r5-a", rating=5)], "1"),
+                make_page([make_review(created_at=NOW, id="r5-b", rating=5)], "2"),
+                make_page([make_review(created_at=NOW, id="r1", rating=1)], None),
             ]
         )
 
@@ -796,9 +882,9 @@ class TestRequestBounds:
     async def test_async_filtered_fetch_has_the_same_max_pages_budget(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "r5-a", rating=5)], "1"),
-                _page([_review(NOW, "r5-b", rating=5)], "2"),
-                _page([_review(NOW, "r1", rating=1)], None),
+                make_page([make_review(created_at=NOW, id="r5-a", rating=5)], "1"),
+                make_page([make_review(created_at=NOW, id="r5-b", rating=5)], "2"),
+                make_page([make_review(created_at=NOW, id="r1", rating=1)], None),
             ]
         )
 
@@ -811,7 +897,7 @@ class TestRequestBounds:
         assert result.outcomes[0].stopped_because == "max_pages"
 
     def test_zero_limit_does_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         result = FakeClient(provider).fetch("123", limit=0)
 
@@ -820,7 +906,7 @@ class TestRequestBounds:
         assert provider.calls == []
 
     def test_negative_limit_is_rejected_before_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         import pytest
 
@@ -829,7 +915,7 @@ class TestRequestBounds:
         assert provider.calls == []
 
     async def test_async_zero_limit_does_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         result = await FakeClient(provider).afetch("123", limit=0)
 
@@ -838,7 +924,7 @@ class TestRequestBounds:
         assert provider.calls == []
 
     async def test_async_empty_countries_do_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         result = await FakeClient(provider).afetch("123", countries=[])
 
@@ -848,7 +934,7 @@ class TestRequestBounds:
 
     @pytest.mark.parametrize("concurrency", [0, -1])
     def test_invalid_concurrency_is_rejected_before_provider_io(self, concurrency):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
         client = FakeClient(provider)
         client._ensure_provider = pytest.fail
 
@@ -860,7 +946,7 @@ class TestRequestBounds:
     async def test_async_invalid_concurrency_is_rejected_before_provider_io(
         self, concurrency
     ):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
         client = FakeClient(provider)
 
         async def fail_provider_build():
@@ -873,7 +959,7 @@ class TestRequestBounds:
         assert provider.calls == []
 
     def test_negative_max_pages_is_rejected_before_provider_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
         client = FakeClient(provider)
         client._ensure_provider = pytest.fail
 
@@ -882,7 +968,7 @@ class TestRequestBounds:
         assert provider.calls == []
 
     async def test_async_negative_max_pages_is_rejected_before_provider_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
         client = FakeClient(provider)
 
         async def fail_provider_build():
@@ -905,7 +991,9 @@ class TestCountryNormalisation:
     """
 
     def test_a_repeated_country_is_walked_once(self):
-        provider = MultiCountryProvider({"us": [_page([_review(NOW, "a")], None)]})
+        provider = MultiCountryProvider(
+            {"us": [make_page([make_review(created_at=NOW, id="a")], None)]}
+        )
 
         result = FakeClient(provider).fetch("123", countries=["us", "us"])
 
@@ -914,7 +1002,9 @@ class TestCountryNormalisation:
         assert provider.calls == [("us", None)]
 
     def test_case_variants_collapse_to_one_walk(self):
-        provider = MultiCountryProvider({"us": [_page([_review(NOW, "a")], None)]})
+        provider = MultiCountryProvider(
+            {"us": [make_page([make_review(created_at=NOW, id="a")], None)]}
+        )
 
         result = FakeClient(provider).fetch("123", countries=["US", "us"])
 
@@ -922,14 +1012,18 @@ class TestCountryNormalisation:
         assert [o.country for o in result.outcomes] == ["us"]
 
     def test_alpha3_and_alpha2_for_one_storefront_collapse(self):
-        provider = MultiCountryProvider({"us": [_page([_review(NOW, "a")], None)]})
+        provider = MultiCountryProvider(
+            {"us": [make_page([make_review(created_at=NOW, id="a")], None)]}
+        )
 
         result = FakeClient(provider).fetch("123", countries=["USA", "us"])
 
         assert [o.country for o in result.outcomes] == ["us"]
 
     def test_surrounding_whitespace_is_stripped(self):
-        provider = MultiCountryProvider({"gb": [_page([_review(NOW, "a")], None)]})
+        provider = MultiCountryProvider(
+            {"gb": [make_page([make_review(created_at=NOW, id="a")], None)]}
+        )
 
         result = FakeClient(provider).fetch("123", countries=["  gb  "])
 
@@ -972,8 +1066,8 @@ class TestAsyncParity:
         def build():
             return MultiCountryProvider(
                 {
-                    "us": [_page([_review(NOW, "us1")], None)],
-                    "gb": [_page([_review(NOW, "gb1")], None)],
+                    "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
+                    "gb": [make_page([make_review(created_at=NOW, id="gb1")], None)],
                 }
             )
 
@@ -997,9 +1091,9 @@ class TestAsyncParity:
         """Mirrors TestSingleCountry.test_outcome_records_page_count, async."""
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
         result = await FakeClient(provider).afetch("123", countries=["us"])
@@ -1009,7 +1103,16 @@ class TestAsyncParity:
 
     async def test_afetch_reports_stop_reasons(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a"), _review(NOW, "b")], "1"), _page([], None)]
+            [
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([], None),
+            ]
         )
         result = await FakeClient(provider).afetch("123", countries=["us"], limit=2)
 
@@ -1018,8 +1121,8 @@ class TestAsyncParity:
     async def test_afetch_honours_concurrency_one(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us1")], None)],
-                "gb": [_page([_review(NOW, "gb1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb1")], None)],
             }
         )
         result = await FakeClient(provider).afetch(

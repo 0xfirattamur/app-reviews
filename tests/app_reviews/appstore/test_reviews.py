@@ -8,7 +8,7 @@ it does not subclass ``HttpError``.
 
 import base64
 import json
-import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,9 +23,9 @@ from app_reviews import (
     AppStoreReviews,
     AuthError,
     Country,
-    HttpClient,
 )
-from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
+from tests.app_reviews.transport import client_for
 
 
 def _client(key_path: str) -> AppStoreReviews:
@@ -34,19 +34,13 @@ def _client(key_path: str) -> AppStoreReviews:
     )
 
 
-def _write(contents: str) -> str:
-    with tempfile.NamedTemporaryFile("w", suffix=".p8", delete=False) as f:
-        f.write(contents)
-        return f.name
-
-
-def _rsa_p8() -> str:
+def _rsa_p8(write_file: Callable[[str], str]) -> str:
     """A valid RSA key saved as a .p8: well-formed PEM, wrong algorithm.
 
     Easy to do by accident when an account has several keys. Apple signs Connect
     tokens with ES256, so this key parses and then cannot be used.
     """
-    return _write(
+    return write_file(
         rsa.generate_private_key(public_exponent=65537, key_size=2048)
         .private_bytes(
             serialization.Encoding.PEM,
@@ -61,30 +55,30 @@ class TestUnusableKeyFile:
     @pytest.mark.parametrize(
         ("label", "path_factory"),
         [
-            ("missing", lambda: "/nope/definitely-missing.p8"),
-            ("a directory", lambda: tempfile.mkdtemp()),
-            ("empty", lambda: _write("")),
-            ("not a PEM", lambda: _write("not a pem at all\n")),
+            ("missing", lambda write_file: "/nope/definitely-missing.p8"),
+            ("a directory", lambda write_file: str(Path(write_file("")).parent)),
+            ("empty", lambda write_file: write_file("")),
+            ("not a PEM", lambda write_file: write_file("not a pem at all\n")),
             (
                 "PEM header, unusable body",
-                lambda: _write(
+                lambda write_file: write_file(
                     "-----BEGIN PRIVATE KEY-----\n"
                     "notbase64\n"
                     "-----END PRIVATE KEY-----\n"
                 ),
             ),
-            ("an RSA key rather than EC", _rsa_p8),
+            ("an RSA key rather than EC", lambda write_file: _rsa_p8(write_file)),
         ],
     )
-    def test_it_raises_auth_error(self, label, path_factory):
+    async def test_it_raises_auth_error(self, twin, label, path_factory, write_file):
         with pytest.raises(AuthError):
-            _client(path_factory()).fetch("123")
+            await twin.call(_client(path_factory(write_file)), "fetch", "123")
 
-    def test_the_wrong_key_algorithm_says_so(self):
+    async def test_the_wrong_key_algorithm_says_so(self, twin, write_file):
         """``load_ec_private_key_from_pem`` raises ``TypeError`` for a non-EC key,
         which is not a ``ValueError``, so it escaped the error hierarchy."""
         with pytest.raises(AuthError, match="EC"):
-            _client(_rsa_p8()).fetch("123")
+            await twin.call(_client(_rsa_p8(write_file)), "fetch", "123")
 
     def test_auth_error_is_catchable_as_the_base(self):
         with pytest.raises(AppReviewsError):
@@ -106,21 +100,19 @@ class TestUnusableKeyFile:
 
 
 class TestUsableKeyFile:
-    def test_a_real_key_builds_the_official_provider(self):
-        from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+    def test_a_real_key_builds_the_official_provider(self, write_file):
 
-        client = _client(_write(_TEST_PRIVATE_KEY))
+        client = _client(write_file(TEST_EC_PRIVATE_KEY))
 
         assert client.source == "appstore_official"
 
     def test_no_auth_needs_no_key_and_uses_the_scraper(self):
         assert AppStoreReviews().source == "appstore_scraper"
 
-    def test_the_key_is_read_once_per_client(self):
+    def test_the_key_is_read_once_per_client(self, write_file):
         """Provider construction is cached, so the file is not re-read per call."""
-        from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
 
-        path = Path(_write(_TEST_PRIVATE_KEY))
+        path = Path(write_file(TEST_EC_PRIVATE_KEY))
         client = _client(str(path))
         assert client.source == "appstore_official"
         path.unlink()  # gone now; a second read would fail
@@ -130,7 +122,6 @@ class TestUsableKeyFile:
 
 class TestInMemoryKey:
     def test_a_pem_string_signs_connect_requests_without_a_file(self):
-        from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
 
         seen = []
 
@@ -138,10 +129,8 @@ class TestInMemoryKey:
             seen.append(request.headers["authorization"])
             return httpx.Response(200, json={"data": []})
 
-        client = AppStoreReviews(
-            auth=AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY),
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-        )
+        auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY)
+        client = client_for(AppStoreReviews, handler, auth=auth)
         result = client.fetch("123")
 
         assert result.errors == []
@@ -166,7 +155,7 @@ class TestInMemoryKey:
             AppStoreAuth(key_id="K", issuer_id="I", **sources)
 
 
-_CONNECT_AUTH = AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY)
+_CONNECT_AUTH = AppStoreAuth(key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY)
 _NEXT_PAGE = (
     "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2"
 )
@@ -194,11 +183,7 @@ class TestServerSideFilters:
             seen.append(request)
             return httpx.Response(200, json={"data": []})
 
-        client = AppStoreReviews(
-            auth=_CONNECT_AUTH,
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-            **options,
-        )
+        client = client_for(AppStoreReviews, handler, auth=_CONNECT_AUTH, **options)
         client.fetch("123")
         return seen[0]
 
@@ -260,10 +245,8 @@ class TestServerSideFilters:
             requests.append(request)
             return httpx.Response(200, json=next(pages))
 
-        client = AppStoreReviews(
-            auth=_CONNECT_AUTH,
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-            server_sort=server_sort,
+        client = client_for(
+            AppStoreReviews, handler, auth=_CONNECT_AUTH, server_sort=server_sort
         )
 
         client.fetch("123", since=datetime(2025, 1, 1, tzinfo=UTC))

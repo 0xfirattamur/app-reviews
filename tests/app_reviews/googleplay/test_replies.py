@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import httpx
@@ -18,10 +21,11 @@ from app_reviews import (
     RateLimitError,
     ReplyOutcomeUnknownError,
     ReplyRejectedError,
-    RetryConfig,
     ReviewReply,
 )
-from tests.app_reviews.googleplay.test_auth import _SERVICE_ACCOUNT_JSON
+from app_reviews.googleplay.auth import GoogleAuth
+from tests.app_reviews.factories import service_account_json
+from tests.app_reviews.transport import client_for
 
 _REVIEWS = (
     "https://androidpublisher.googleapis.com/androidpublisher/v3"
@@ -48,13 +52,8 @@ class _Api:
 
 
 def _replies(handler, *, retries: int = 3) -> GooglePlayReplies:
-    return GooglePlayReplies(
-        GooglePlayAuth(service_account_info=_SERVICE_ACCOUNT_JSON),
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=RetryConfig(max_retries=retries, backoff_factor=0),
-        ),
-    )
+    auth = GooglePlayAuth(service_account_info=service_account_json())
+    return client_for(GooglePlayReplies, handler, retries=retries, auth=auth)
 
 
 def _reply_result(text="Thanks!") -> dict:
@@ -284,3 +283,58 @@ class TestCredentials:
         replies.get_reply("gp-2", package_name="com.example.app")
 
         assert api.token_exchanges == 1
+
+    async def test_one_token_serves_several_calls_on_both_paths(self, twin):
+        api = _Api(httpx.Response(200, json=_review(_USER)))
+        replies = _replies(api)
+
+        await twin.call(replies, "get_reply", "gp-1", package_name="com.example.app")
+        await twin.call(replies, "get_reply", "gp-2", package_name="com.example.app")
+
+        assert api.token_exchanges == 1
+
+    async def test_closing_drops_the_token(self, twin):
+        api = _Api(httpx.Response(200, json=_review(_USER)))
+        replies = _replies(api)
+        await twin.call(replies, "get_reply", "gp-1", package_name="com.example.app")
+
+        await twin.call(replies, "close")
+        await twin.call(replies, "get_reply", "gp-2", package_name="com.example.app")
+
+        assert api.token_exchanges == 2
+
+    async def test_closing_before_any_request_is_safe(self, twin):
+        api = _Api(httpx.Response(200, json=_review(_USER)))
+
+        await twin.call(_replies(api), "close")
+
+        assert api.token_exchanges == 0
+
+
+class TestTheKeyIsLoadedOnceUnderConcurrentFirstRequests:
+    def test_two_threads_asking_at_once_share_one_token_client(self, monkeypatch):
+        """One ``GoogleAuth`` serves every thread that makes the first call."""
+        built: list[object] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        class SlowToBuild(GoogleAuth):
+            def __init__(self, *args, **kwargs):
+                built.append(self)
+                started.set()
+                assert release.wait(timeout=2)
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr("app_reviews.googleplay.api.GoogleAuth", SlowToBuild)
+        replies = _replies(_Api(httpx.Response(200, json=_review(_USER))))
+
+        with ThreadPoolExecutor(max_workers=2) as threads:
+            first = threads.submit(replies.get_reply, "gp-1", package_name="com.app")
+            assert started.wait(timeout=2)
+            second = threads.submit(replies.get_reply, "gp-2", package_name="com.app")
+            time.sleep(0.05)  # let the second thread reach the builder's lock
+            release.set()
+            first.result(timeout=2)
+            second.result(timeout=2)
+
+        assert len(built) == 1
