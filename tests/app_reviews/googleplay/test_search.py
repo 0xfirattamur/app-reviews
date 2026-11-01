@@ -986,3 +986,33 @@ class TestPricesWithoutADisplayString:
 
         assert app is not None
         assert app.price == "Unknown"
+
+
+class TestScrapedUrlPartsAreQuoted:
+    """A package name read off a page lands in a URL we hand back to callers, so
+    it is escaped rather than trusted to be a plain identifier."""
+
+    async def test_an_entry_id_with_url_syntax_stays_in_the_id_parameter(
+        self, twin
+    ) -> None:
+        section = _results_section(groups=[[_entry(app_id="com.a&b#c")]])
+
+        [app] = await twin.call(_serving(_results_page(section)), "search", "whatsapp")
+
+        assert app.url == f"{GooglePlaySearch.DETAIL_URL}?id=com.a%26b%23c"
+
+    @pytest.mark.parametrize("link", ["https://[::1/store", "http://[bad/x?id=a"])
+    async def test_a_featured_hit_whose_link_cannot_be_parsed_is_skipped(
+        self, twin, link
+    ) -> None:
+        block = _detail_block()
+        block[41] = [[None, None, link]]
+        section = _results_section(
+            groups=[[_entry(app_id="com.other")]], featured=[None, None, block]
+        )
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.other"]

@@ -602,3 +602,42 @@ class TestReleaseNotes:
 
         assert app is not None
         assert app.release_notes is None
+
+
+class TestIdsAreCheckedAsAsciiDigits:
+    """``str.isdigit`` is true for ``²`` and for other scripts' digits, none of
+    which is a trackId; they must not be sent as one or reach a product page URL."""
+
+    @pytest.mark.parametrize("app_id", ["²", "١٢٣"])
+    async def test_lookup_treats_a_non_ascii_digit_as_a_bundle_id(self, twin, app_id):
+        record = Recorder(httpx.Response(200, text=_payload([])))
+
+        await twin.call(_client(record), "lookup", app_id)
+
+        assert query_of(record.last)["bundleId"] == [app_id]
+        assert "id" not in query_of(record.last)
+
+    @pytest.mark.parametrize("app_id", ["²", "١٢٣"])
+    async def test_version_history_refuses_a_non_ascii_digit_before_any_request(
+        self, twin, app_id
+    ):
+        record = Recorder(httpx.Response(200, text=""))
+
+        with pytest.raises(ValueError, match="numeric"):
+            await twin.call(_client(record), "version_history", app_id)
+
+        assert record.requests == []
+
+
+class TestTheProductPageCountryIsQuoted:
+    async def test_a_storefront_with_path_characters_stays_in_one_segment(
+        self, twin, monkeypatch
+    ):
+        monkeypatch.setattr(
+            AppStoreSearch, "_storefront", lambda self, country: "us/../x?y#z"
+        )
+        record = Recorder(httpx.Response(404, text=""))
+
+        await twin.call(_client(record), "version_history", "123")
+
+        assert record.last.url.raw_path.startswith(b"/us%2F..%2Fx%3Fy%23z/app/id123")

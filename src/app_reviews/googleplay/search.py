@@ -8,7 +8,7 @@ import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
@@ -531,13 +531,21 @@ class GooglePlaySearch(PooledClient):
         return node
 
     def _build_store_url(self, app_id: str) -> str:
-        return f"{self.DETAIL_URL}?id={app_id}"
+        return f"{self.DETAIL_URL}?id={quote(app_id, safe='')}"
 
     def _read_app_id_from_url(self, url: str | None) -> str | None:
-        """The package name in a store link's ``id`` parameter."""
+        """The package name in a store link's ``id`` parameter.
+
+        None for a link that does not parse: ``urlsplit`` raises on a malformed
+        IPv6 literal, and one bad link must cost only its own result.
+        """
         if url is None:
             return None
-        ids = parse_qs(urlsplit(url).query).get("id", [])
+        try:
+            query = urlsplit(url).query
+        except ValueError:
+            return None
+        ids = parse_qs(query).get("id", [])
         if not ids or not ids[0]:
             return None
         return ids[0]

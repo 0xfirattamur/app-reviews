@@ -12,6 +12,7 @@ from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
@@ -119,6 +120,7 @@ class AppStoreOfficialProvider(PooledClient):
         JWT, so a cursor pointing anywhere else would hand that token to whoever
         owns the host, so the cursor must be https on Connect's own host.
         """
+        require_path_segment(app_id, "app_id")
         if cursor is None:
             return self._first_page_url(app_id)
 

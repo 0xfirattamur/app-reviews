@@ -41,6 +41,10 @@ recent versions are also kept in
   status codes.
 - `GooglePlayReviews` token exchange now raises `ParseError` for a missing,
   empty or non-string `access_token`, and caps `expires_in` at one hour.
+- `AppStoreReviews`, `AppStoreVersions`, `AppStoreReplies`, `GooglePlayReviews`
+  and `GooglePlayReplies` now raise `ValueError` for an id or country of `.` or
+  `..` instead of sending a request to another path, and `AppStoreSearch` no
+  longer treats non-ASCII digits such as `²` as a trackId.
 
 ## [1.3.0] - 2026-10-25
 

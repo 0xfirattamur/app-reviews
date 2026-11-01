@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from app_reviews.appstore.api import ConnectAPIClient
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError
 from app_reviews.models.version import AppStoreVersion
 
@@ -92,7 +93,8 @@ class AppStoreVersions(ConnectAPIClient):
         return f"{self.API_BASE}{self._path(app_id)}?{_QUERY}"
 
     def _path(self, app_id: str) -> str:
-        return f"/v1/apps/{quote(app_id, safe='')}/appStoreVersions"
+        segment = quote(require_path_segment(app_id, "app_id"), safe="")
+        return f"/v1/apps/{segment}/appStoreVersions"
 
     def _parse_versions_page(
         self, response: HttpResponse, app_id: str

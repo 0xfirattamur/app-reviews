@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from app_reviews.appstore.product_page import parse_version_history
 from app_reviews.core import safe_json
@@ -157,12 +158,12 @@ class AppStoreSearch(PooledClient):
 
     def _product_page_url(self, app_id: str, country: Country | str) -> str:
         """The product page only exists under the numeric trackId."""
-        if not app_id.isdigit():
+        if not _is_track_id(app_id):
             raise ValueError(
                 f"version_history needs a numeric App Store trackId, got {app_id!r}"
             )
         return self.PRODUCT_PAGE_URL.format(
-            country=self._storefront(country), app_id=app_id
+            country=quote(self._storefront(country), safe=""), app_id=app_id
         )
 
     def _search_params(
@@ -181,7 +182,7 @@ class AppStoreSearch(PooledClient):
         Picking the param that matches the input shape lets callers chain
         ``search() -> lookup()`` with whichever id ``search()`` returned.
         """
-        id_param = "id" if app_id.isdigit() else "bundleId"
+        id_param = "id" if _is_track_id(app_id) else "bundleId"
         return {id_param: app_id, "country": self._storefront(country)}
 
     def _storefront(self, country: Country | str) -> str:
@@ -277,3 +278,8 @@ class AppStoreSearch(PooledClient):
             first_release_date=scraped_datetime(search_entry.get("releaseDate")),
             release_notes=scraped_text(search_entry.get("releaseNotes")),
         )
+
+
+def _is_track_id(app_id: str) -> bool:
+    """True for ASCII digits only; ``str.isdigit`` also accepts ``²`` and more."""
+    return app_id.isascii() and app_id.isdigit()

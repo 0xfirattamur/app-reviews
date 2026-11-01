@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError, ReplyRejectedError
 from app_reviews.googleplay.api import PlayAPIClient
 from app_reviews.googleplay.developer_api import parse_developer_reply
@@ -91,7 +92,8 @@ class GooglePlayReplies(PlayAPIClient):
         return self._read(response, review_id)
 
     def _review_url(self, package_name: str, review_id: str) -> str:
-        package, review = quote(package_name, safe=""), quote(review_id, safe="")
+        package = quote(require_path_segment(package_name, "package_name"), safe="")
+        review = quote(require_path_segment(review_id, "review_id"), safe="")
         return f"{self.API_BASE}/applications/{package}/reviews/{review}"
 
     def _written(self, response: HttpResponse, review_id: str) -> ReviewReply:
