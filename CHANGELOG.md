@@ -31,6 +31,9 @@ recent versions are also kept in
   of a request error.
 - `GooglePlayReviews` now reports a rejected page token as a `FetchError` of
   kind `"request"` instead of ending the walk as if the reviews had run out.
+- `fetch()` / `afetch()` stop starting queued country walks after a fatal error
+  such as `AuthError`, instead of running every remaining country against the
+  rejected credential.
 
 ## [1.3.0] - 2026-10-25
 

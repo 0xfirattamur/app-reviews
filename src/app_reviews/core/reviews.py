@@ -8,7 +8,7 @@ import dataclasses
 import functools
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from datetime import date, datetime
 from typing import Any
 
@@ -64,6 +64,14 @@ class _FetchPlan:
     matching_limit: int | None
     """Matching-review count that may end one country walk."""
     worker_count: int
+
+
+def _first_failure(futures: list[Future[Any]]) -> BaseException | None:
+    """The exception of the first finished future that failed, in submit order."""
+    for future in futures:
+        if future.done() and not future.cancelled() and future.exception():
+            return future.exception()
+    return None
 
 
 class BaseReviews(PooledClient, abc.ABC):
@@ -729,7 +737,12 @@ class BaseReviews(PooledClient, abc.ABC):
     def _collect_countries(
         self, provider: ReviewProvider, app_id: str, plan: _FetchPlan
     ) -> list[tuple[list[Review], CountryOutcome]]:
-        """Walk every planned country, on a thread pool when more than one."""
+        """Walk every planned country, on a thread pool when more than one.
+
+        The first failure stops the walks still queued: ``AuthError`` is the same
+        for every country, so starting them only spends requests on a rejected
+        credential. Walks already running are waited for, never abandoned.
+        """
         if plan.worker_count == 1:
             return [
                 self._walk_country(provider, app_id, country, plan)
@@ -740,6 +753,11 @@ class BaseReviews(PooledClient, abc.ABC):
                 pool.submit(self._walk_country, provider, app_id, country, plan)
                 for country in plan.countries
             ]
+            wait(futures, return_when=FIRST_EXCEPTION)
+            failure = _first_failure(futures)
+            if failure is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+                raise failure
             return [future.result() for future in futures]
 
     async def _acollect_countries(
@@ -747,26 +765,57 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> list[tuple[list[Review], CountryOutcome]]:
         """Async twin of ``_collect_countries``, bounded by a semaphore."""
         semaphore = asyncio.Semaphore(plan.worker_count)
-
-        async def walk_when_allowed(
-            country: str,
-        ) -> tuple[list[Review], CountryOutcome]:
-            async with semaphore:
-                return await self._awalk_country(provider, app_id, country, plan)
-
+        failures: list[Exception] = []
         # return_exceptions so one country's failure does not cancel the others
         # mid-flight, orphaning their requests on the shared pool. The threaded
-        # sync twin waits for every worker; this makes the async path match.
+        # sync twin waits for every running worker; this makes the async path
+        # match. Walks that have not started check ``failures`` and skip.
         settled = await asyncio.gather(
-            *(walk_when_allowed(country) for country in plan.countries),
+            *(
+                self._awalk_unless_failed(
+                    provider, app_id, country, plan, semaphore, failures
+                )
+                for country in plan.countries
+            ),
             return_exceptions=True,
         )
+        if failures:
+            raise failures[0]
         collected: list[tuple[list[Review], CountryOutcome]] = []
         for outcome in settled:
             if isinstance(outcome, BaseException):
                 raise outcome
-            collected.append(outcome)
+            if outcome is not None:
+                collected.append(outcome)
         return collected
+
+    async def _awalk_unless_failed(
+        self,
+        provider: ReviewProvider,
+        app_id: str,
+        country: str,
+        plan: _FetchPlan,
+        semaphore: asyncio.Semaphore,
+        failures: list[Exception],
+    ) -> tuple[list[Review], CountryOutcome] | None:
+        """Walk one country once a slot is free, or skip it after a failure.
+
+        Only a walk that had to queue is skipped, like a job still waiting in the
+        sync pool's queue: one that found a free slot is already running
+        alongside the failing walk, as a pool worker would be. The check follows
+        the semaphore so a queued walk sees failures recorded while it waited,
+        and a failure is recorded before the slot is released, so the next queued
+        walk is guaranteed to see it.
+        """
+        had_to_queue = semaphore.locked()
+        async with semaphore:
+            if had_to_queue and failures:
+                return None
+            try:
+                return await self._awalk_country(provider, app_id, country, plan)
+            except Exception as error:
+                failures.append(error)
+                raise
 
     def _walk_limit(
         self,
