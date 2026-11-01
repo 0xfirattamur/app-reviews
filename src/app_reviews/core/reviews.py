@@ -82,6 +82,68 @@ def _first_failure(futures: list[Future[Any]]) -> BaseException | None:
     return None
 
 
+def _country_arg(
+    source: Source, country: Country | str | None, default_country: str
+) -> str:
+    """Resolve the country argument for a single-country provider call.
+
+    Global sources ignore it, so pass the ``""`` sentinel they expect.
+    """
+    if not is_per_country(source):
+        return ""
+    return normalise_country(country) or default_country
+
+
+def _country_list(
+    source: Source,
+    countries: Collection[Country | str] | None,
+    default_country: str,
+) -> list[str]:
+    """The fan-out ``_country_arg`` is the singular of: which countries to walk.
+
+    Global sources collapse to a single ``[""]`` call. Same convention and
+    same source of truth as ``_country_arg`` and ``_outcome_country``.
+
+    Entries are normalised and deduped first. Every entry costs a full walk,
+    so ``["us", "US", "USA"]`` left as-is would fetch one storefront three
+    times and report it under three names in ``outcomes``. First-appearance
+    order is kept, which matters because a frozenset region group has none
+    of its own and callers do read ``outcomes`` positionally.
+    """
+    if not is_per_country(source):
+        if countries is not None:
+            _LOG.warning(
+                "%s has no country dimension, so countries=%r is ignored; "
+                "one request already covers every territory",
+                source,
+                list(countries),
+            )
+        return [""]
+    if countries is None:
+        return [default_country]
+    return list(dict.fromkeys(countries))
+
+
+def _normalised_selection(
+    countries: Collection[Country | str] | None,
+) -> list[str] | None:
+    """Normalise an explicit selection while preserving omission vs empty."""
+    if countries is None:
+        return None
+    resolved = (normalise_country(country) for country in countries)
+    return list(dict.fromkeys(country for country in resolved if country))
+
+
+def _outcome_country(source: Source, country: str) -> str | None:
+    """None for global sources, which have no country to report.
+
+    Keyed off ``core.paging.is_per_country``, the same canonical convention
+    ``_country_arg`` uses and ``resolve_countries`` documents, rather than
+    off the ``""`` sentinel value in hand.
+    """
+    return country if is_per_country(source) else None
+
+
 class BaseReviews(PooledClient, abc.ABC):
     """Base reviews client.
 
@@ -201,10 +263,12 @@ class BaseReviews(PooledClient, abc.ABC):
         only home for that fact.
         """
         self._validate_countries_argument(countries)
-        selection = self._normalised_selection(countries)
+        selection = _normalised_selection(countries)
         if selection == []:
             return []
-        return self._country_list(self._ensure_provider(), selection)
+        return _country_list(
+            self._ensure_provider().source, selection, self.DEFAULT_COUNTRY
+        )
 
     # ---- rung 1: one provider page ------------------------------------------
 
@@ -227,7 +291,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """
         self._validate_country_argument(country)
         provider = self._ensure_provider()
-        country_arg = self._country_arg(provider, country)
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
         return self._page(provider, app_id, country_arg, cursor)
 
     async def afetch_page(
@@ -240,7 +304,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """Async equivalent of ``fetch_page``."""
         self._validate_country_argument(country)
         provider = await self._aensure_provider()
-        country_arg = self._country_arg(provider, country)
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
         return await self._apage(provider, app_id, country_arg, cursor)
 
     # ---- rung 2: one country, paginated ------------------------------------
@@ -284,7 +348,7 @@ class BaseReviews(PooledClient, abc.ABC):
         yield from self._walk(
             provider,
             app_id,
-            self._country_arg(provider, country),
+            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
             cursor,
             since,
             limit,
@@ -311,7 +375,7 @@ class BaseReviews(PooledClient, abc.ABC):
         walk = self._awalk(
             provider,
             app_id,
-            self._country_arg(provider, country),
+            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
             cursor,
             since,
             limit,
@@ -439,7 +503,9 @@ class BaseReviews(PooledClient, abc.ABC):
         matches_since = build_review_predicate(since=since)
         yielded_count = 0
 
-        for country in self._country_list(provider, request.selection):
+        for country in _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        ):
             if limit is not None and yielded_count >= limit:
                 return
             walk_limit = plan_limits(
@@ -487,7 +553,9 @@ class BaseReviews(PooledClient, abc.ABC):
         matches_since = build_review_predicate(since=since)
         yielded_count = 0
 
-        for country in self._country_list(provider, request.selection):
+        for country in _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        ):
             if limit is not None and yielded_count >= limit:
                 return
             walk_limit = plan_limits(
@@ -580,7 +648,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """``on_page`` with this walk's reported country already filled in."""
         if on_page is None:
             return None
-        return functools.partial(on_page, self._outcome_country(provider, country))
+        return functools.partial(on_page, _outcome_country(provider.source, country))
 
     def _iter_country_reviews(
         self,
@@ -725,7 +793,9 @@ class BaseReviews(PooledClient, abc.ABC):
         concurrency: int | None,
     ) -> _FetchPlan:
         """Resolve the countries, limits, filter and fan-out width for one fetch."""
-        countries = self._country_list(provider, request.selection)
+        countries = _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        )
         limits = plan_limits(
             is_newest_first=self._is_newest_first(provider),
             sort=sort,
@@ -891,7 +961,7 @@ class BaseReviews(PooledClient, abc.ABC):
         stop conditions exist in exactly one place, and hands each page to a
         ``CountryCollector`` so the accounting does too.
         """
-        collector = CountryCollector(self._outcome_country(provider, country))
+        collector = CountryCollector(_outcome_country(provider.source, country))
         matching_review_count = 0
         pages = self._walk(
             provider,
@@ -920,7 +990,7 @@ class BaseReviews(PooledClient, abc.ABC):
         plan: _FetchPlan,
     ) -> tuple[list[Review], CountryOutcome]:
         """Async equivalent of ``_walk_country``."""
-        collector = CountryCollector(self._outcome_country(provider, country))
+        collector = CountryCollector(_outcome_country(provider.source, country))
         matching_review_count = 0
         pages = self._awalk(
             provider,
@@ -963,15 +1033,6 @@ class BaseReviews(PooledClient, abc.ABC):
             )
         return page, matching_review_count
 
-    def _outcome_country(self, provider: ReviewProvider, country: str) -> str | None:
-        """None for global providers, which have no country to report.
-
-        Keyed off ``core.paging.is_per_country``, the same
-        canonical convention ``_country_arg`` uses and ``resolve_countries``
-        documents, rather than off the ``""`` sentinel value in hand.
-        """
-        return country if is_per_country(provider.source) else None
-
     def _assemble(
         self,
         collected: list[tuple[list[Review], CountryOutcome]],
@@ -987,17 +1048,6 @@ class BaseReviews(PooledClient, abc.ABC):
 
         return FetchResult(reviews=reviews, outcomes=outcomes).sort(sort).limit(limit)
 
-    def _country_arg(
-        self, provider: ReviewProvider, country: Country | str | None
-    ) -> str:
-        """Resolve the country argument for a single-country provider call.
-
-        Global providers ignore it, so pass the ``""`` sentinel they expect.
-        """
-        if not is_per_country(provider.source):
-            return ""
-        return normalise_country(country) or self.DEFAULT_COUNTRY
-
     def _validate_country_argument(self, country: Country | str | None) -> None:
         """Subclass hook for stores whose review corpus has no country axis."""
 
@@ -1005,42 +1055,6 @@ class BaseReviews(PooledClient, abc.ABC):
         self, countries: Collection[Country | str] | None
     ) -> None:
         """Plural twin of ``_validate_country_argument``."""
-
-    def _country_list(
-        self, provider: ReviewProvider, countries: Collection[Country | str] | None
-    ) -> list[str]:
-        """The fan-out ``_country_arg`` is the singular of: which countries to walk.
-
-        Global sources collapse to a single ``[""]`` call. Same convention and
-        same source of truth as ``_country_arg`` and ``_outcome_country``.
-
-        Entries are normalised and deduped first. Every entry costs a full walk,
-        so ``["us", "US", "USA"]`` left as-is would fetch one storefront three
-        times and report it under three names in ``outcomes``. First-appearance
-        order is kept, which matters because a frozenset region group has none
-        of its own and callers do read ``outcomes`` positionally.
-        """
-        if not is_per_country(provider.source):
-            if countries is not None:
-                _LOG.warning(
-                    "%s has no country dimension, so countries=%r is ignored; "
-                    "one request already covers every territory",
-                    provider.source,
-                    list(countries),
-                )
-            return [""]
-        if countries is None:
-            return [self.DEFAULT_COUNTRY]
-        return list(dict.fromkeys(countries))
-
-    def _normalised_selection(
-        self, countries: Collection[Country | str] | None
-    ) -> list[str] | None:
-        """Normalise an explicit selection while preserving omission vs empty."""
-        if countries is None:
-            return None
-        resolved = (normalise_country(country) for country in countries)
-        return list(dict.fromkeys(country for country in resolved if country))
 
     def _validate_walk_request(
         self,
@@ -1060,7 +1074,7 @@ class BaseReviews(PooledClient, abc.ABC):
         require_non_negative(limit, "limit")
         require_positive(concurrency, "concurrency")
         page_budget = self._page_budget(max_pages)
-        selection = self._normalised_selection(countries)
+        selection = _normalised_selection(countries)
         if limit == 0 or page_budget == 0 or selection == []:
             return None
         return _WalkRequest(page_budget=page_budget, selection=selection)
