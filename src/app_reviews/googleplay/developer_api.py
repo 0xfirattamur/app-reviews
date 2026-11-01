@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from urllib.parse import quote
 
@@ -12,6 +13,15 @@ from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.untyped import (
+    UNREADABLE_PAYLOAD,
+    expect_int,
+    expect_str,
+    log_safe_id,
+    optional_count,
+    optional_str,
+    page_from_entries,
+)
 from app_reviews.core.validation import require_path_segment
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
@@ -20,22 +30,8 @@ from app_reviews.models.types import Source
 
 _LOG = logging.getLogger(__name__)
 
-_UNUSABLE = (
-    AttributeError,
-    IndexError,
-    KeyError,
-    OSError,
-    OverflowError,
-    TypeError,
-    ValueError,
-)
-"""What reading an untyped payload can raise.
-
-``OverflowError`` and ``OSError`` are in here because ``datetime.fromtimestamp``
-raises them for a seconds value outside the platform's range, and neither is a
-``ValueError``, so one absurd timestamp escaped all the way out of
-``fetch_page``, which ``iter_pages`` promises never happens.
-"""
+_SOURCE_NAME = "the Google Play Developer API"
+"""How both a failed status and a malformed body name this source."""
 
 
 def parse_protobuf_timestamp(value: Any) -> datetime:
@@ -168,21 +164,22 @@ class GooglePlayOfficialProvider(PooledClient):
         failure = page_failure_from_response(
             response,
             country=None,
-            source_name="the Google Play Developer API",
+            source_name=_SOURCE_NAME,
             credentialed=True,
         )
         if failure is not None:
             return failure
         try:
             entries, next_cursor = self._parse_envelope(response.body)
-        except _UNUSABLE as exc:
+        except UNREADABLE_PAYLOAD as exc:
             return malformed_page(
                 country=None,
-                source_name="Google Play Developer API",
+                source_name=_SOURCE_NAME,
                 status=response.status,
                 exc=exc,
             )
-        return self._map_reviews(entries, next_cursor, app_id)
+        parse_entry = partial(self._parse_review, app_id=app_id)
+        return page_from_entries(entries, parse_entry, next_cursor)
 
     def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token; raises on a malformed envelope."""
@@ -191,25 +188,6 @@ class GooglePlayOfficialProvider(PooledClient):
         if not isinstance(entries, list):
             raise TypeError(f"'reviews' is {type(entries).__name__}, expected a list")
         return entries, self._read_next_cursor(payload)
-
-    def _map_reviews(
-        self, entries: list[Any], next_cursor: str | None, app_id: str
-    ) -> PageResult:
-        """The page's reviews; a single bad entry is skipped, not fatal.
-
-        A malformed envelope fails the whole page, but one bad entry must not:
-        failing the page discards ``next_cursor`` and silently ends the walk.
-        """
-        reviews: list[Review] = []
-        for entry in entries:
-            review = self._parse_review(entry, app_id)
-            if review is not None:
-                reviews.append(review)
-        return PageResult(
-            reviews=reviews,
-            next_cursor=next_cursor,
-            skipped_reviews=len(entries) - len(reviews),
-        )
 
     def _read_next_cursor(self, payload: dict[str, Any]) -> str | None:
         """The next page token, or None on the last page.
@@ -245,7 +223,7 @@ class GooglePlayOfficialProvider(PooledClient):
         """
         try:
             comment = self._user_comment(entry)
-            review_id = self._string(entry["reviewId"], "reviewId")
+            review_id = expect_str(entry["reviewId"], "reviewId")
             title, body = self._text(comment.get("text", ""))
             return Review(
                 store="googleplay",
@@ -254,14 +232,14 @@ class GooglePlayOfficialProvider(PooledClient):
                 country=None,
                 # No default for starRating: 0 fails Review's 1-5 invariant, so a
                 # default could only ever turn a missing field into a raised error.
-                rating=self._rating(comment["starRating"]),
+                rating=expect_int(comment["starRating"], "starRating"),
                 title=title,
                 body=body,
-                author_name=self._string(entry.get("authorName", ""), "authorName"),
-                app_version=self._optional_string(
+                author_name=expect_str(entry.get("authorName", ""), "authorName"),
+                app_version=optional_str(
                     comment.get("appVersionName"), "appVersionName"
                 ),
-                language=self._optional_string(
+                language=optional_str(
                     comment.get("reviewerLanguage"), "reviewerLanguage"
                 ),
                 # The API reports lastModified only; there is no creation date.
@@ -276,40 +254,26 @@ class GooglePlayOfficialProvider(PooledClient):
                 original_text=_optional_text(comment.get("originalText")),
                 device=_optional_text(comment.get("device")),
                 device_metadata=_parse_device_metadata(comment.get("deviceMetadata")),
-                thumbs_up_count=_optional_count(comment.get("thumbsUpCount")),
-                thumbs_down_count=_optional_count(comment.get("thumbsDownCount")),
-                app_version_code=_optional_count(comment.get("appVersionCode")),
-                android_os_version=_optional_count(comment.get("androidOsVersion")),
+                thumbs_up_count=optional_count(comment.get("thumbsUpCount")),
+                thumbs_down_count=optional_count(comment.get("thumbsDownCount")),
+                app_version_code=optional_count(comment.get("appVersionCode")),
+                android_os_version=optional_count(comment.get("androidOsVersion")),
             )
-        except _UNUSABLE as exc:
+        except UNREADABLE_PAYLOAD as exc:
             _LOG.warning(
-                "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
+                "Skipped review %r for app %s: %s",
+                log_safe_id(entry, "reviewId"),
+                app_id,
+                exc,
             )
             return None
-
-    def _rating(self, value: Any) -> int:
-        """A wire star rating is an integer; coercion would truncate corruption."""
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError("starRating must be an integer")
-        return value
-
-    def _string(self, value: Any, field: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError(f"{field} is {type(value).__name__}, expected a string")
-        return value
-
-    def _optional_string(self, value: Any, field: str) -> str | None:
-        if value is None:
-            return None
-        return self._string(value, field)
 
     def _text(self, value: Any) -> tuple[str | None, str]:
         """Map Play's text, including its documented legacy title separator."""
-        if not isinstance(value, str):
-            raise TypeError(f"review text is {type(value).__name__}, expected a string")
-        if "\t" not in value:
-            return None, value
-        title, body = value.split("\t", 1)
+        text = expect_str(value, "review text")
+        if "\t" not in text:
+            return None, text
+        title, body = text.split("\t", 1)
         return title or None, body
 
     def _user_comment(self, entry: Any) -> Any:
@@ -342,21 +306,13 @@ class GooglePlayOfficialProvider(PooledClient):
                 developer_comment["text"],
                 developer_comment.get("lastModified"),
             )
-        except _UNUSABLE as exc:
+        except UNREADABLE_PAYLOAD as exc:
             _LOG.warning(
                 "Ignored an unreadable developer reply on review %r: %s",
                 review_id,
                 exc,
             )
             return None
-
-    def _id(self, entry: Any) -> Any:
-        """This entry's review id, so a warning can name it and nothing else.
-
-        Logging the entry put the reviewer's name and the text they wrote into a
-        warning line.
-        """
-        return entry.get("reviewId") if isinstance(entry, dict) else None
 
 
 def _find_developer_comment(comments: Any) -> dict[str, Any] | None:
@@ -374,13 +330,6 @@ def _optional_text(value: Any) -> str | None:
     return value
 
 
-def _optional_count(value: Any) -> int | None:
-    """A non-negative integer, or None. ``True`` is not a count."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return None
-    return value
-
-
 def _parse_device_metadata(device_metadata: Any) -> DeviceMetadata | None:
     """The known ``deviceMetadata`` members, each dropped alone if unusable."""
     if not isinstance(device_metadata, dict):
@@ -389,7 +338,7 @@ def _parse_device_metadata(device_metadata: Any) -> DeviceMetadata | None:
     for wire_name, field_name in _DEVICE_TEXT_FIELDS.items():
         known_fields[field_name] = _optional_text(device_metadata.get(wire_name))
     for wire_name, field_name in _DEVICE_COUNT_FIELDS.items():
-        known_fields[field_name] = _optional_count(device_metadata.get(wire_name))
+        known_fields[field_name] = optional_count(device_metadata.get(wire_name))
     if all(field_value is None for field_value in known_fields.values()):
         return None
     return DeviceMetadata(**known_fields)

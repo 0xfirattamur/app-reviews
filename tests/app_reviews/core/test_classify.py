@@ -8,7 +8,9 @@ from app_reviews.core.classify import (
     describe_failure,
     error_for,
     fetch_error_from_response,
+    malformed_page,
     raise_for_http_failure,
+    refused_cursor_page,
 )
 from app_reviews.core.http import HttpResponse
 from app_reviews.errors import RequestError
@@ -111,3 +113,27 @@ class TestRetryable:
     @pytest.mark.parametrize("kind", ["auth", "not_found", "parse", "request"])
     def test_terminal_kinds(self, kind):
         assert self._error(kind).retryable is False
+
+
+class TestFailedPages:
+    def test_a_malformed_page_names_the_source_the_way_a_status_failure_does(self):
+        page = malformed_page(
+            country=None,
+            source_name="the feed",
+            status=200,
+            exc=ValueError("bad"),
+        )
+
+        assert page.error == FetchError(
+            country=None,
+            message="Malformed response from the feed: bad",
+            kind="parse",
+            status=200,
+        )
+
+    def test_a_refused_cursor_is_a_parse_error_naming_the_cursor_and_reason(self):
+        page = refused_cursor_page(country="us", cursor="abc", reason="no good")
+
+        assert page.error == FetchError(
+            country="us", message="Refusing cursor 'abc': no good", kind="parse"
+        )
