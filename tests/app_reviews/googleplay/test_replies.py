@@ -24,7 +24,7 @@ from app_reviews import (
     ReviewReply,
 )
 from app_reviews.googleplay.auth import GoogleAuth
-from tests.app_reviews.factories import service_account_json
+from tests.app_reviews.factories import make_review, service_account_json
 from tests.app_reviews.transport import client_for
 
 _REVIEWS = (
@@ -65,6 +65,74 @@ def _review(*comments: dict) -> dict:
 
 
 _USER = {"userComment": {"text": "Great", "starRating": 5}}
+
+
+def _play_review(**overrides):
+    fields = {
+        "store": "googleplay",
+        "source": "googleplay_official",
+        "id": "gp-1",
+        "app_id": "com.example.app",
+    }
+    return make_review(**(fields | overrides))
+
+
+class TestReplyToReview:
+    def test_sends_to_the_reviews_own_id_and_package(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        reply = _replies(api).reply(_play_review(), "Thanks!")
+
+        assert str(api.requests[0].url) == f"{_REVIEWS}/gp-1:reply"
+        assert json.loads(api.requests[0].content) == {"replyText": "Thanks!"}
+        assert reply.review_id == "gp-1"
+
+    async def test_async_twin_sends_the_same_request(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        await _replies(api).areply(_play_review(), "Thanks!")
+
+        assert str(api.requests[0].url) == f"{_REVIEWS}/gp-1:reply"
+
+    def test_matching_package_name_is_accepted(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        _replies(api).reply(_play_review(), "Hi", package_name="com.example.app")
+
+        assert len(api.requests) == 1
+
+    def test_mismatched_package_raises_before_any_request(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        with pytest.raises(ValueError, match="does not match"):
+            _replies(api).reply(_play_review(), "Hi", package_name="com.other")
+
+        assert api.requests == []
+
+    def test_scraper_review_raises_before_any_request(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+        scraped = _play_review(source="googleplay_scraper")
+
+        with pytest.raises(ValueError, match="googleplay_scraper"):
+            _replies(api).reply(scraped, "Hi")
+
+        assert api.requests == []
+
+    def test_id_without_package_name_raises_before_any_request(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        with pytest.raises(ValueError, match="package_name"):
+            _replies(api).reply("gp-1", "Hi")
+
+        assert api.requests == []
+
+    async def test_async_id_without_package_name_raises(self):
+        api = _Api(httpx.Response(200, json=_reply_result()))
+
+        with pytest.raises(ValueError, match="package_name"):
+            await _replies(api).areply("gp-1", "Hi")
+
+        assert api.requests == []
 
 
 class TestReply:

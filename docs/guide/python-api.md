@@ -253,11 +253,20 @@ with AppStoreReplies(app_store_auth) as apple:
 with GooglePlayReplies(play_auth) as play:
     current = play.get_reply("gp:review-id", package_name="com.example.app")
     reply = play.reply("gp:review-id", "Thanks!", package_name="com.example.app")
+    reply = play.reply(review, "Thanks!")            # a Review carries its package
 ```
 
 `review_id` is the official API's review id, which is `Review.id` on reviews
 fetched with `auth=`. Async twins: `areply()`, `aget_reply()`, and (App Store
 only) `adelete_reply()`. Play has no API to delete a reply.
+
+`GooglePlayReplies.reply()` also takes the `Review` itself and reads the id and
+package from `review.id` and `review.app_id`. It must come from
+`GooglePlayReviews(auth=...)`: a review from the public scraper has an id the
+Developer API does not accept. `ValueError` is raised before anything is sent
+for a scraper review, for a `package_name` that disagrees with `review.app_id`,
+and for a bare id with no `package_name`. `get_reply()` still takes an id and
+`package_name`.
 
 `ReviewReply` has `review_id`, `reply_id` (Apple's `customerReviewResponses` id;
 `None` on Play), `text`, `state` (`"pending"` or `"published"`), and `updated_at`.

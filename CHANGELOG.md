@@ -21,6 +21,9 @@ recent versions are also kept in
   before any request is sent; cursors saved by 1.3 still work.
 - `FetchResult.to_dict()` now starts with `"schema_version": 1`, so a stored
   envelope can be told apart if its shape changes.
+- `GooglePlayReplies.reply()` and `areply()` accept a `Review` from
+  `GooglePlayReviews(auth=...)` in place of a review id, and `package_name` is
+  optional when one is given.
 
 ### Changed
 
