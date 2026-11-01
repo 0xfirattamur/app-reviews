@@ -73,6 +73,8 @@ from app_reviews import DeviceMetadata
 
 `Review` is hashable, and two reviews are equal when every field matches except `raw` and `fetched_at`. A review fetched twice is therefore the same review, so `set(reviews)` removes re-fetched duplicates. Use `review.key` when you need the identity alone. `AppStoreVersion` is hashable too; its `release_notes` dict still counts for equality.
 
+Models that hold a list are not hashable in practice: `hash(FetchResult(...))` and `hash(PageResult(...))` raise `TypeError`, even though the frozen dataclass advertises `__hash__`. Hash the `Review` objects inside them, or their `key`s.
+
 ### Review IDs
 
 `id` is the identifier the source assigned, passed through unchanged: the App Store RSS `id` or Connect `customerReviews.id`, the Google Play `batchexecute` review id or `androidpublisher` `reviewId`.
@@ -409,7 +411,7 @@ Unlike `Sort`, this orders the pages Connect sends, not the final result. Only
 
 ## RetryConfig
 
-HTTP retry and timeout settings.
+HTTP retry and timeout settings. `timeout` is honoured wherever the config goes: `AppStoreReviews(retry=...)` and `HttpClient(retry=...)` both use it, and an explicit `HttpClient(timeout=...)` wins over it.
 
 ```python
 from app_reviews import RetryConfig
@@ -543,7 +545,7 @@ with AppStoreSearch() as client:
 ## AppStoreVersion
 
 One version of an app as App Store Connect records it, returned newest
-`created_at` first by `AppStoreVersions(auth).versions()` / `aversions()`.
+`created_at` first by `AppStoreVersions(auth=auth).versions()` / `aversions()`.
 
 The official API has no release date. For when versions reached the store, use
 [`AppVersionEntry`](#appversionentry) from `version_history()`.

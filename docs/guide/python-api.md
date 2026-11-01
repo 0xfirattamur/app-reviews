@@ -10,12 +10,22 @@ Seven clients: two for reviews, two for search and lookup, two for replies, and 
 
 Every client owns one HTTP connection pool, so close it when you are done or use it as a context manager. See [Connection pooling](#connection-pooling).
 
+## Which client do I use?
+
+| I want | App Store | Google Play |
+|---|---|---|
+| Reviews (credentials optional: public source without, official API with) | `AppStoreReviews` | `GooglePlayReviews` |
+| Search and lookup, no credentials | `AppStoreSearch` | `GooglePlaySearch` |
+| Version history with release dates, no credentials | `AppStoreSearch.version_history()` | not available |
+| Versions with release notes from the official API | `AppStoreVersions` (Connect key) | not available |
+| Developer replies (credentials required) | `AppStoreReplies` | `GooglePlayReplies` |
+
 ---
 
 ## Imports
 
-Everything public comes from the top-level package. There is one import path per
-name:
+Everything public comes from the top-level package. There is one documented
+import path per name:
 
 ```python
 from app_reviews import AppStoreReviews, Country, Sort, FetchResult, HttpError
@@ -46,11 +56,38 @@ core pieces: credentials, its two providers, its reviews client, its search
 client, plus its reply client (and, for the App Store, the versions client).
 Reach in when you want to drive a provider directly, or to pin a source rather
 than letting the presence of credentials choose it. Both also re-export their
-reviews and search clients, but prefer the root for those; the reply and
-versions clients are exported from the root only.
+reviews and search clients for symmetry, but the root is the documented path for
+those; the reply and versions clients are exported from the root only.
 
-`app_reviews.core` is the store-agnostic engine: the connection pool, the page
-walk, the protocols. Internal, and carries no compatibility promise.
+`app_reviews.core` is the store-agnostic engine. Six of its names are exported
+from the root, and those are the supported injection points: `HttpClient` and
+`HttpResponse` (the connection pool), `ReviewProvider` (a review source),
+`TokenSource` (a bearer-token supplier), and `RateLimiter` / `RequestLimiter`
+(a shared request budget). The rest of `core` is internal and carries no
+compatibility promise.
+
+---
+
+## Constructor options
+
+Every client takes the same four keyword options, written out here once:
+
+```python
+client = AppStoreReviews(
+    proxy=None,         # str | None: HTTP proxy URL
+    retry=None,         # RetryConfig | None: retry and timeout settings
+    http=None,          # HttpClient | None: supply your own connection pool
+    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+)
+```
+
+Passing `http=` together with any of the other three raises `TypeError`; see
+[Connection pooling](#connection-pooling). `AppStoreReviews` and
+`GooglePlayReviews` also take an optional `auth=` (public source without it,
+official API with it). `AppStoreReplies`, `GooglePlayReplies` and
+`AppStoreVersions` require `auth`. Pass it by keyword, `AppStoreReplies(auth=auth)`;
+the first positional slot works too, but the keyword reads the same on every client.
+The search clients take no `auth`.
 
 ---
 
@@ -63,19 +100,16 @@ from app_reviews import AppStoreReviews, AppStoreAuth
 ### Constructor
 
 ```python
-client = AppStoreReviews(
-    auth=None,       # AppStoreAuth | None: credentials for App Store Connect API
-    proxy=None,      # str | None: HTTP proxy URL
-    retry=None,      # RetryConfig | None: retry settings
-    http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+AppStoreReviews(
+    auth=None,                # AppStoreAuth | None: credentials for App Store Connect API
     server_ratings=None,      # Collection[int] | None: Connect only, e.g. [1, 2]
     server_territories=None,  # Collection[Country | str] | None: Connect only
     server_sort=None,         # ConnectSort | None: Connect only, default "-createdDate"
 )
 ```
 
-Without `auth`, uses the public RSS feed. With `auth`, uses the App Store Connect API.
+Plus the [common options](#constructor-options). Without `auth`, uses the public
+RSS feed. With `auth`, uses the App Store Connect API.
 
 With `auth`, the three `server_*` options make Connect filter and order reviews
 before it sends them, so asking for one market's one-star reviews does not walk
@@ -102,7 +136,7 @@ client = AppStoreReviews(
 ```python
 result = client.fetch(
     app_id,          # str: App Store ID (numeric)
-    countries=None,  # Collection[Country | str] | None: storefronts (default: ["us"])
+    countries=None,  # Collection[Country | str] | None: RSS storefronts, default ["us"]; Connect ignores it; Play rejects any nonblank value
     since=None,      # date | datetime | None: only reviews on or after this date
     until=None,      # date | datetime | None: only reviews on or before this date
     ratings=None,    # list[int] | None: filter to specific star ratings
@@ -137,6 +171,14 @@ auth = AppStoreAuth(key_id="ABC123DEF4", issuer_id="...", private_key=pem_text)
 
 Pass exactly one of `key_path` and `private_key`. The key never appears in the
 `repr`.
+
+`ConnectCredentials(key_id, issuer_id, private_key)` is the advanced,
+already-validated form of the same three values, with the PEM text in hand
+rather than a path. It is what `AppStoreAuth` becomes once the key has been
+read, and it checks the three values are non-empty and that the key looks like
+PEM; it does not parse the key. Nothing in the clients takes it: it is only the
+input to `ConnectAuth`, the token source `AppStoreOfficialProvider` needs when
+you drive that provider directly. Everyone else passes `AppStoreAuth`.
 
 ### Examples
 
@@ -180,15 +222,13 @@ from app_reviews import GooglePlayReviews, GooglePlayAuth
 ### Constructor
 
 ```python
-client = GooglePlayReviews(
-    auth=None,       # GooglePlayAuth | None: credentials for Developer API
-    proxy=None,      # str | None: HTTP proxy URL
-    retry=None,      # RetryConfig | None: retry settings
-    http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
+GooglePlayReviews(
+    auth=None,                  # GooglePlayAuth | None: credentials for Developer API
     translation_language=None,  # str | None: Developer API only, e.g. "en"
 )
 ```
+
+Plus the [common options](#constructor-options).
 
 Without `auth`, uses the public web endpoint. With `auth`, uses the Google Play Developer API.
 
@@ -239,18 +279,18 @@ with GooglePlayReviews(
 ## Replies
 
 `AppStoreReplies` and `GooglePlayReplies` write the developer reply to a review.
-Both take their store's auth as the first argument, plus the same `proxy=`,
-`retry=`, `http=`, and `rate_limiter=` keywords as the review clients.
+Both take their store's auth, passed as `auth=`, plus the same
+[common options](#constructor-options) as the review clients.
 
 ```python
 from app_reviews import AppStoreReplies, GooglePlayReplies
 
-with AppStoreReplies(app_store_auth) as apple:
+with AppStoreReplies(auth=app_store_auth) as apple:
     current = apple.get_reply("review-id")          # ReviewReply | None
     reply = apple.reply("review-id", "Thanks!")      # creates or replaces
     removed = apple.delete_reply("review-id")        # bool
 
-with GooglePlayReplies(play_auth) as play:
+with GooglePlayReplies(auth=play_auth) as play:
     current = play.get_reply("gp:review-id", package_name="com.example.app")
     reply = play.reply("gp:review-id", "Thanks!", package_name="com.example.app")
     reply = play.reply(review, "Thanks!")            # a Review carries its package
@@ -291,7 +331,7 @@ apply it twice. Reads retry as usual.
 ```python
 from app_reviews import AppStoreVersions
 
-with AppStoreVersions(app_store_auth) as client:
+with AppStoreVersions(auth=app_store_auth) as client:
     versions = client.versions("6741066976")  # list[AppStoreVersion]
 ```
 
@@ -367,7 +407,7 @@ for review in result:
 print(f"Reviews: {len(result)}")
 
 if result:
-    print("Got reviews!")
+    print("Got reviews!")  # at least one review; says nothing about failures, see result.ok
 ```
 
 ### Filter after fetching
@@ -381,7 +421,7 @@ bad_recent = result.filter(ratings=[1, 2], since=date(2025, 1, 1))
 ### Check errors
 
 ```python
-if result.errors:
+if not result.ok:
     for err in result.errors:
         print(f"Failed: {err.country} ({err.message})")
 ```
@@ -653,13 +693,10 @@ from app_reviews import AppStoreSearch, Country
 ```
 
 ```python
-client = AppStoreSearch(
-    proxy=None,      # str | None: HTTP proxy URL
-    retry=None,      # RetryConfig | None: retry settings
-    http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
-)
+AppStoreSearch()
 ```
+
+Takes only the [common options](#constructor-options).
 
 #### search()
 
@@ -728,13 +765,10 @@ from app_reviews import GooglePlaySearch, Country
 ```
 
 ```python
-client = GooglePlaySearch(
-    proxy=None,      # str | None: HTTP proxy URL
-    retry=None,      # RetryConfig | None: retry settings
-    http=None,       # HttpClient | None: supply your own connection pool
-    rate_limiter=None,  # RequestLimiter | None: e.g. a RateLimiter shared with other clients
-)
+GooglePlaySearch()
 ```
+
+Takes only the [common options](#constructor-options).
 
 Same `search()` and `lookup()` methods as `AppStoreSearch`. For lookup, pass a package name (e.g. `"com.whatsapp"`).
 
