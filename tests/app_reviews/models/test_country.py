@@ -73,6 +73,33 @@ def test_middle_east_group():
     assert Country.US not in Country.MIDDLE_EAST
 
 
+def test_africa_group():
+    assert Country.ZA in Country.AFRICA
+    assert Country.NG in Country.AFRICA
+    assert Country.EG not in Country.AFRICA
+    assert Country.US not in Country.AFRICA
+
+
+_REGION_GROUPS_BESIDES_AFRICA = (
+    Country.EUROPE,
+    Country.AMERICAS,
+    Country.ASIA_PACIFIC,
+    Country.MIDDLE_EAST,
+)
+_REGION_GROUPS = (*_REGION_GROUPS_BESIDES_AFRICA, Country.AFRICA)
+_STILL_UNGROUPED = {Country.AM, Country.AZ, Country.MS}
+
+
+def test_africa_is_disjoint_from_the_other_region_groups():
+    for group in _REGION_GROUPS_BESIDES_AFRICA:
+        assert not Country.AFRICA & group
+
+
+def test_every_member_but_the_known_exceptions_has_a_region_group():
+    grouped = frozenset().union(*_REGION_GROUPS)
+    assert set(Country) - grouped == _STILL_UNGROUPED
+
+
 def test_english_speaking_group():
     assert Country.US in Country.ENGLISH_SPEAKING
     assert Country.GB in Country.ENGLISH_SPEAKING

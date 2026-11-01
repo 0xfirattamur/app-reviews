@@ -320,7 +320,8 @@ Country.DE   # "de"
 | `Country.EUROPE` | European countries |
 | `Country.AMERICAS` | North and South America |
 | `Country.ASIA_PACIFIC` | Asia-Pacific region |
-| `Country.MIDDLE_EAST` | Middle East and North Africa |
+| `Country.MIDDLE_EAST` | Middle East, plus the North African storefronts `DZ`, `EG` and `TN` |
+| `Country.AFRICA` | Sub-Saharan Africa and its island states (the North African storefronts are in `MIDDLE_EAST`) |
 | `Country.ENGLISH_SPEAKING` | English-speaking countries |
 
 Each group is a `frozenset[Country]` and can be passed straight to `countries=`,

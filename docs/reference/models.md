@@ -365,7 +365,8 @@ from app_reviews import Country
 | `Country.EUROPE` | European countries. |
 | `Country.AMERICAS` | North and South America. |
 | `Country.ASIA_PACIFIC` | Asia-Pacific region. |
-| `Country.MIDDLE_EAST` | Middle East and North Africa. |
+| `Country.MIDDLE_EAST` | Middle East, plus the North African storefronts `DZ`, `EG` and `TN`. |
+| `Country.AFRICA` | Sub-Saharan Africa and its island states. The North African storefronts are in `MIDDLE_EAST`. |
 | `Country.ENGLISH_SPEAKING` | English-speaking countries. |
 
 Plain strings also work for Apple review storefronts:

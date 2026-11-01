@@ -13,6 +13,9 @@ recent versions are also kept in
 - `Review.key` is the `(store, source, id)` tuple to deduplicate reviews on.
 - `AppVersionEntry.to_dict()` and `AppStoreVersion.to_dict()` return JSON-safe
   dicts with ISO 8601 dates.
+- `Country.AFRICA` groups the Sub-Saharan African storefronts, and
+  `Country.MIDDLE_EAST` is documented as including only `DZ`, `EG` and `TN` from
+  North Africa.
 
 ### Changed
 
