@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 from app_reviews.core import safe_json
@@ -34,6 +34,32 @@ _LOG = logging.getLogger(__name__)
 
 _SOURCE_NAME = "the Google Play Developer API"
 """How both a failed status and a malformed body name this source."""
+
+
+class _RequiredReviewFields(TypedDict):
+    """The ``Review`` fields a Developer API entry must carry to be kept."""
+
+    id: str
+    title: str | None
+    body: str
+    rating: int
+    author_name: str
+    app_version: str | None
+    language: str | None
+    updated_at: datetime
+
+
+class _ReviewEnrichments(TypedDict):
+    """The optional ``Review`` fields; each is None when Play omits or garbles it."""
+
+    developer_reply: ReviewReply | None
+    original_text: str | None
+    device: str | None
+    device_metadata: DeviceMetadata | None
+    thumbs_up_count: int | None
+    thumbs_down_count: int | None
+    app_version_code: int | None
+    android_os_version: int | None
 
 
 _DEVICE_TEXT_FIELDS: dict[str, str] = {
@@ -192,41 +218,18 @@ class GooglePlayOfficialProvider(PooledClient):
         """
         try:
             comment = self._user_comment(entry)
-            review_id = expect_str(entry["reviewId"], "reviewId")
-            title, body = self._text(comment.get("text", ""))
+            required = self._read_required_fields(entry, comment)
+            enrichments = self._read_enrichments(entry, comment, required["id"])
             return Review(
                 store="googleplay",
                 app_id=app_id,
                 # The Developer API reports no storefront or reviewer country.
                 country=None,
-                # No default for starRating: 0 fails Review's 1-5 invariant, so a
-                # default could only ever turn a missing field into a raised error.
-                rating=expect_int(comment["starRating"], "starRating"),
-                title=title,
-                body=body,
-                author_name=expect_str(entry.get("authorName", ""), "authorName"),
-                app_version=optional_str(
-                    comment.get("appVersionName"), "appVersionName"
-                ),
-                language=optional_str(
-                    comment.get("reviewerLanguage"), "reviewerLanguage"
-                ),
-                # The API reports lastModified only; there is no creation date.
-                updated_at=parse_protobuf_timestamp(comment["lastModified"]),
                 source="googleplay_official",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=review_id,
-                # Optional enrichments: an unusable one becomes None rather than
-                # costing the review, so none of these helpers raise.
-                developer_reply=self._read_developer_reply(entry, review_id),
-                original_text=_optional_text(comment.get("originalText")),
-                device=_optional_text(comment.get("device")),
-                device_metadata=_parse_device_metadata(comment.get("deviceMetadata")),
-                thumbs_up_count=optional_count(comment.get("thumbsUpCount")),
-                thumbs_down_count=optional_count(comment.get("thumbsDownCount")),
-                app_version_code=optional_count(comment.get("appVersionCode")),
-                android_os_version=optional_count(comment.get("androidOsVersion")),
+                **required,
+                **enrichments,
             )
         except UNREADABLE_PAYLOAD as exc:
             _LOG.warning(
@@ -236,6 +239,43 @@ class GooglePlayOfficialProvider(PooledClient):
                 exc,
             )
             return None
+
+    def _read_required_fields(self, entry: Any, comment: Any) -> _RequiredReviewFields:
+        """The ``Review`` fields that cannot be invented; raises if any is unusable."""
+        review_id = expect_str(entry["reviewId"], "reviewId")
+        title, body = self._text(comment.get("text", ""))
+        return {
+            "id": review_id,
+            "title": title,
+            "body": body,
+            # No default for starRating: 0 fails Review's 1-5 invariant, so a
+            # default could only ever turn a missing field into a raised error.
+            "rating": expect_int(comment["starRating"], "starRating"),
+            "author_name": expect_str(entry.get("authorName", ""), "authorName"),
+            "app_version": optional_str(
+                comment.get("appVersionName"), "appVersionName"
+            ),
+            "language": optional_str(
+                comment.get("reviewerLanguage"), "reviewerLanguage"
+            ),
+            # The API reports lastModified only; there is no creation date.
+            "updated_at": parse_protobuf_timestamp(comment["lastModified"]),
+        }
+
+    def _read_enrichments(
+        self, entry: Any, comment: Any, review_id: str
+    ) -> _ReviewEnrichments:
+        """The optional ``Review`` fields: an unusable one is None, never raised."""
+        return {
+            "developer_reply": self._read_developer_reply(entry, review_id),
+            "original_text": _optional_text(comment.get("originalText")),
+            "device": _optional_text(comment.get("device")),
+            "device_metadata": _parse_device_metadata(comment.get("deviceMetadata")),
+            "thumbs_up_count": optional_count(comment.get("thumbsUpCount")),
+            "thumbs_down_count": optional_count(comment.get("thumbsDownCount")),
+            "app_version_code": optional_count(comment.get("appVersionCode")),
+            "android_os_version": optional_count(comment.get("androidOsVersion")),
+        }
 
     def _text(self, value: Any) -> tuple[str | None, str]:
         """Map Play's text, including its documented legacy title separator."""

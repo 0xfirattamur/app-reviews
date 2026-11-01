@@ -237,51 +237,63 @@ class AppStoreSearch(PooledClient):
         return search_entries
 
     def _parse_metadata(self, search_entry: Any) -> AppMetadata | None:
-        """Map one iTunes result, or None if it carries no usable id.
-
-        ``app_id`` is the numeric ``trackId`` because the review APIs key off the
-        track id, not the bundle id. Without either, there is nothing to look the
-        app up by later, so the result is dropped rather than given an invented id.
-        """
-        if not isinstance(search_entry, dict):
-            _LOG.warning(
-                "Skipped an iTunes result: expected an object, got %s",
-                type(search_entry).__name__,
-            )
+        """Map one iTunes result, or None if it carries no usable id."""
+        app_id = _read_app_id(search_entry)
+        if app_id is None:
             return None
+        return _build_metadata(search_entry, app_id)
 
-        track_id = scraped_text(search_entry.get("trackId"))
-        app_id = track_id or scraped_text(search_entry.get("bundleId"))
-        if not app_id:
-            # The keys, not the object: the body is remote content and an
-            # unbounded amount of it does not belong in a log line.
-            _LOG.warning(
-                "Skipped an iTunes result: no trackId or bundleId. Keys: %s",
-                sorted(search_entry)[:_MAX_LOGGED_KEYS],
-            )
-            return None
 
-        return AppMetadata(
-            app_id=app_id,
-            store="appstore",
-            name=scraped_text(search_entry.get("trackName")) or UNKNOWN,
-            developer=scraped_text(search_entry.get("artistName")) or UNKNOWN,
-            category=scraped_text(search_entry.get("primaryGenreName")) or UNKNOWN,
-            price=scraped_text(search_entry.get("formattedPrice")) or UNKNOWN,
-            version=scraped_text(search_entry.get("version")) or UNKNOWN,
-            rating=scraped_rating(search_entry.get("averageUserRating")),
-            rating_count=scraped_rating_count(search_entry.get("userRatingCount")),
-            url=scraped_text(search_entry.get("trackViewUrl"))
-            or f"https://apps.apple.com/app/id{app_id}",
-            icon_url=scraped_text(search_entry.get("artworkUrl512")),
-            # Both arrive in the same result dict as ``version``, on every search
-            # and lookup, so reading them costs no extra request.
-            current_version_release_date=scraped_datetime(
-                search_entry.get("currentVersionReleaseDate")
-            ),
-            first_release_date=scraped_datetime(search_entry.get("releaseDate")),
-            release_notes=scraped_text(search_entry.get("releaseNotes")),
+def _read_app_id(search_entry: Any) -> str | None:
+    """The id to key one iTunes result by, or None (logged) if it has none.
+
+    ``app_id`` is the numeric ``trackId`` because the review APIs key off the
+    track id, not the bundle id. Without either, there is nothing to look the
+    app up by later, so the result is dropped rather than given an invented id.
+    """
+    if not isinstance(search_entry, dict):
+        _LOG.warning(
+            "Skipped an iTunes result: expected an object, got %s",
+            type(search_entry).__name__,
         )
+        return None
+
+    track_id = scraped_text(search_entry.get("trackId"))
+    app_id = track_id or scraped_text(search_entry.get("bundleId"))
+    if not app_id:
+        # The keys, not the object: the body is remote content and an
+        # unbounded amount of it does not belong in a log line.
+        _LOG.warning(
+            "Skipped an iTunes result: no trackId or bundleId. Keys: %s",
+            sorted(search_entry)[:_MAX_LOGGED_KEYS],
+        )
+        return None
+    return app_id
+
+
+def _build_metadata(search_entry: dict[str, Any], app_id: str) -> AppMetadata:
+    """The metadata of one iTunes result; each field degrades alone if unusable."""
+    return AppMetadata(
+        app_id=app_id,
+        store="appstore",
+        name=scraped_text(search_entry.get("trackName")) or UNKNOWN,
+        developer=scraped_text(search_entry.get("artistName")) or UNKNOWN,
+        category=scraped_text(search_entry.get("primaryGenreName")) or UNKNOWN,
+        price=scraped_text(search_entry.get("formattedPrice")) or UNKNOWN,
+        version=scraped_text(search_entry.get("version")) or UNKNOWN,
+        rating=scraped_rating(search_entry.get("averageUserRating")),
+        rating_count=scraped_rating_count(search_entry.get("userRatingCount")),
+        url=scraped_text(search_entry.get("trackViewUrl"))
+        or f"https://apps.apple.com/app/id{app_id}",
+        icon_url=scraped_text(search_entry.get("artworkUrl512")),
+        # Both arrive in the same result dict as ``version``, on every search
+        # and lookup, so reading them costs no extra request.
+        current_version_release_date=scraped_datetime(
+            search_entry.get("currentVersionReleaseDate")
+        ),
+        first_release_date=scraped_datetime(search_entry.get("releaseDate")),
+        release_notes=scraped_text(search_entry.get("releaseNotes")),
+    )
 
 
 def _is_track_id(app_id: str) -> bool:

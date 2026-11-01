@@ -232,13 +232,7 @@ class AppStoreOfficialProvider(PooledClient):
         invented, so an unusable one costs the review. Everything else degrades.
         """
         try:
-            review_id = entry["id"]
-            attributes = entry["attributes"]
-            if not review_id:
-                raise ValueError("no id, which deduplication keys on")
-            if not attributes.get("createdDate"):
-                raise ValueError("no createdDate")
-
+            review_id, attributes = _read_required_fields(entry)
             return Review(
                 store="appstore",
                 app_id=app_id,
@@ -258,14 +252,7 @@ class AppStoreOfficialProvider(PooledClient):
                 ),
             )
         except UNREADABLE_PAYLOAD as exc:
-            # The id, never the entry: an entry carries reviewerNickname, title
-            # and body, which do not belong in a log line.
-            _LOG.warning(
-                "Skipped review %r for app %s: %s",
-                log_safe_id(entry, "id"),
-                app_id,
-                exc,
-            )
+            _log_skipped_review(entry, app_id, exc)
             return None
 
     def _read_developer_reply(
@@ -315,3 +302,29 @@ def _trim_text(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _read_required_fields(entry: Any) -> tuple[str, dict[str, Any]]:
+    """The review id and attributes, if the entry has the ones it cannot do without.
+
+    ``id`` keys deduplication and ``createdDate`` cannot be invented, so an entry
+    lacking either raises rather than being given a stand-in.
+    """
+    review_id = entry["id"]
+    attributes = entry["attributes"]
+    if not review_id:
+        raise ValueError("no id, which deduplication keys on")
+    if not attributes.get("createdDate"):
+        raise ValueError("no createdDate")
+    return review_id, attributes
+
+
+def _log_skipped_review(entry: Any, app_id: str, exc: Exception) -> None:
+    """Warn that a review was dropped, naming its id and never the entry.
+
+    An entry carries reviewerNickname, title and body, which do not belong in a
+    log line.
+    """
+    _LOG.warning(
+        "Skipped review %r for app %s: %s", log_safe_id(entry, "id"), app_id, exc
+    )
