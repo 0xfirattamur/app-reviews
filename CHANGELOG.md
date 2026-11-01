@@ -54,6 +54,9 @@ recent versions are also kept in
 - `reply()` and `areply()` on `AppStoreReplies` and `GooglePlayReplies` now
   raise `ReplyOutcomeUnknownError` for HTTP 408 and 425 instead of
   `ReplyRejectedError`, since the store may have applied the write.
+- `ReviewReply.updated_at` is now timezone-aware for App Store Connect replies
+  whose `lastModifiedDate` carries no offset, read as UTC like `Review`
+  timestamps.
 
 ## [1.3.0] - 2026-10-25
 
