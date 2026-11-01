@@ -285,6 +285,7 @@ class TestStructuredSerialization:
         serialised = result.to_dict()
 
         assert serialised == {
+            "schema_version": 1,
             "reviews": [make_review().to_dict()],
             "outcomes": [outcome.to_dict()],
             "errors": [error.to_dict()],

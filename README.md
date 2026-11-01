@@ -213,7 +213,8 @@ exceptions such as `RateLimitError`, `RequestError`, `NotFoundError`, and
 ## JSON, JSONL, and CSV
 
 Use `result.to_dict()` when diagnostics matter. It returns the full JSON-safe
-envelope: `reviews`, `outcomes`, `errors`, and `skipped_reviews`. Use
+envelope: `schema_version`, `reviews`, `outcomes`, `errors`, and
+`skipped_reviews`. Use
 `result.to_dicts()` only when review rows are all you need. Provider `raw`
 payloads are omitted unless `include_raw=True`.
 

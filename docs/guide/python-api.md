@@ -380,7 +380,8 @@ if result.errors:
 ### Serialise
 
 `to_dict()` gives you the complete JSON-safe result envelope, including errors,
-outcomes and skipped-record counts. `to_dicts()` is the compatibility helper for
+outcomes and skipped-record counts, led by `"schema_version"` (currently `1`) so
+stored copies stay identifiable. `to_dicts()` is the compatibility helper for
 review rows only. Provider payloads (`raw`) are left out unless you ask for them:
 
 ```python

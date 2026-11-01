@@ -19,6 +19,8 @@ recent versions are also kept in
 - Cursors from `fetch_page` and `iter_pages` now record their app, country and
   client settings, and resuming one under different settings raises `ValueError`
   before any request is sent; cursors saved by 1.3 still work.
+- `FetchResult.to_dict()` now starts with `"schema_version": 1`, so a stored
+  envelope can be told apart if its shape changes.
 
 ### Changed
 

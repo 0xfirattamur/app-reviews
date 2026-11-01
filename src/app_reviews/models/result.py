@@ -19,6 +19,11 @@ from app_reviews.models.types import (
     StopReason,
 )
 
+ENVELOPE_SCHEMA_VERSION = 1
+"""The ``"schema_version"`` ``FetchResult.to_dict`` writes, so a consumer that
+stored an envelope can tell which shape it holds. Bump it when a key is removed
+or changes meaning; adding a key does not."""
+
 
 @dataclass(frozen=True, slots=True)
 class FetchError:
@@ -213,9 +218,11 @@ class FetchResult:
 
         ``to_dicts`` remains the compatibility API for callers that only need
         review rows. This envelope also preserves diagnostics so an empty
-        success cannot be confused with a provider failure.
+        success cannot be confused with a provider failure. The first key,
+        ``"schema_version"``, versions the envelope for stored copies.
         """
         return {
+            "schema_version": ENVELOPE_SCHEMA_VERSION,
             "reviews": self.to_dicts(include_raw=include_raw),
             "outcomes": [outcome.to_dict() for outcome in self.outcomes],
             "errors": [error.to_dict() for error in self.errors],

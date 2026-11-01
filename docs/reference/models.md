@@ -122,7 +122,7 @@ from app_reviews import FetchResult
 | `sort(order)` | `FetchResult` | Return a new sorted `FetchResult`. |
 | `limit(n)` | `FetchResult` | Return a new `FetchResult` truncated to `n` reviews. |
 | `to_dicts(include_raw=False)` | `list[dict]` | JSON-serialisable plain dicts: ISO 8601 timestamps, `raw` omitted unless asked. |
-| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `reviews`, `outcomes`, `errors`, `xml_fallback_errors`, and `skipped_reviews`. |
+| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `schema_version` (currently `1`; it changes only when a key is removed or changes meaning), `reviews`, `outcomes`, `errors`, `xml_fallback_errors`, and `skipped_reviews`. |
 
 Use `FetchResult.to_dict(include_raw=False)` for automation and persistence when
 the difference between an empty success and a failed fetch matters. Use
