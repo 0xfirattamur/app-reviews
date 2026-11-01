@@ -59,6 +59,9 @@ recent versions are also kept in
   timestamps.
 - `GooglePlaySearch` and `AppStoreSearch.version_history()` now parse a page
   full of unclosed script markers in linear time instead of stalling.
+- `aiter_reviews()` and `aiter_pages()` close their inner page walks as soon as
+  a `limit` or an early `break` ends the stream, instead of leaving them to the
+  event loop.
 
 ## [1.3.0] - 2026-10-25
 
