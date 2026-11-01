@@ -27,10 +27,6 @@ def _client(handler=_ok, **kwargs):
     return HttpClient(transport=httpx.MockTransport(handler), **kwargs)
 
 
-async def _fake_asleep(_delay: float) -> None:
-    return None
-
-
 class TestConnectionReuse:
     def test_many_requests_share_one_pool(self):
         with patch("app_reviews.core.http.httpx.Client", wraps=httpx.Client) as spy:
@@ -113,8 +109,7 @@ class TestPost:
 class TestRetryIsOwnedByTheClient:
     """Retry config is HttpClient state, not a per-call argument."""
 
-    def test_retries_a_retryable_status(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+    def test_retries_a_retryable_status(self, no_sleep):
         attempts = []
 
         def handler(request):
@@ -128,8 +123,7 @@ class TestRetryIsOwnedByTheClient:
         assert len(attempts) == 3
         assert resp.status == 503
 
-    async def test_async_retries_a_retryable_status(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.core.http.asyncio.sleep", _fake_asleep)
+    async def test_async_retries_a_retryable_status(self, no_sleep):
         attempts = []
 
         def handler(request):
@@ -360,12 +354,10 @@ class TestCredentialsDoNotFollowRedirectsOffOrigin:
         assert HttpClient()._pool().follow_redirects is True
 
 
-def _slept(handler, retry, monkeypatch, *, url="https://example.test/x"):
+def _slept(handler, retry, no_sleep, *, url="https://example.test/x"):
     """Every delay the client would have slept for, without sleeping."""
-    delays: list[float] = []
-    monkeypatch.setattr("app_reviews.core.http.time.sleep", delays.append)
     _client(handler, retry=retry).get(url)
-    return delays
+    return no_sleep
 
 
 def _throttling(times: int, retry_after: str | None):
@@ -389,54 +381,54 @@ class TestRetryAfterIsHonoured:
     ban, so the header wins over the exponential schedule.
     """
 
-    def test_a_delay_in_seconds_is_used(self, monkeypatch):
+    def test_a_delay_in_seconds_is_used(self, no_sleep):
         delays = _slept(
             _throttling(1, "30"),
             RetryConfig(max_retries=3, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [30.0]
 
-    def test_it_beats_the_exponential_schedule(self, monkeypatch):
+    def test_it_beats_the_exponential_schedule(self, no_sleep):
         delays = _slept(
             _throttling(2, "5"),
             RetryConfig(max_retries=3, backoff_factor=0.5, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [5.0, 5.0]
 
-    def test_an_absurd_delay_is_capped(self, monkeypatch):
+    def test_an_absurd_delay_is_capped(self, no_sleep):
         """A header cannot park a request for a day."""
         delays = _slept(
             _throttling(1, "86400"),
             RetryConfig(max_retries=3, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [60.0]
 
     @pytest.mark.parametrize("value", ["soon", "", "  ", "not-a-date", "nan", "NaN"])
-    def test_an_unusable_value_falls_back_to_the_schedule(self, value, monkeypatch):
+    def test_an_unusable_value_falls_back_to_the_schedule(self, value, no_sleep):
         delays = _slept(
             _throttling(1, value),
             RetryConfig(max_retries=3, backoff_factor=0.5, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [0.5]
 
-    def test_a_negative_delay_means_now(self, monkeypatch):
+    def test_a_negative_delay_means_now(self, no_sleep):
         delays = _slept(
             _throttling(1, "-10"),
             RetryConfig(max_retries=3, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [0.0]
 
-    def test_nan_does_not_read_as_now(self, monkeypatch):
+    def test_nan_does_not_read_as_now(self, no_sleep):
         """``float("nan")`` parses, so it reached the clamp, and every
         comparison against NaN is False, so ``max(0.0, nan)`` is ``0.0``. A
         throttled client then retried with no backoff at all, which is the
@@ -445,37 +437,37 @@ class TestRetryAfterIsHonoured:
         delays = _slept(
             _throttling(3, "nan"),
             RetryConfig(max_retries=3, backoff_factor=0.5, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [0.5, 1.0, 2.0]
 
-    def test_an_infinite_delay_is_still_capped(self, monkeypatch):
+    def test_an_infinite_delay_is_still_capped(self, no_sleep):
         """``inf`` names an instant, just an absurd one, so it caps like 86400
         rather than falling back. Waiting longer is the safe error for a 429."""
         delays = _slept(
             _throttling(1, "inf"),
             RetryConfig(max_retries=3, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [60.0]
 
-    def test_an_http_date_is_accepted(self, monkeypatch):
+    def test_an_http_date_is_accepted(self, no_sleep):
         """RFC 9110 allows a date as well as a delay. A past one means "now"."""
         delays = _slept(
             _throttling(1, "Wed, 21 Oct 2015 07:28:00 GMT"),
             RetryConfig(max_retries=3, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [0.0]
 
-    def test_no_header_uses_the_exponential_schedule(self, monkeypatch):
+    def test_no_header_uses_the_exponential_schedule(self, no_sleep):
         delays = _slept(
             _throttling(2, None),
             RetryConfig(max_retries=3, backoff_factor=0.5, max_backoff=60),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [0.5, 1.0]
@@ -495,11 +487,11 @@ class TestBackoffIsCapped:
 
         assert policy.get_delay(19) <= RetryConfig().max_backoff
 
-    def test_a_long_schedule_never_exceeds_the_cap(self, monkeypatch):
+    def test_a_long_schedule_never_exceeds_the_cap(self, no_sleep):
         delays = _slept(
             _throttling(5, None),
             RetryConfig(max_retries=6, backoff_factor=10, max_backoff=25),
-            monkeypatch,
+            no_sleep,
         )
 
         assert delays == [10.0, 20.0, 25.0, 25.0, 25.0]
@@ -627,8 +619,7 @@ class TestAPermanentlyInvalidUrlIsNotRetried:
         assert response.status == 0
         assert time.monotonic() - started < 0.1
 
-    def test_a_real_transport_failure_is_still_retried(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+    def test_a_real_transport_failure_is_still_retried(self, no_sleep):
         attempts = []
 
         def handler(request):

@@ -207,9 +207,8 @@ class TestErrorClassification:
         assert page.error.retryable is True
         assert "access may be blocked or throttled" in page.error.message
 
-    def test_403_is_not_retried_in_package(self, monkeypatch):
+    def test_403_is_not_retried_in_package(self, no_sleep):
         """Retrying a blocked storefront only extends the block."""
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
         attempts = []
 
         def handler(request):
@@ -226,18 +225,8 @@ class TestErrorClassification:
         assert len(attempts) == 1
 
     def test_blocked_storefront_fails_alone_and_pauses_the_shared_limiter(
-        self, monkeypatch
+        self, fake_clock
     ):
-        now = [0.0]
-        slept: list[float] = []
-
-        def fake_sleep(seconds: float) -> None:
-            slept.append(seconds)
-            now[0] += seconds
-
-        monkeypatch.setattr("app_reviews.core.ratelimit.monotonic", lambda: now[0])
-        monkeypatch.setattr("app_reviews.core.ratelimit.sleep", fake_sleep)
-
         def handler(request):
             if "/gb/" in request.url.path:
                 return httpx.Response(403, text="")
@@ -264,7 +253,7 @@ class TestErrorClassification:
         )
 
         limiter.acquire()
-        assert sum(slept) == pytest.approx(30.0)
+        assert fake_clock.waited() == pytest.approx(30.0)
 
     def test_malformed_json_is_a_parse_error(self):
         def handler(request):

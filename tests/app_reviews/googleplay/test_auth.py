@@ -194,8 +194,7 @@ class TestGoogleAuthAuthorizationHeader:
 
         assert calls == ["https://oauth2.googleapis.com/token"]
 
-    def test_retry_config_on_the_pool_governs_the_exchange(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
+    def test_retry_config_on_the_pool_governs_the_exchange(self, no_sleep):
         attempts = []
 
         def handler(_request):

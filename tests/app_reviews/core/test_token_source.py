@@ -29,30 +29,14 @@ def _creds() -> ConnectCredentials:
     )
 
 
-class _Clock:
-    """A movable stand-in for ``time.time``."""
-
-    def __init__(self, now: float = 1_800_000_000.0) -> None:
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
 class TestConnectAuthCaches:
-    def test_a_fresh_token_is_reused(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", _Clock())
+    def test_a_fresh_token_is_reused(self, fake_clock):
         auth = ConnectAuth(_creds())
 
         assert auth.authorization_header() == auth.authorization_header()
 
-    def test_the_pem_is_parsed_once_not_per_token(self, monkeypatch):
+    def test_the_pem_is_parsed_once_not_per_token(self, monkeypatch, fake_clock):
         """Two tokens, one PEM parse: the expensive part is the key, not the sign."""
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock)
         parses = []
         import app_reviews.appstore.auth as mod
 
@@ -65,35 +49,30 @@ class TestConnectAuthCaches:
         monkeypatch.setattr(mod, "load_ec_private_key_from_pem", spy)
         auth = ConnectAuth(_creds())
         first = auth.authorization_header()
-        clock.advance(TOKEN_EXPIRY_SECONDS)
+        fake_clock.advance(TOKEN_EXPIRY_SECONDS)
         second = auth.authorization_header()
 
         assert first != second  # a second token really was minted
         assert len(parses) == 1
 
-    def test_an_expiring_token_is_re_minted(self, monkeypatch):
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock)
+    def test_an_expiring_token_is_re_minted(self, fake_clock):
         auth = ConnectAuth(_creds())
         first = auth.authorization_header()
 
-        clock.advance(TOKEN_EXPIRY_SECONDS)
+        fake_clock.advance(TOKEN_EXPIRY_SECONDS)
 
         assert auth.authorization_header() != first
 
-    def test_it_refreshes_before_expiry_not_after(self, monkeypatch):
+    def test_it_refreshes_before_expiry_not_after(self, fake_clock):
         """A request starting a second before exp would arrive already stale."""
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock)
         auth = ConnectAuth(_creds())
         first = auth.authorization_header()
 
-        clock.advance(TOKEN_EXPIRY_SECONDS - 5)
+        fake_clock.advance(TOKEN_EXPIRY_SECONDS - 5)
 
         assert auth.authorization_header() != first
 
-    async def test_the_async_twin_returns_the_same_token(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", _Clock())
+    async def test_the_async_twin_returns_the_same_token(self, fake_clock):
         auth = ConnectAuth(_creds())
 
         assert await auth.aauthorization_header() == auth.authorization_header()
@@ -121,8 +100,7 @@ class TestGoogleAuthCaches:
                 **kw,
             )
 
-    def test_one_exchange_serves_repeated_calls(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.googleplay.auth.time.time", _Clock())
+    def test_one_exchange_serves_repeated_calls(self, fake_clock):
         exchanges = []
 
         def handler(_r):
@@ -135,9 +113,7 @@ class TestGoogleAuthCaches:
 
         assert len(exchanges) == 1
 
-    def test_expires_in_drives_the_refresh(self, monkeypatch):
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.googleplay.auth.time.time", clock)
+    def test_expires_in_drives_the_refresh(self, fake_clock):
         exchanges = []
 
         def handler(_r):
@@ -148,14 +124,13 @@ class TestGoogleAuthCaches:
 
         auth = self._auth(handler)
         first = auth.authorization_header()
-        clock.advance(100)
+        fake_clock.advance(100)
         second = auth.authorization_header()
 
         assert len(exchanges) == 2
         assert first != second
 
-    async def test_the_async_path_shares_the_cache(self, monkeypatch):
-        monkeypatch.setattr("app_reviews.googleplay.auth.time.time", _Clock())
+    async def test_the_async_path_shares_the_cache(self, fake_clock):
         exchanges = []
 
         def handler(_r):
@@ -256,12 +231,10 @@ class TestTheClockIsReadOnce:
     what the object believes about its token can drift from what it signed.
     """
 
-    def test_the_local_expiry_matches_the_signed_exp(self, monkeypatch):
+    def test_the_local_expiry_matches_the_signed_exp(self, fake_clock):
         import base64
         import json
 
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock)
         auth = ConnectAuth(_creds())
         header = auth.authorization_header()
 
@@ -273,16 +246,14 @@ class TestTheClockIsReadOnce:
 
         assert auth._expires_at == signed_exp - REFRESH_MARGIN_SECONDS
 
-    def test_it_stops_using_the_token_before_apple_would_reject_it(self, monkeypatch):
+    def test_it_stops_using_the_token_before_apple_would_reject_it(self, fake_clock):
         from app_reviews.appstore.auth import REFRESH_MARGIN_SECONDS
 
-        clock = _Clock()
-        monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock)
         auth = ConnectAuth(_creds())
         first = auth.authorization_header()
 
-        clock.advance(TOKEN_EXPIRY_SECONDS - REFRESH_MARGIN_SECONDS - 1)
+        fake_clock.advance(TOKEN_EXPIRY_SECONDS - REFRESH_MARGIN_SECONDS - 1)
         assert auth.authorization_header() == first  # still inside the margin
 
-        clock.advance(2)
+        fake_clock.advance(2)
         assert auth.authorization_header() != first  # margin crossed

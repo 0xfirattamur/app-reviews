@@ -20,40 +20,6 @@ from app_reviews import (
 )
 
 
-class _Clock:
-    """Stands in for the limiter's clock and sleeps: sleeping advances time."""
-
-    def __init__(self) -> None:
-        self.now = 1000.0
-        self.slept: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.now += seconds
-
-    async def asleep(self, seconds: float) -> None:
-        self.sleep(seconds)
-
-    def waited(self) -> float:
-        """Total slept since the last call."""
-        total = sum(self.slept)
-        self.slept.clear()
-        return total
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    fake = _Clock()
-    monkeypatch.setattr("app_reviews.core.ratelimit.monotonic", fake.monotonic)
-    monkeypatch.setattr("app_reviews.core.ratelimit.sleep", fake.sleep)
-    monkeypatch.setattr("app_reviews.core.ratelimit.asleep", fake.asleep)
-    monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
-    return fake
-
-
 def _http(handler, limiter, **kwargs):
     return HttpClient(
         transport=httpx.MockTransport(handler), rate_limiter=limiter, **kwargs
@@ -72,44 +38,44 @@ def _answer(*statuses, headers=None):
 
 
 class TestTokenBucket:
-    def test_burst_passes_at_once_then_paces_at_rate(self, clock):
+    def test_burst_passes_at_once_then_paces_at_rate(self, fake_clock):
         limiter = RateLimiter(rate=2, burst=3)
 
         for _ in range(3):
             limiter.acquire()
-        assert clock.waited() == 0
+        assert fake_clock.waited() == 0
 
         limiter.acquire()
-        assert clock.waited() == pytest.approx(0.5)
+        assert fake_clock.waited() == pytest.approx(0.5)
 
-    def test_idle_time_refills_only_up_to_burst(self, clock):
+    def test_idle_time_refills_only_up_to_burst(self, fake_clock):
         limiter = RateLimiter(rate=1, burst=2)
         limiter.acquire()
         limiter.acquire()
 
-        clock.now += 100
+        fake_clock.advance(100)
         limiter.acquire()
         limiter.acquire()
-        assert clock.waited() == 0
+        assert fake_clock.waited() == 0
 
         limiter.acquire()
-        assert clock.waited() == pytest.approx(1.0)
+        assert fake_clock.waited() == pytest.approx(1.0)
 
-    async def test_sync_and_async_holders_draw_from_one_bucket(self, clock):
+    async def test_sync_and_async_holders_draw_from_one_bucket(self, fake_clock):
         limiter = RateLimiter(rate=1)
         limiter.acquire()
 
         await limiter.aacquire()
 
-        assert clock.waited() == pytest.approx(1.0)
+        assert fake_clock.waited() == pytest.approx(1.0)
 
-    async def test_concurrent_tasks_are_spaced_by_the_rate(self, clock):
+    async def test_concurrent_tasks_are_spaced_by_the_rate(self, fake_clock):
         limiter = RateLimiter(rate=1)
         granted: list[float] = []
 
         async def take() -> None:
             await limiter.aacquire()
-            granted.append(clock.now)
+            granted.append(fake_clock.now)
 
         await asyncio.gather(*(take() for _ in range(5)))
 
@@ -151,40 +117,40 @@ class TestTokenBucket:
 
 
 class TestPenalize:
-    def test_pause_holds_every_token_until_it_ends(self, clock):
+    def test_pause_holds_every_token_until_it_ends(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
 
         limiter.penalize(10)
         limiter.acquire()
 
-        assert clock.waited() == pytest.approx(10.0)
+        assert fake_clock.waited() == pytest.approx(10.0)
 
-    def test_a_shorter_penalty_never_shortens_a_longer_pause(self, clock):
+    def test_a_shorter_penalty_never_shortens_a_longer_pause(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
 
         limiter.penalize(60)
         limiter.penalize(5)
         limiter.acquire()
 
-        assert clock.waited() == pytest.approx(60.0)
+        assert fake_clock.waited() == pytest.approx(60.0)
 
-    def test_a_later_penalty_extends_the_pause_from_now(self, clock):
+    def test_a_later_penalty_extends_the_pause_from_now(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
         limiter.penalize(5)
-        clock.now += 2
+        fake_clock.advance(2)
 
         limiter.penalize(10)
         limiter.acquire()
 
-        assert clock.waited() == pytest.approx(10.0)
+        assert fake_clock.waited() == pytest.approx(10.0)
 
-    async def test_async_holders_wait_out_the_pause(self, clock):
+    async def test_async_holders_wait_out_the_pause(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
 
         limiter.penalize(7)
         await limiter.aacquire()
 
-        assert clock.waited() == pytest.approx(7.0)
+        assert fake_clock.waited() == pytest.approx(7.0)
 
 
 class TestValidation:
@@ -219,7 +185,7 @@ class TestValidation:
 
 
 class TestHttpClientWithLimiter:
-    def test_every_attempt_takes_a_token_including_retries(self, clock):
+    def test_every_attempt_takes_a_token_including_retries(self, fake_clock):
         limiter = RateLimiter(rate=1)
         http = _http(
             _answer(503, 503),
@@ -230,11 +196,11 @@ class TestHttpClientWithLimiter:
         response = http.get("https://example.test/x")
 
         assert response.status == 200
-        assert clock.slept == pytest.approx([1.0, 1.0])
+        assert fake_clock.slept == pytest.approx([1.0, 1.0])
 
     @pytest.mark.parametrize("status", [429, 403])
     def test_throttled_answer_pauses_every_client_sharing_the_limiter(
-        self, clock, status
+        self, fake_clock, status
     ):
         limiter = RateLimiter(rate=100, burst=100)
         throttled = _http(_answer(status), limiter)
@@ -243,39 +209,41 @@ class TestHttpClientWithLimiter:
         throttled.get("https://example.test/x")
         sibling.get("https://example.test/y")
 
-        assert clock.waited() == pytest.approx(30.0)
+        assert fake_clock.waited() == pytest.approx(30.0)
 
-    def test_retry_after_sets_the_pause(self, clock):
+    def test_retry_after_sets_the_pause(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
         http = _http(_answer(429, headers={"Retry-After": "120"}), limiter)
 
         http.get("https://example.test/x")
         http.get("https://example.test/x")
 
-        assert clock.waited() == pytest.approx(120.0)
+        assert fake_clock.waited() == pytest.approx(120.0)
 
-    def test_retry_after_is_capped_at_max_penalty(self, clock):
+    def test_retry_after_is_capped_at_max_penalty(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100, max_penalty=300)
         http = _http(_answer(429, headers={"Retry-After": "86400"}), limiter)
 
         http.get("https://example.test/x")
         http.get("https://example.test/x")
 
-        assert clock.waited() == pytest.approx(300.0)
+        assert fake_clock.waited() == pytest.approx(300.0)
 
-    def test_pause_doubles_per_consecutive_throttle_and_success_resets_it(self, clock):
+    def test_pause_doubles_per_consecutive_throttle_and_success_resets_it(
+        self, fake_clock
+    ):
         limiter = RateLimiter(rate=100, burst=100, initial_penalty=30, max_penalty=100)
         http = _http(_answer(403, 403, 403, 200, 403), limiter)
         waits = []
 
         for _ in range(6):
             http.get("https://example.test/x")
-            waits.append(clock.waited())
+            waits.append(fake_clock.waited())
 
         # Each wait is paid by the request after the throttled one.
         assert waits == pytest.approx([0, 30, 60, 100, 0, 30])
 
-    def test_penalty_ignores_the_retry_configs_max_backoff(self, clock):
+    def test_penalty_ignores_the_retry_configs_max_backoff(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
         http = _http(
             _answer(403), limiter, retry=RetryConfig(max_backoff=5, retry_on=(503,))
@@ -284,7 +252,7 @@ class TestHttpClientWithLimiter:
         http.get("https://example.test/x")
         http.get("https://example.test/x")
 
-        assert clock.waited() == pytest.approx(30.0)
+        assert fake_clock.waited() == pytest.approx(30.0)
 
     @pytest.mark.parametrize(
         "request_with_credential",
@@ -301,7 +269,7 @@ class TestHttpClientWithLimiter:
         ],
     )
     def test_403_on_a_credentialed_request_does_not_pause(
-        self, clock, request_with_credential
+        self, fake_clock, request_with_credential
     ):
         limiter = RateLimiter(rate=100, burst=100)
         http = _http(_answer(403), limiter)
@@ -309,25 +277,25 @@ class TestHttpClientWithLimiter:
         request_with_credential(http)
         http.get("https://example.test/x")
 
-        assert clock.waited() == 0
+        assert fake_clock.waited() == 0
 
-    def test_other_failures_do_not_pause(self, clock):
+    def test_other_failures_do_not_pause(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
         http = _http(_answer(404, 500, 401), limiter)
 
         for _ in range(4):
             http.get("https://example.test/x")
 
-        assert clock.waited() == 0
+        assert fake_clock.waited() == 0
 
-    async def test_async_requests_take_tokens_and_honour_the_pause(self, clock):
+    async def test_async_requests_take_tokens_and_honour_the_pause(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100)
         http = _http(_answer(429), limiter)
 
         await http.aget("https://example.test/x")
         await http.apost("https://example.test/y", body="")
 
-        assert clock.waited() == pytest.approx(30.0)
+        assert fake_clock.waited() == pytest.approx(30.0)
         await http.aclose()
 
 
@@ -349,13 +317,12 @@ class _RecordingLimiter:
 
 
 class TestACustomLimiter:
-    def test_is_asked_before_each_attempt_and_told_each_response(self, monkeypatch):
+    def test_is_asked_before_each_attempt_and_told_each_response(self, no_sleep):
         answers = [
             httpx.Response(503, text=""),
             httpx.Response(429, text="", headers={"Retry-After": "7"}),
             httpx.Response(200, text=""),
         ]
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
         limiter = _RecordingLimiter()
         http = _http(
             lambda _request: answers.pop(0),
@@ -419,7 +386,7 @@ class TestACustomLimiter:
         [AppStoreReviews, GooglePlayReviews, AppStoreSearch, GooglePlaySearch],
     )
     def test_every_client_hands_it_the_throttled_response(
-        self, monkeypatch, client_cls
+        self, monkeypatch, client_cls, no_sleep
     ):
         def throttled(_transport, request):
             return httpx.Response(
@@ -427,7 +394,6 @@ class TestACustomLimiter:
             )
 
         monkeypatch.setattr(httpx.HTTPTransport, "handle_request", throttled)
-        monkeypatch.setattr("app_reviews.core.http.time.sleep", lambda _d: None)
         limiter = _RecordingLimiter()
 
         with (
@@ -455,7 +421,7 @@ class TestClientsShareOneLimiter:
         [AppStoreReviews, GooglePlayReviews, AppStoreSearch, GooglePlaySearch],
     )
     def test_a_throttled_client_pauses_the_limiter_it_was_given(
-        self, clock, monkeypatch, client_cls
+        self, fake_clock, monkeypatch, client_cls
     ):
         def blocked(_transport, request):
             return httpx.Response(403, text="", request=request)
@@ -470,7 +436,7 @@ class TestClientsShareOneLimiter:
             _request(client)
         limiter.acquire()
 
-        assert clock.waited() == pytest.approx(30.0)
+        assert fake_clock.waited() == pytest.approx(30.0)
 
     def test_rate_limiter_alongside_http_is_refused(self):
         with pytest.raises(TypeError, match="rate_limiter"):
