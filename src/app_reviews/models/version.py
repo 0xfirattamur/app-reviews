@@ -30,7 +30,9 @@ class AppStoreVersion:
     ``"READY_FOR_DISTRIBUTION"`` once it is on the store, otherwise a stage such
     as ``"PREPARE_FOR_SUBMISSION"`` or ``"WAITING_FOR_REVIEW"``.
     ``release_notes`` maps each locale (``"en-US"``) to its ``whatsNew`` text;
-    locales without one are left out.
+    locales without one are left out. The dict is part of equality but not of
+    the hash (a dict cannot be hashed), so the model is hashable and equal
+    versions still hash equal.
     """
 
     version_id: str
@@ -40,7 +42,7 @@ class AppStoreVersion:
     release_type: str | None
     created_at: datetime | None
     earliest_release_date: datetime | None
-    release_notes: dict[str, str] = field(default_factory=dict)
+    release_notes: dict[str, str] = field(default_factory=dict, hash=False)
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-safe plain dict of every field, with dates as ISO 8601."""

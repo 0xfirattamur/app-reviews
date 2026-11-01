@@ -238,3 +238,32 @@ class TestKey:
         first = make_review(id="1")
         again = make_review(id="1", rating=1)
         assert len({first.key, again.key}) == 1
+
+
+class TestEqualityAndHashing:
+    def test_refetched_review_is_equal_despite_raw_and_fetch_time(self):
+        first = make_review(raw={"n": 1}, fetched_at=datetime(2024, 1, 1, tzinfo=UTC))
+        again = make_review(raw={"n": 2}, fetched_at=datetime(2025, 1, 1, tzinfo=UTC))
+        assert first == again
+        assert hash(first) == hash(again)
+
+    def test_set_deduplicates_refetched_reviews(self):
+        fetched = [make_review(id="1", raw={"a": 1}), make_review(id="2", raw=[1])]
+        refetched = [make_review(id="1", raw={"a": 2}), make_review(id="2", raw=[2])]
+        assert len(set(fetched + refetched)) == 2
+
+    def test_a_different_body_is_a_different_review(self):
+        assert make_review(body="one") != make_review(body="two")
+
+    def test_review_with_a_reply_and_device_is_hashable(self):
+        reply = ReviewReply(
+            review_id="r",
+            reply_id=None,
+            text="Thanks",
+            state="published",
+            updated_at=None,
+        )
+        review = make_review(
+            developer_reply=reply, device_metadata=DeviceMetadata(ram_mb=4096)
+        )
+        assert hash(review) == hash(review)

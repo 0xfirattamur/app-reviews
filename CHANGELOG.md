@@ -14,6 +14,13 @@ recent versions are also kept in
 - `AppVersionEntry.to_dict()` and `AppStoreVersion.to_dict()` return JSON-safe
   dicts with ISO 8601 dates.
 
+### Changed
+
+- `Review` equality and hash now ignore `raw` and `fetched_at`, so
+  `set(reviews)` deduplicates re-fetched reviews.
+- `AppStoreVersion` is now hashable; its `release_notes` still count for
+  equality.
+
 ### Fixed
 
 - A non-string App Store `private_key`, or a non-string `client_email`,

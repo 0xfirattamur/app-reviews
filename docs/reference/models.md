@@ -69,6 +69,10 @@ optional: `product_name`, `manufacturer`, `device_class`, `screen_width_px`,
 from app_reviews import DeviceMetadata
 ```
 
+### Equality and hashing
+
+`Review` is hashable, and two reviews are equal when every field matches except `raw` and `fetched_at`. A review fetched twice is therefore the same review, so `set(reviews)` removes re-fetched duplicates. Use `review.key` when you need the identity alone. `AppStoreVersion` is hashable too; its `release_notes` dict still counts for equality.
+
 ### Review IDs
 
 `id` is the identifier the source assigned, passed through unchanged: the App Store RSS `id` or Connect `customerReviews.id`, the Google Play `batchexecute` review id or `androidpublisher` `reviewId`.

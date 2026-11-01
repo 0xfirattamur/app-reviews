@@ -47,6 +47,9 @@ class Review:
     ``googleplay_*`` with ``"googleplay"``); a contradiction raises
     ``ValueError``.
 
+    Equality and hashing ignore ``raw`` and ``fetched_at``: two fetches of the
+    same review are equal, so ``set(reviews)`` deduplicates re-fetched reviews.
+
     ``country`` is the storefront that was queried, not the reviewer's
     location. ``None`` means the source does not report it.
 
@@ -71,8 +74,8 @@ class Review:
     updated_at: datetime | None = None
     app_version: str | None = None
     language: str | None = None
-    fetched_at: datetime | None = None
-    raw: dict[str, Any] | list[Any] | None = None
+    fetched_at: datetime | None = field(default=None, compare=False)
+    raw: dict[str, Any] | list[Any] | None = field(default=None, compare=False)
     """The provider's own payload, exactly as it arrived.
 
     A list as well as an object because the sources disagree: Apple and the
