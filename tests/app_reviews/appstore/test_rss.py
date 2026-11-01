@@ -11,6 +11,7 @@ from app_reviews import AppStoreReviews, RateLimiter, RetryConfig
 from app_reviews.appstore.rss import AppStoreScraperProvider
 from app_reviews.core.http import HttpClient
 from app_reviews.core.reviews import BaseReviews
+from tests.app_reviews.transport import Recorder, client_for
 
 
 def _rss_entry(
@@ -39,9 +40,7 @@ def _feed(entries: list[dict[str, Any]]) -> str:
 
 def _provider(handler):
     """Build a provider whose pooled HTTP client uses a MockTransport."""
-    return AppStoreScraperProvider(
-        http=HttpClient(transport=httpx.MockTransport(handler))
-    )
+    return client_for(AppStoreScraperProvider, handler)
 
 
 class TestSource:
@@ -51,26 +50,18 @@ class TestSource:
 
 class TestFetchPage:
     def test_first_page_uses_page_1(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_feed([_rss_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_feed([_rss_entry()]))
+        _provider(record).fetch_page("12345", "us", None)
 
-        _provider(handler).fetch_page("12345", "us", None)
-
-        assert "/page=1/" in seen["url"]
+        assert "/page=1/" in str(record.last.url)
 
     def test_cursor_sets_page_number(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_feed([_rss_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_feed([_rss_entry()]))
+        _provider(record).fetch_page("12345", "us", "4")
 
-        _provider(handler).fetch_page("12345", "us", "4")
-
-        assert "/page=4/" in seen["url"]
+        assert "/page=4/" in str(record.last.url)
 
     def test_maps_entry_fields(self):
         def handler(request):
@@ -762,26 +753,18 @@ class TestTheAsyncWalkRequestsTheSamePage:
     cursor "2"."""
 
     async def test_the_first_async_page_is_page_one(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"feed": {"entry": []}})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"feed": {"entry": []}}))
+        await _provider(record).afetch_page("123", "us", None)
 
-        await _provider(handler).afetch_page("123", "us", None)
-
-        assert "/page=1/" in seen["url"]
+        assert "/page=1/" in str(record.last.url)
 
     async def test_an_async_cursor_requests_that_page(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"feed": {"entry": []}})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"feed": {"entry": []}}))
+        await _provider(record).afetch_page("123", "us", "4")
 
-        await _provider(handler).afetch_page("123", "us", "4")
-
-        assert "/page=4/" in seen["url"]
+        assert "/page=4/" in str(record.last.url)
 
     async def test_the_async_urls_match_the_sync_ones(self):
         urls = []

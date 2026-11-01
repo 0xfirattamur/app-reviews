@@ -22,9 +22,9 @@ from app_reviews import (
     AuthError,
     GooglePlayAuth,
     GooglePlayReviews,
-    HttpClient,
 )
 from tests.app_reviews.googleplay.test_auth import _TEST_RSA_KEY
+from tests.app_reviews.transport import client_for
 
 
 def _client(service_account_path: str) -> GooglePlayReviews:
@@ -147,9 +147,10 @@ class TestTranslationLanguage:
             review_requests.append(request)
             return httpx.Response(200, json={"reviews": []})
 
-        client = GooglePlayReviews(
+        client = client_for(
+            GooglePlayReviews,
+            handler,
             auth=GooglePlayAuth(service_account_path=_service_account()),
-            http=HttpClient(transport=httpx.MockTransport(handler)),
             translation_language=" de-DE ",
         )
 

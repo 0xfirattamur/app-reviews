@@ -8,12 +8,12 @@ import httpx
 import pytest
 
 from app_reviews import AppStoreReviews, GooglePlayReviews
-from app_reviews.core.http import HttpClient
 from app_reviews.core.provider import ReviewProvider
 from app_reviews.models.config import AppStoreAuth, GooglePlayAuth, RetryConfig
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from tests.app_reviews.factories import make_review
+from tests.app_reviews.transport import client_for
 
 
 def _mock_provider(
@@ -365,9 +365,7 @@ class TestClientOwnsOnePool:
             seen.append(str(request.url))
             return httpx.Response(200, text=_rss_feed(entries=0))
 
-        client = AppStoreReviews(
-            http=HttpClient(transport=httpx.MockTransport(handler))
-        )
+        client = client_for(AppStoreReviews, handler)
         client.fetch("324684580", countries=["us"])
 
         assert [url.rsplit("/page=", 1)[1] for url in seen] == ["1/json", "1/xml"]
@@ -377,9 +375,7 @@ class TestClientOwnsOnePool:
             return httpx.Response(200, text=_rss_feed())
 
         with patch("app_reviews.core.http.httpx.Client", wraps=httpx.Client) as spy:
-            client = AppStoreReviews(
-                http=HttpClient(transport=httpx.MockTransport(handler))
-            )
+            client = client_for(AppStoreReviews, handler)
             result = client.fetch("324684580", countries=["us"])
 
         assert result.outcomes[0].pages == 10  # the RSS depth cap
@@ -401,18 +397,14 @@ class TestClientOwnsOnePool:
         def handler(request):
             return httpx.Response(200, text=_rss_feed(entries=0))
 
-        with AppStoreReviews(
-            http=HttpClient(transport=httpx.MockTransport(handler))
-        ) as client:
+        with client_for(AppStoreReviews, handler) as client:
             assert client.fetch("324684580", countries=["us"]).reviews == []
 
     async def test_works_as_an_async_context_manager(self):
         def handler(request):
             return httpx.Response(200, text=_rss_feed(entries=0))
 
-        async with AppStoreReviews(
-            http=HttpClient(transport=httpx.MockTransport(handler))
-        ) as client:
+        async with client_for(AppStoreReviews, handler) as client:
             result = await client.afetch("324684580", countries=["us"])
 
         assert result.reviews == []

@@ -10,9 +10,8 @@ import pytest
 
 from app_reviews import AppVersionEntry
 from app_reviews.appstore.search import AppStoreSearch
-from app_reviews.core.http import HttpClient
 from app_reviews.errors import ParseError, ServerError
-from app_reviews.models.config import RetryConfig
+from tests.app_reviews.transport import Recorder, client_for
 
 FIXTURE = Path(__file__).parents[2] / "fixtures/appstore/version_history.html"
 """The Spotify product page (us), trimmed to the embedded data the parser reads."""
@@ -52,13 +51,8 @@ def _history(*items: Any) -> str:
     return _page({"shelves": [{"$kind": "Shelf", "items": list(items)}]})
 
 
-def _client(handler, retry: RetryConfig | None = None) -> AppStoreSearch:
-    return AppStoreSearch(
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=retry or RetryConfig(max_retries=0),
-        )
-    )
+def _client(handler, *, retries: int = 0) -> AppStoreSearch:
+    return client_for(AppStoreSearch, handler, retries=retries)
 
 
 def _serving(text: str, status: int = 200) -> AppStoreSearch:
@@ -97,28 +91,21 @@ class TestRecordedPage:
 
 class TestRequest:
     def test_requests_the_storefront_product_page_as_a_browser(self):
-        seen: dict[str, Any] = {}
+        record = Recorder(httpx.Response(200, text=_history(_item())))
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen["url"] = str(request.url)
-            seen["agent"] = request.headers["User-Agent"]
-            return httpx.Response(200, text=_history(_item()))
+        _client(record).version_history("324684580", country="GB")
 
-        _client(handler).version_history("324684580", country="GB")
-
-        assert seen["url"] == "https://apps.apple.com/gb/app/id324684580"
-        assert "Safari" in seen["agent"]
+        assert str(record.last.url) == "https://apps.apple.com/gb/app/id324684580"
+        assert "Safari" in record.last.headers["User-Agent"]
 
     async def test_async_sends_the_same_request(self):
-        seen: list[str] = []
+        record = Recorder(httpx.Response(200, text=_history(_item())))
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen.append(str(request.url))
-            return httpx.Response(200, text=_history(_item()))
+        await _client(record).aversion_history("324684580", country="jp")
 
-        await _client(handler).aversion_history("324684580", country="jp")
-
-        assert seen == ["https://apps.apple.com/jp/app/id324684580"]
+        assert [str(r.url) for r in record.requests] == [
+            "https://apps.apple.com/jp/app/id324684580"
+        ]
 
     def test_follows_the_redirect_to_the_slugged_page(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -136,7 +123,7 @@ class TestRequest:
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(next(statuses), text=_history(_item("3.0")))
 
-        client = _client(handler, RetryConfig(max_retries=1, backoff_factor=0))
+        client = _client(handler, retries=1)
 
         assert [e.version for e in client.version_history("1")] == ["3.0"]
 

@@ -7,12 +7,11 @@ from typing import Any
 import httpx
 import pytest
 
-from app_reviews.core.http import HttpClient
 from app_reviews.errors import HttpError, ParseError, RequestError
 from app_reviews.googleplay.search import GooglePlaySearch
-from app_reviews.models.config import RetryConfig
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 _ICON = "https://play-lh.googleusercontent.com/icon1.png"
 
@@ -118,15 +117,7 @@ def _search_page(
 
 
 def _client(handler):
-    # max_retries=0: these tests assert on the first failure, not on retry
-    # behaviour (covered by tests/app_reviews/core/test_http.py); the default
-    # RetryConfig would sleep through real backoff on every failure test.
-    return GooglePlaySearch(
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=RetryConfig(max_retries=0),
-        )
-    )
+    return client_for(GooglePlaySearch, handler)
 
 
 def _serving(text: str, status: int = 200):
@@ -191,25 +182,17 @@ class TestSearch:
         assert app.url == "https://play.google.com/store/apps/details?id=com.whatsapp"
 
     def test_sends_query_params(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp")
-        assert "q=whatsapp" in seen["url"]
-        assert "c=apps" in seen["url"]
+        _client(record).search("whatsapp")
+        assert query_of(record.last)["q"] == ["whatsapp"]
+        assert query_of(record.last)["c"] == ["apps"]
 
     def test_sends_the_requested_country_as_gl(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp", country=Country.JP)
-        assert "gl=jp" in seen["url"]
+        _client(record).search("whatsapp", country=Country.JP)
+        assert query_of(record.last)["gl"] == ["jp"]
 
     def test_accepts_a_play_market_outside_the_itunes_enum(self, caplog) -> None:
         """The enum is Apple's 155 storefronts; Play serves markets it omits.
@@ -220,27 +203,19 @@ class TestSearch:
         """
         import logging
 
-        seen = {}
-
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
         with caplog.at_level(logging.WARNING):
-            _client(handler).search("whatsapp", country="rs")
+            _client(record).search("whatsapp", country="rs")
 
-        assert "gl=rs" in seen["url"]
+        assert query_of(record.last)["gl"] == ["rs"]
         assert "Unrecognised storefront" not in caplog.text
 
     def test_normalises_a_string_country(self) -> None:
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_search_page(groups=[])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_search_page(groups=[]))
-
-        _client(handler).search("whatsapp", country="  DEU  ")
-        assert "gl=de" in seen["url"]
+        _client(record).search("whatsapp", country="  DEU  ")
+        assert query_of(record.last)["gl"] == ["de"]
 
     def test_no_matching_apps_returns_empty(self) -> None:
         """A readable page with no results is empty, not a failure."""

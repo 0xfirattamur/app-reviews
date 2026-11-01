@@ -18,10 +18,10 @@ from app_reviews import (
     RateLimitError,
     ReplyOutcomeUnknownError,
     ReplyRejectedError,
-    RetryConfig,
     ReviewReply,
 )
 from tests.app_reviews.googleplay.test_auth import _SERVICE_ACCOUNT_JSON
+from tests.app_reviews.transport import client_for
 
 _REVIEWS = (
     "https://androidpublisher.googleapis.com/androidpublisher/v3"
@@ -48,13 +48,8 @@ class _Api:
 
 
 def _replies(handler, *, retries: int = 3) -> GooglePlayReplies:
-    return GooglePlayReplies(
-        GooglePlayAuth(service_account_info=_SERVICE_ACCOUNT_JSON),
-        http=HttpClient(
-            transport=httpx.MockTransport(handler),
-            retry=RetryConfig(max_retries=retries, backoff_factor=0),
-        ),
-    )
+    auth = GooglePlayAuth(service_account_info=_SERVICE_ACCOUNT_JSON)
+    return client_for(GooglePlayReplies, handler, retries=retries, auth=auth)
 
 
 def _reply_result(text="Thanks!") -> dict:

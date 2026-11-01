@@ -13,6 +13,7 @@ from app_reviews.core.http import HttpClient
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
 from app_reviews.models.review import DeviceMetadata
 from tests.app_reviews.factories import StaticToken
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 
 def _dev_entry(
@@ -52,9 +53,8 @@ def _payload(entries: list[dict[str, Any]], token: str | None = None) -> str:
 
 def _provider(handler):
     """Build a provider whose pooled HTTP client uses a MockTransport."""
-    return GooglePlayOfficialProvider(
-        StaticToken("Bearer gtoken"),
-        http=HttpClient(transport=httpx.MockTransport(handler)),
+    return client_for(
+        GooglePlayOfficialProvider, handler, auth=StaticToken("Bearer gtoken")
     )
 
 
@@ -64,14 +64,10 @@ def _serving(text: str, status: int = 200):
 
 def _url_for(app_id: str) -> str:
     """The URL the provider actually requests for ``app_id``."""
-    seen = {}
+    record = Recorder(httpx.Response(200, text=_payload([])))
 
-    def handler(request):
-        seen["url"] = str(request.url)
-        return httpx.Response(200, text=_payload([]))
-
-    _provider(handler).fetch_page(app_id, "", None)
-    return seen["url"]
+    _provider(record).fetch_page(app_id, "", None)
+    return str(record.last.url)
 
 
 class TestSource:
@@ -81,29 +77,21 @@ class TestSource:
 
 class TestFetchPage:
     def test_sends_authorization_header(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_dev_entry()])))
 
-        def handler(request):
-            seen["auth"] = request.headers.get("authorization")
-            return httpx.Response(200, text=_payload([_dev_entry()]))
+        _provider(record).fetch_page("com.example.app", "", None)
 
-        _provider(handler).fetch_page("com.example.app", "", None)
-
-        assert seen["auth"] == "Bearer gtoken"
+        assert record.last.headers.get("authorization") == "Bearer gtoken"
 
     def test_requests_the_reviews_endpoint_for_the_app(self):
         assert "/applications/com.example.app/reviews" in _url_for("com.example.app")
 
     def test_cursor_is_sent_as_the_token_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        _provider(record).fetch_page("com.example.app", "", "TOK9")
 
-        _provider(handler).fetch_page("com.example.app", "", "TOK9")
-
-        assert "token=TOK9" in seen["url"]
+        assert query_of(record.last)["token"] == ["TOK9"]
 
     def test_no_token_param_on_the_first_page(self):
         assert "token=" not in _url_for("com.example.app")

@@ -16,6 +16,7 @@ import pytest
 
 from app_reviews.core.http import HttpClient
 from app_reviews.models.config import RetryConfig
+from tests.app_reviews.transport import Recorder, query_of
 
 
 def _ok(_request):
@@ -76,23 +77,17 @@ class TestGet:
         assert resp.transport_error is None
 
     def test_sends_params_and_headers_over_a_default_user_agent(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text="{}"))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            seen["ua"] = request.headers.get("user-agent")
-            seen["auth"] = request.headers.get("authorization")
-            return httpx.Response(200, text="{}")
-
-        _client(handler).get(
+        _client(record).get(
             "https://example.test/x",
             params={"q": "1"},
             headers={"Authorization": "Bearer t"},
         )
 
-        assert "q=1" in seen["url"]
-        assert seen["ua"] == "app-reviews"
-        assert seen["auth"] == "Bearer t"
+        assert query_of(record.last) == {"q": ["1"]}
+        assert record.last.headers["user-agent"] == "app-reviews"
+        assert record.last.headers["authorization"] == "Bearer t"
 
     def test_a_failed_exchange_becomes_a_transport_error(self):
         def handler(request):
@@ -107,15 +102,11 @@ class TestGet:
 
 class TestPost:
     def test_sends_the_body(self):
-        seen = {}
+        record = Recorder(httpx.Response(201, text="created"))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(201, text="created")
+        resp = _client(record).post("https://example.test/x", body='{"a":1}')
 
-        resp = _client(handler).post("https://example.test/x", body='{"a":1}')
-
-        assert seen["body"] == '{"a":1}'
+        assert record.last.content.decode() == '{"a":1}'
         assert resp.status == 201
 
 

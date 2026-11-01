@@ -22,6 +22,7 @@ from app_reviews.errors import (
 )
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.models.config import GooglePlayAuth, RetryConfig
+from tests.app_reviews.transport import Recorder
 
 # RSA 2048 test key in PKCS8 format, generated for testing only, not real credentials.
 _TEST_RSA_KEY = """\
@@ -170,16 +171,13 @@ class TestGoogleAuthAuthorizationHeader:
         assert _auth_on(_token()).authorization_header() == "Bearer ya29.test-token"
 
     def test_sends_jwt_assertion_in_body(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, json={"access_token": "tok"}))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, json={"access_token": "tok"})
+        _auth_on(record).authorization_header()
 
-        _auth_on(handler).authorization_header()
-
-        assert "assertion=" in seen["body"]
-        assert "grant_type=" in seen["body"]
+        form = urllib.parse.parse_qs(record.last.content.decode())
+        assert form["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
+        assert form["assertion"][0].count(".") == 2
 
     def test_posts_to_the_token_uri_as_a_form(self):
         seen = {}

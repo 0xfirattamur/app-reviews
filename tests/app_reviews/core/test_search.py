@@ -22,6 +22,7 @@ from app_reviews.core.search import (
 )
 from app_reviews.googleplay.search import GooglePlaySearch
 from app_reviews.models.config import RetryConfig
+from tests.app_reviews.transport import Recorder, query_of
 
 _METHODS = ("search", "asearch", "lookup", "alookup")
 
@@ -92,38 +93,30 @@ class TestPoolOwnership:
 
 class TestGetAndParse:
     def test_sends_params_and_returns_what_parse_returns(self):
-        seen = {}
-
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text="body-text")
+        record = Recorder(httpx.Response(200, text="body-text"))
 
         result = get_and_parse(
-            _pool(handler),
+            _pool(record),
             "https://example.test/x",
             {"q": "1"},
             lambda response: response.body.upper(),
         )
 
         assert result == "BODY-TEXT"
-        assert "q=1" in seen["url"]
+        assert query_of(record.last)["q"] == ["1"]
 
     def test_forwards_headers(self):
-        seen = {}
-
-        def handler(request):
-            seen["ua"] = request.headers.get("user-agent")
-            return httpx.Response(200, text="")
+        record = Recorder(httpx.Response(200, text=""))
 
         get_and_parse(
-            _pool(handler),
+            _pool(record),
             "https://example.test/x",
             {},
             lambda response: response.body,
             headers={"User-Agent": "custom-agent"},
         )
 
-        assert seen["ua"] == "custom-agent"
+        assert record.last.headers.get("user-agent") == "custom-agent"
 
     async def test_async_twin_matches(self):
         def handler(_request):

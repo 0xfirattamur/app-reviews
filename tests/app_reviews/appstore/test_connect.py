@@ -9,8 +9,8 @@ import httpx
 import pytest
 
 from app_reviews.appstore.connect import AppStoreOfficialProvider
-from app_reviews.core.http import HttpClient
 from tests.app_reviews.factories import StaticToken
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 
 def _connect_entry(
@@ -44,9 +44,8 @@ def _payload(entries: list[dict[str, Any]], next_url: str | None = None) -> str:
 
 def _provider(handler):
     """Build a provider whose pooled HTTP client uses a MockTransport."""
-    return AppStoreOfficialProvider(
-        StaticToken("Bearer token"),
-        http=HttpClient(transport=httpx.MockTransport(handler)),
+    return client_for(
+        AppStoreOfficialProvider, handler, auth=StaticToken("Bearer token")
     )
 
 
@@ -57,45 +56,33 @@ class TestSource:
 
 class TestFetchPage:
     def test_sends_authorization_header(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_connect_entry()])))
 
-        def handler(request):
-            seen["auth"] = request.headers.get("authorization")
-            return httpx.Response(200, text=_payload([_connect_entry()]))
+        _provider(record).fetch_page("12345", "", None)
 
-        _provider(handler).fetch_page("12345", "", None)
-
-        assert seen["auth"] == "Bearer token"
+        assert record.last.headers.get("authorization") == "Bearer token"
 
     def test_first_page_requests_newest_first(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([_connect_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([_connect_entry()]))
+        _provider(record).fetch_page("12345", "", None)
 
-        _provider(handler).fetch_page("12345", "", None)
-
-        assert "sort=-createdDate" in seen["url"]
-        assert "/apps/12345/customerReviews" in seen["url"]
+        assert query_of(record.last)["sort"] == ["-createdDate"]
+        assert "/apps/12345/customerReviews" in record.last.url.path
 
     def test_cursor_is_used_as_the_next_url(self):
-        seen = {}
-
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
         # The real shape, verified against the live API: Apple's links.next is
         # the same customerReviews path with a cursor param.
-        _provider(handler).fetch_page(
+        _provider(record).fetch_page(
             "12345",
             "",
             "https://api.appstoreconnect.apple.com"
             "/v1/apps/12345/customerReviews?cursor=X",
         )
 
-        assert "cursor=X" in seen["url"]
+        assert query_of(record.last)["cursor"] == ["X"]
 
     def test_maps_entry_fields(self):
         def handler(request):
@@ -395,13 +382,8 @@ class TestCursorIsNotAnOpenRedirect:
     """
 
     def _requests(self):
-        seen = []
-
-        def handler(request):
-            seen.append((str(request.url), request.headers.get("authorization")))
-            return httpx.Response(200, text=_payload([]))
-
-        return seen, _provider(handler)
+        record = Recorder(httpx.Response(200, text=_payload([])))
+        return record, _provider(record)
 
     @pytest.mark.parametrize(
         "cursor",
@@ -416,24 +398,26 @@ class TestCursorIsNotAnOpenRedirect:
         ],
     )
     def test_a_foreign_cursor_is_refused_without_a_request(self, cursor):
-        seen, provider = self._requests()
+        record, provider = self._requests()
 
         page = provider.fetch_page("12345", "", cursor)
 
-        assert seen == [], "no request may be made"
+        assert record.requests == [], "no request may be made"
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
     def test_the_token_never_leaves_apples_host(self):
-        seen, provider = self._requests()
+        record, provider = self._requests()
 
         provider.fetch_page("12345", "", "https://evil.example.com/collect")
 
-        assert all("evil.example.com" not in url for url, _ in seen)
+        assert all(
+            request.url.host != "evil.example.com" for request in record.requests
+        )
 
     def test_a_genuine_connect_cursor_is_followed(self):
-        seen, provider = self._requests()
+        record, provider = self._requests()
         cursor = (
             "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews"
             "?cursor=NEXTPAGE&limit=200"
@@ -442,8 +426,8 @@ class TestCursorIsNotAnOpenRedirect:
         provider.fetch_page("12345", "", cursor)
 
         # The cursor is followed as Apple sent it, asking for replies too.
-        assert seen[-1][0] == f"{cursor}&include=response"
-        assert seen[-1][1] == "Bearer token"
+        assert str(record.last.url) == f"{cursor}&include=response"
+        assert record.last.headers["authorization"] == "Bearer token"
 
     @pytest.mark.parametrize(
         "cursor",
@@ -457,11 +441,11 @@ class TestCursorIsNotAnOpenRedirect:
         ],
     )
     def test_cursor_must_be_the_exact_collection_for_the_requested_app(self, cursor):
-        seen, provider = self._requests()
+        record, provider = self._requests()
 
         page = provider.fetch_page("12345", "", cursor)
 
-        assert seen == []
+        assert record.requests == []
         assert page.error is not None and page.error.kind == "parse"
 
     def test_rejection_happens_before_the_token_source_is_called(self):
@@ -523,20 +507,20 @@ class TestCursorIsNotAnOpenRedirect:
         assert page.error is not None and page.error.kind == "parse"
 
     async def test_the_async_path_refuses_too(self):
-        seen, provider = self._requests()
+        record, provider = self._requests()
 
         page = await provider.afetch_page("12345", "", "https://evil.example.com/x")
 
-        assert seen == []
+        assert record.requests == []
         assert page.error is not None and page.error.kind == "parse"
 
     def test_no_cursor_uses_the_first_page_url(self):
-        seen, provider = self._requests()
+        record, provider = self._requests()
 
         provider.fetch_page("12345", "", None)
 
-        assert "api.appstoreconnect.apple.com" in seen[-1][0]
-        assert "sort=-createdDate" in seen[-1][0]
+        assert record.last.url.host == "api.appstoreconnect.apple.com"
+        assert query_of(record.last)["sort"] == ["-createdDate"]
 
 
 class TestConnectFieldResilience:
@@ -682,14 +666,10 @@ class TestAppIdIsNotAPathInjection:
     """
 
     def _url_for(self, app_id):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"data": []})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"data": []}))
-
-        _provider(handler).fetch_page(app_id, "", None)
-        return seen["url"]
+        _provider(record).fetch_page(app_id, "", None)
+        return str(record.last.url)
 
     def test_a_normal_app_id_is_untouched(self):
         assert "/v1/apps/389801252/customerReviews" in self._url_for("389801252")
@@ -755,15 +735,11 @@ class TestAnUnusableCursorIsReportedNotRaised:
         good = (
             "https://api.appstoreconnect.apple.com/v1/apps/1/customerReviews?cursor=abc"
         )
-        seen = {}
+        record = Recorder(httpx.Response(200, text=json.dumps({"data": []})))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=json.dumps({"data": []}))
+        _provider(record).fetch_page("1", "", good)
 
-        _provider(handler).fetch_page("1", "", good)
-
-        assert seen["url"] == f"{good}&include=response"
+        assert str(record.last.url) == f"{good}&include=response"
 
 
 class TestANonStringNextLinkIsAParseError:
@@ -843,30 +819,22 @@ class TestDeveloperRepliesComeWithTheReviews:
         return provider.fetch_page("12345", "", None)
 
     def test_the_first_page_asks_for_replies(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
 
-        def handler(request):
-            seen["url"] = request.url
-            return httpx.Response(200, text=_payload([]))
+        _provider(record).fetch_page("12345", "", None)
 
-        _provider(handler).fetch_page("12345", "", None)
-
-        assert seen["url"].params["include"] == "response"
+        assert record.last.url.params["include"] == "response"
 
     def test_a_cursor_that_already_asks_for_replies_is_unchanged(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_payload([])))
         cursor = (
             "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews"
             "?cursor=N&include=response"
         )
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_payload([]))
+        _provider(record).fetch_page("12345", "", cursor)
 
-        _provider(handler).fetch_page("12345", "", cursor)
-
-        assert seen["url"] == cursor
+        assert str(record.last.url) == cursor
 
     def test_replies_are_joined_by_id_not_by_position(self):
         page = self._page(

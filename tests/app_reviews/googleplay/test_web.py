@@ -9,9 +9,9 @@ from typing import Any
 import httpx
 import pytest
 
-from app_reviews.core.http import HttpClient
 from app_reviews.core.paging import is_per_country, orders_newest_first
 from app_reviews.googleplay.web import GooglePlayScraperProvider
+from tests.app_reviews.transport import Recorder, client_for, query_of
 
 
 def _gp_entry(
@@ -45,9 +45,7 @@ def _gp_body(entries: list[list[Any]], token: str | None = None) -> str:
 
 def _provider(handler, **kwargs):
     """Build a provider whose pooled HTTP client uses a MockTransport."""
-    return GooglePlayScraperProvider(
-        http=HttpClient(transport=httpx.MockTransport(handler)), **kwargs
-    )
+    return client_for(GooglePlayScraperProvider, handler, **kwargs)
 
 
 def _serving(text: str, status: int = 200):
@@ -74,49 +72,33 @@ class TestSource:
 
 class TestRequestShape:
     def test_country_shapes_the_storefront_param(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "de", None)
 
-        _provider(handler).fetch_page("com.example.app", "de", None)
-
-        assert "gl=de" in seen["url"]
+        assert query_of(record.last)["gl"] == ["de"]
 
     def test_language_is_always_english(self):
         """``hl`` picks the store's presentation locale, not a review filter."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "de", None)
 
-        _provider(handler).fetch_page("com.example.app", "de", None)
-
-        assert "hl=en" in seen["url"]
+        assert query_of(record.last)["hl"] == ["en"]
 
     def test_empty_country_falls_back_to_us(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "", None)
 
-        _provider(handler).fetch_page("com.example.app", "", None)
-
-        assert "gl=us" in seen["url"]
+        assert query_of(record.last)["gl"] == ["us"]
 
     def test_cursor_is_sent_as_the_page_token(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", "TOKEN123")
 
-        _provider(handler).fetch_page("com.example.app", "us", "TOKEN123")
-
-        assert "TOKEN123" in seen["body"]
+        assert "TOKEN123" in record.last.content.decode()
 
 
 class TestSortOrder:
@@ -128,15 +110,11 @@ class TestSortOrder:
     """
 
     def test_requests_are_always_sorted_newest_first(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", None)
 
-        _provider(handler).fetch_page("com.example.app", "us", None)
-
-        assert _sent_payload(seen["body"])[1][1] == (
+        assert _sent_payload(record.last.content.decode())[1][1] == (
             GooglePlayScraperProvider.SORT_NEWEST
         )
 
@@ -385,16 +363,12 @@ class TestTheStorefrontIsFullyEscaped:
     ``safe="/"``, so a slash in the country survived into the query string."""
 
     def test_a_slash_in_the_country_is_escaped(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["url"] = str(request.url)
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "../../us/rss/x", None)
 
-        _provider(handler).fetch_page("com.example.app", "../../us/rss/x", None)
-
-        assert "gl=..%2F..%2Fus%2Frss%2Fx" in seen["url"]
-        assert "/rss/" not in seen["url"]
+        assert query_of(record.last)["gl"] == ["../../us/rss/x"]
+        assert "/rss/" not in str(record.last.url)
 
 
 class TestTheTimestampIsTheOneGoogleSent:
@@ -421,28 +395,20 @@ class TestTheRequestNamesTheAppAskedlFor:
     come back confidently labelled with yours."""
 
     def test_the_app_id_is_in_the_rpc_argument(self):
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", None)
 
-        _provider(handler).fetch_page("com.example.app", "us", None)
-
-        assert _sent_payload(seen["body"])[2][0] == "com.example.app"
+        assert _sent_payload(record.last.content.decode())[2][0] == "com.example.app"
 
     def test_the_cursor_lands_in_the_pagination_slot(self):
         """A substring check on the urlencoded blob passes even when the cursor
         is put in the wrong slot: Play then re-serves page 1 forever."""
-        seen = {}
+        record = Recorder(httpx.Response(200, text=_gp_body([_gp_entry()])))
 
-        def handler(request):
-            seen["body"] = request.content.decode()
-            return httpx.Response(200, text=_gp_body([_gp_entry()]))
+        _provider(record).fetch_page("com.example.app", "us", "TOKEN123")
 
-        _provider(handler).fetch_page("com.example.app", "us", "TOKEN123")
-
-        assert _sent_payload(seen["body"])[1][2][2] == "TOKEN123"
+        assert _sent_payload(record.last.content.decode())[1][2][2] == "TOKEN123"
 
 
 class TestTheSortConstantIsThePlayValueForNewest:

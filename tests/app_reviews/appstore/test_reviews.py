@@ -23,9 +23,9 @@ from app_reviews import (
     AppStoreReviews,
     AuthError,
     Country,
-    HttpClient,
 )
 from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.transport import client_for
 
 
 def _client(key_path: str) -> AppStoreReviews:
@@ -138,10 +138,8 @@ class TestInMemoryKey:
             seen.append(request.headers["authorization"])
             return httpx.Response(200, json={"data": []})
 
-        client = AppStoreReviews(
-            auth=AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY),
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-        )
+        auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY)
+        client = client_for(AppStoreReviews, handler, auth=auth)
         result = client.fetch("123")
 
         assert result.errors == []
@@ -194,11 +192,7 @@ class TestServerSideFilters:
             seen.append(request)
             return httpx.Response(200, json={"data": []})
 
-        client = AppStoreReviews(
-            auth=_CONNECT_AUTH,
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-            **options,
-        )
+        client = client_for(AppStoreReviews, handler, auth=_CONNECT_AUTH, **options)
         client.fetch("123")
         return seen[0]
 
@@ -260,10 +254,8 @@ class TestServerSideFilters:
             requests.append(request)
             return httpx.Response(200, json=next(pages))
 
-        client = AppStoreReviews(
-            auth=_CONNECT_AUTH,
-            http=HttpClient(transport=httpx.MockTransport(handler)),
-            server_sort=server_sort,
+        client = client_for(
+            AppStoreReviews, handler, auth=_CONNECT_AUTH, server_sort=server_sort
         )
 
         client.fetch("123", since=datetime(2025, 1, 1, tzinfo=UTC))
