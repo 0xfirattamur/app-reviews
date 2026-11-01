@@ -29,14 +29,20 @@ with AppStoreReviews() as client:
     print(len(page.reviews), page.next_cursor)
 ```
 
-`next_cursor` is opaque and provider-specific: a page number for the RSS
-feed, a URL for App Store Connect, a token for Google Play. Persist it
-verbatim and pass it back to resume:
+`next_cursor` is opaque. Persist it verbatim and pass it back to resume:
 
 ```python
 with AppStoreReviews() as client:
     page = client.fetch_page("324684580", country="us", cursor=saved_cursor)
 ```
+
+A cursor only means something to the app, country and client settings that
+issued it, so it records them. Resuming it under different ones raises
+`ValueError` ("this cursor was produced for a different app, country or client
+settings") before any request is sent. For `AppStoreReviews` with `auth`, the
+client settings are `server_ratings`, `server_territories` and `server_sort`.
+The cursor's format is not part of the API; do not parse or build one. Cursors
+saved by version 1.3 carry no record and are still accepted as they are.
 
 `next_cursor is None` means there are no more pages.
 

@@ -21,6 +21,7 @@ from typing import Any
 
 from app_reviews.core.classify import fetch_error_from_exception
 from app_reviews.core.client import PooledClient
+from app_reviews.core.cursor import CursorScope, unwrap_cursor, wrap_cursor
 from app_reviews.core.http import HttpClient
 from app_reviews.core.paging import (
     DEFAULT_MAX_PAGES,
@@ -404,8 +405,11 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> PageResult:
         """Fetch exactly one page. No pagination, no filtering, no stop conditions.
 
-        ``cursor`` is opaque and provider-specific. Persist it verbatim to
-        resume later. A returned ``next_cursor`` of None means no more pages.
+        ``cursor`` is opaque. Persist it verbatim to resume later, with the same
+        app, country and client settings: a cursor resumed under different ones
+        raises ``ValueError`` before any request is sent. Cursors saved by
+        version 1.3 are still accepted. A returned ``next_cursor`` of None means
+        no more pages.
         ``stopped_because`` is always None here, because no page walk is being
         performed. Retries and provider fallbacks may make multiple HTTP requests.
 
@@ -415,7 +419,10 @@ class BaseReviews(PooledClient, abc.ABC):
         self._validate_country_argument(country)
         provider = self._ensure_provider()
         country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
-        return self._page(provider, app_id, country_arg, cursor)
+        scope = self._make_cursor_scope(provider, app_id, country_arg)
+        raw_cursor = _resume_cursor(cursor, scope)
+        page = self._page(provider, app_id, country_arg, raw_cursor)
+        return _wrap_next_cursor(page, scope)
 
     async def afetch_page(
         self,
@@ -428,7 +435,10 @@ class BaseReviews(PooledClient, abc.ABC):
         self._validate_country_argument(country)
         provider = await self._aensure_provider()
         country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
-        return await self._apage(provider, app_id, country_arg, cursor)
+        scope = self._make_cursor_scope(provider, app_id, country_arg)
+        raw_cursor = _resume_cursor(cursor, scope)
+        page = await self._apage(provider, app_id, country_arg, raw_cursor)
+        return _wrap_next_cursor(page, scope)
 
     # ---- rung 2: one country, paginated ------------------------------------
 
@@ -466,11 +476,14 @@ class BaseReviews(PooledClient, abc.ABC):
         if page_budget is None:
             return
         provider = self._ensure_provider()
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
+        scope = self._make_cursor_scope(provider, app_id, country_arg)
+        raw_cursor = _resume_cursor(cursor, scope)
         yield from self._walk(
             provider,
             app_id,
-            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
-            cursor,
+            country_arg,
+            raw_cursor,
             since,
             limit,
             page_budget,
@@ -491,11 +504,14 @@ class BaseReviews(PooledClient, abc.ABC):
         if page_budget is None:
             return
         provider = await self._aensure_provider()
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
+        scope = self._make_cursor_scope(provider, app_id, country_arg)
+        raw_cursor = _resume_cursor(cursor, scope)
         walk = self._awalk(
             provider,
             app_id,
-            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
-            cursor,
+            country_arg,
+            raw_cursor,
             since,
             limit,
             page_budget,
@@ -537,6 +553,23 @@ class BaseReviews(PooledClient, abc.ABC):
             is_newest_first=self._is_newest_first(provider),
         )
 
+    def _cursor_options(self) -> tuple[str, ...]:
+        """The client settings that change what a raw cursor means.
+
+        Folded into the fingerprint of every cursor handed out, so a cursor
+        resumed under other settings is refused. A client whose settings shape
+        the pages a provider walks overrides this; the default has none.
+        """
+        return ()
+
+    def _make_cursor_scope(
+        self, provider: ReviewProvider, app_id: str, country: str
+    ) -> CursorScope:
+        """What the cursors of this app and country walk are valid for."""
+        return CursorScope(
+            provider.source, app_id, country, options=self._cursor_options()
+        )
+
     def _walk(
         self,
         provider: ReviewProvider,
@@ -554,11 +587,12 @@ class BaseReviews(PooledClient, abc.ABC):
         re-sign credentials on every call.
         """
         policy = self._new_stop_policy(provider, since, limit, cursor, max_pages)
+        scope = self._make_cursor_scope(provider, app_id, country)
 
         while True:
             page = self._page(provider, app_id, country, cursor)
             reason, next_cursor = policy.evaluate(page)
-            yield with_stop_reason(page, reason)
+            yield with_stop_reason(_wrap_next_cursor(page, scope), reason)
             if reason is not None:
                 return
             cursor = next_cursor
@@ -580,11 +614,12 @@ class BaseReviews(PooledClient, abc.ABC):
         delegate to ``StopPolicy``.
         """
         policy = self._new_stop_policy(provider, since, limit, cursor, max_pages)
+        scope = self._make_cursor_scope(provider, app_id, country)
 
         while True:
             page = await self._apage(provider, app_id, country, cursor)
             reason, next_cursor = policy.evaluate(page)
-            yield with_stop_reason(page, reason)
+            yield with_stop_reason(_wrap_next_cursor(page, scope), reason)
             if reason is not None:
                 return
             cursor = next_cursor
@@ -1238,3 +1273,17 @@ class BaseReviews(PooledClient, abc.ABC):
         """Resolve and validate a per-country provider-page budget."""
         require_non_negative(max_pages, "max_pages")
         return self.MAX_PAGES if max_pages is None else max_pages
+
+
+def _resume_cursor(cursor: str | None, scope: CursorScope) -> str | None:
+    """The raw cursor to give the provider; raises when ``scope`` is not its own."""
+    if cursor is None:
+        return None
+    return unwrap_cursor(cursor, scope)
+
+
+def _wrap_next_cursor(page: PageResult, scope: CursorScope) -> PageResult:
+    """The page as the caller sees it: its ``next_cursor`` tied to ``scope``."""
+    if not page.next_cursor:
+        return page
+    return dataclasses.replace(page, next_cursor=wrap_cursor(page.next_cursor, scope))

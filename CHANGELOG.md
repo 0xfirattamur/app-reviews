@@ -16,6 +16,9 @@ recent versions are also kept in
 - `Country.AFRICA` groups the Sub-Saharan African storefronts, and
   `Country.MIDDLE_EAST` is documented as including only `DZ`, `EG` and `TN` from
   North Africa.
+- Cursors from `fetch_page` and `iter_pages` now record their app, country and
+  client settings, and resuming one under different settings raises `ValueError`
+  before any request is sent; cursors saved by 1.3 still work.
 
 ### Changed
 

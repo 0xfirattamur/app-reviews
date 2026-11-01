@@ -90,6 +90,14 @@ class AppStoreReviews(BaseReviews):
         """
         return await asyncio.to_thread(self._build_provider)
 
+    def _cursor_options(self) -> tuple[str, ...]:
+        """Connect's filters and order decide which reviews a cursor points into."""
+        return (
+            f"server_ratings={','.join(map(str, self._server_ratings))}",
+            f"server_territories={','.join(self._server_territories)}",
+            f"server_sort={self._server_sort}",
+        )
+
     def _is_newest_first(self, provider: ReviewProvider) -> bool:
         """Connect is newest-first only in its default order."""
         if provider.source == "appstore_official":
