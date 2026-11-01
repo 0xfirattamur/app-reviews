@@ -3,7 +3,9 @@
 import pytest
 
 from app_reviews.core.classify import (
+    THROTTLE_STATUSES,
     classify,
+    describe_failure,
     error_for,
     fetch_error_from_response,
     raise_for_http_failure,
@@ -33,13 +35,16 @@ class TestClassify:
         ],
     )
     def test_maps_status_to_kind(self, status, expected):
-        assert classify(status) == expected
+        assert classify(status, credentialed=True) == expected
 
     def test_transport_error_wins_over_status(self):
-        assert classify(0, transport_error="connection refused") == "transport"
+        assert (
+            classify(0, transport_error="connection refused", credentialed=True)
+            == "transport"
+        )
 
     def test_status_zero_without_message_is_transport(self):
-        assert classify(0) == "transport"
+        assert classify(0, credentialed=True) == "transport"
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_credential_free_access_denial_is_a_request_error_on_both_paths(
@@ -62,6 +67,31 @@ class TestClassify:
                 "public endpoint",
                 credentialed=False,
             )
+
+
+class TestDescribeFailure:
+    @pytest.mark.parametrize(
+        ("response", "throttled", "expected"),
+        [
+            (HttpResponse(status=200, body=""), (), None),
+            (HttpResponse(status=0, body="", transport_error="boom"), (), "boom"),
+            (HttpResponse(status=503, body=""), (), "HTTP 503 from the feed"),
+            (
+                HttpResponse(status=403, body=""),
+                (403,),
+                "HTTP 403 from the feed; access may be blocked or throttled",
+            ),
+            (HttpResponse(status=403, body=""), (), "HTTP 403 from the feed"),
+        ],
+    )
+    def test_names_the_failure_or_nothing(self, response, throttled, expected):
+        assert (
+            describe_failure(response, "the feed", rate_limited_statuses=throttled)
+            == expected
+        )
+
+    def test_throttle_statuses_are_the_ones_a_limiter_backs_off_on(self):
+        assert frozenset({403, 429}) == THROTTLE_STATUSES
 
 
 class TestRetryable:

@@ -82,7 +82,7 @@ def raise_for_reply_failure(
             status=status,
         )
     if status in {401, 403, 429}:
-        raise http_error(response, message)
+        raise http_error(response, message, credentialed=True)
     raise ReplyRejectedError(
         message, reason=error.code or f"http_{status}", status=status
     )

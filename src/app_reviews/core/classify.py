@@ -35,6 +35,14 @@ _STATUS_KINDS: dict[int, ErrorKind] = {
     429: "rate_limited",
 }
 
+THROTTLE_STATUSES = frozenset({403, 429})
+"""Statuses that mean "slow down" to a shared ``RateLimiter``.
+
+403 is here because the public stores answer a blocked client with it. A
+credentialed 403 is a refused credential, which ``HttpClient`` keeps out of the
+limiter; ``classify`` makes the same split through its ``credentialed`` flag.
+"""
+
 _CLASS_FOR: dict[ErrorKind, type[AppReviewsError]] = {
     "rate_limited": RateLimitError,
     "auth": AuthError,
@@ -66,7 +74,7 @@ def classify(
     status: int,
     transport_error: str | None = None,
     *,
-    credentialed: bool = True,
+    credentialed: bool,
     rate_limited_statuses: Collection[int] = (),
 ) -> ErrorKind:
     """The kind of failure an HTTP outcome represents.
@@ -94,7 +102,7 @@ def error_for(
     status: int,
     transport_error: str | None = None,
     *,
-    credentialed: bool = True,
+    credentialed: bool,
 ) -> type[AppReviewsError]:
     """The exception class for an HTTP outcome.
 
@@ -112,7 +120,7 @@ def fetch_error_from_response(
     status: int,
     message: str,
     transport_error: str | None = None,
-    credentialed: bool = True,
+    credentialed: bool,
     rate_limited_statuses: Collection[int] = (),
 ) -> FetchError:
     """Build a classified FetchError from an HTTP outcome.
@@ -135,24 +143,45 @@ def fetch_error_from_response(
     )
 
 
+def describe_failure(
+    response: HttpResponse,
+    subject: str,
+    *,
+    rate_limited_statuses: Collection[int] = (),
+) -> str | None:
+    """The message for an exchange that got no usable answer, else None.
+
+    A transport failure reports its exception text, because its status is 0 and
+    ``"HTTP 0"`` would say nothing. Any other non-2xx reads
+    ``HTTP 503 from <subject>``; a status in ``rate_limited_statuses`` adds that
+    access may be blocked, since the status alone does not say why.
+    """
+    if response.transport_error is not None:
+        return response.transport_error
+    if response.ok:
+        return None
+    message = f"HTTP {response.status} from {subject}"
+    if response.status in rate_limited_statuses:
+        message += "; access may be blocked or throttled"
+    return message
+
+
 def page_failure_from_response(
     response: HttpResponse,
     *,
     country: str | None,
     source_name: str,
-    credentialed: bool = True,
+    credentialed: bool,
+    rate_limited_statuses: Collection[int] = (),
 ) -> PageResult | None:
     """The failed page for an exchange that got no usable answer, else None.
 
-    ``source_name`` completes the status message: ``HTTP 503 from <source_name>``.
-    A transport failure reports its exception text instead, because its status
-    is 0 and ``"HTTP 0"`` would say nothing.
+    ``source_name`` completes the status message; see ``describe_failure``.
     """
-    if response.transport_error is not None:
-        message = response.transport_error
-    elif not response.ok:
-        message = f"HTTP {response.status} from {source_name}"
-    else:
+    message = describe_failure(
+        response, source_name, rate_limited_statuses=rate_limited_statuses
+    )
+    if message is None:
         return None
     error = fetch_error_from_response(
         country=country,
@@ -160,6 +189,7 @@ def page_failure_from_response(
         message=message,
         transport_error=response.transport_error,
         credentialed=credentialed,
+        rate_limited_statuses=rate_limited_statuses,
     )
     return PageResult(error=error)
 
@@ -198,12 +228,12 @@ def fetch_error_from_exception(
         if (kind := _KIND_FOR.get(cls)) is not None:
             break
     else:
-        kind = classify(exc.status or 0)
+        kind = classify(exc.status or 0, credentialed=True)
     return FetchError(country=country, message=str(exc), kind=kind, status=exc.status)
 
 
 def raise_for_http_failure(
-    response: HttpResponse, api: str, *, credentialed: bool = True
+    response: HttpResponse, api: str, *, credentialed: bool
 ) -> None:
     """Raise a classified ``HttpError`` unless the response is usable.
 
@@ -212,23 +242,21 @@ def raise_for_http_failure(
     lookup have one outcome rather than many. Both search clients carried a
     byte-identical private copy of this before it moved here.
     """
+    failure = describe_failure(response, api)
+    if failure is None:
+        return
     if response.transport_error is not None:
-        raise error_for(
-            response.status,
-            response.transport_error,
-            credentialed=credentialed,
-        )(
-            f"{api} request failed: {response.transport_error}",
-            status=response.status or None,
+        error_class = error_for(
+            response.status, response.transport_error, credentialed=credentialed
         )
-    if not response.ok:
-        raise http_error(
-            response, f"HTTP {response.status} from {api}", credentialed=credentialed
+        raise error_class(
+            f"{api} request failed: {failure}", status=response.status or None
         )
+    raise http_error(response, failure, credentialed=credentialed)
 
 
 def http_error(
-    response: HttpResponse, message: str, *, credentialed: bool = True
+    response: HttpResponse, message: str, *, credentialed: bool
 ) -> AppReviewsError:
     """The classified exception for a completed, failed response.
 

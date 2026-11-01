@@ -218,7 +218,10 @@ class AppStoreOfficialProvider(PooledClient):
         country to attribute a failure to.
         """
         failure = page_failure_from_response(
-            response, country=None, source_name="the App Store Connect API"
+            response,
+            country=None,
+            source_name="the App Store Connect API",
+            credentialed=True,
         )
         if failure is not None:
             return failure
