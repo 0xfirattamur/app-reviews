@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
@@ -209,7 +209,7 @@ class AppStoreOfficialProvider(PooledClient):
         if failure is not None:
             return failure
         try:
-            payload = json.loads(response.body)
+            payload = safe_json.loads(response.body)
             entries = self._read_review_entries(payload)
             next_cursor = self._read_next_cursor(payload)
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:

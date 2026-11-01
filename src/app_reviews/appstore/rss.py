@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from dataclasses import dataclass, replace
@@ -12,6 +11,7 @@ from urllib.parse import quote
 from xml.etree import ElementTree
 
 from app_reviews.appstore.atom import atom_entries
+from app_reviews.core import safe_json
 from app_reviews.core.classify import fetch_error_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
@@ -162,7 +162,7 @@ class AppStoreScraperProvider(PooledClient):
         if failure is not None:
             return failure
         try:
-            entries = self._read_review_entries(json.loads(response.body))
+            entries = self._read_review_entries(safe_json.loads(response.body))
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
             return PageResult(
                 error=FetchError(

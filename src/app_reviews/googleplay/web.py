@@ -9,6 +9,7 @@ import urllib.parse
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
+from app_reviews.core import safe_json
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
@@ -179,7 +180,7 @@ class GooglePlayScraperProvider(PooledClient):
             raise _ParseFailed("response is missing the batchexecute prefix")
 
         try:
-            payload = self._find_rpc_payload(json.loads(match.group(1)))
+            payload = self._find_rpc_payload(safe_json.loads(match.group(1)))
             if payload is None:
                 return [], None
             return self._read_review_entries(payload), self._read_next_cursor(payload)
@@ -204,7 +205,7 @@ class GooglePlayScraperProvider(PooledClient):
         """The RPC row's JSON-in-a-string payload, decoded."""
         if encoded_payload is None:
             return None
-        payload = json.loads(encoded_payload)
+        payload = safe_json.loads(encoded_payload)
         if not isinstance(payload, list):
             raise _ParseFailed(
                 f"RPC payload is {type(payload).__name__}, expected an array"

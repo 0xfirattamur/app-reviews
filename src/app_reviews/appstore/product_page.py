@@ -11,6 +11,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.core.search import (
@@ -55,7 +56,7 @@ def parse_version_history(response: HttpResponse) -> list[AppVersionEntry]:
     if match is None:
         raise ParseError(f"{_API} carried no embedded page data", status=status)
     try:
-        page_document = json.loads(match.group(1))
+        page_document = safe_json.loads(match.group(1))
     except json.JSONDecodeError as exc:
         raise ParseError(
             f"Unreadable page data from {_API}: {exc}", status=status

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from app_reviews.appstore.product_page import parse_version_history
+from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -217,7 +218,7 @@ class AppStoreSearch(PooledClient):
         """
         raise_for_http_failure(response, api, credentialed=False)
         try:
-            search_entries = json.loads(response.body)["results"]
+            search_entries = safe_json.loads(response.body)["results"]
         except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise ParseError(
                 f"Unreadable response from {api}: {exc}", status=response.status

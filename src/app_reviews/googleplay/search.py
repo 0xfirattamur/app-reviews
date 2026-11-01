@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 import logging
 import math
 import re
@@ -11,6 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
+from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -313,7 +313,6 @@ class GooglePlaySearch(PooledClient):
         which leaves the trailer after it alone.
         """
         datasets: dict[str, Any] = {}
-        decoder = json.JSONDecoder()
         for block_match in self._BLOCK.finditer(page_html):
             block = block_match.group(0)
             key_match = self._KEY.search(block)
@@ -322,7 +321,7 @@ class GooglePlaySearch(PooledClient):
                 continue
             dataset_key = key_match.group(1)
             try:
-                datasets[dataset_key], _ = decoder.raw_decode(block, data_start.end())
+                datasets[dataset_key], _ = safe_json.raw_decode(block, data_start.end())
             except ValueError:
                 _LOG.debug("Skipped an unreadable %s payload", dataset_key)
         return datasets

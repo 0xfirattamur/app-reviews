@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
+from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
@@ -181,7 +181,7 @@ class GooglePlayOfficialProvider(PooledClient):
 
     def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token; raises on a malformed envelope."""
-        payload = json.loads(body)
+        payload = safe_json.loads(body)
         entries = payload.get("reviews", [])
         if not isinstance(entries, list):
             raise TypeError(f"'reviews' is {type(entries).__name__}, expected a list")

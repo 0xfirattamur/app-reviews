@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 import time
@@ -14,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from app_reviews.core import safe_json
 from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.retry import RetryPolicy, retry_after_seconds
 from app_reviews.models.config import RetryConfig
@@ -110,7 +110,7 @@ class HttpResponse:
 
     def json(self) -> Any:
         """Parse body as JSON."""
-        return json.loads(self.body)
+        return safe_json.loads(self.body)
 
 
 class HttpClient:

@@ -10,6 +10,10 @@ __all__ = ["atom_entries"]
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ITUNES = "{http://itunes.apple.com/rss}"
 
+_MAX_DEPTH = 32
+"""How deep an entry's elements may nest. Apple's deepest is three levels; the
+bound keeps a hostile feed from exhausting the recursion limit."""
+
 
 def atom_entries(body: str) -> list[dict[str, Any]]:
     """The feed's ``<entry>`` elements, each shaped like a JSON feed entry.
@@ -23,14 +27,17 @@ def atom_entries(body: str) -> list[dict[str, Any]]:
     root = ElementTree.fromstring(body)
     if root.tag != f"{_ATOM}feed":
         raise ValueError(f"the root element is {root.tag!r}, not an Atom feed")
-    return [_node(entry) for entry in root.findall(f"{_ATOM}entry")]
+    return [_node(entry, depth=1) for entry in root.findall(f"{_ATOM}entry")]
 
 
-def _node(element: ElementTree.Element) -> dict[str, Any]:
+def _node(element: ElementTree.Element, *, depth: int) -> dict[str, Any]:
     """Children keyed as the JSON feed keys them; the first of a repeated key wins.
 
     The JSON feed has only the text ``content``, so the HTML one is dropped.
+    Raises ``ValueError`` when elements nest deeper than ``_MAX_DEPTH``.
     """
+    if depth > _MAX_DEPTH:
+        raise ValueError(f"the XML feed nests deeper than {_MAX_DEPTH} levels")
     node: dict[str, Any] = {}
     for child in element:
         key = _key(child.tag)
@@ -38,14 +45,14 @@ def _node(element: ElementTree.Element) -> dict[str, Any]:
             continue
         if key == "content" and child.get("type") == "html":
             continue
-        node[key] = _value(child)
+        node[key] = _value(child, depth=depth)
     return node
 
 
-def _value(element: ElementTree.Element) -> dict[str, Any]:
+def _value(element: ElementTree.Element, *, depth: int) -> dict[str, Any]:
     """``{"label": text, "attributes": {...}}``, or a nested node."""
     if len(element):
-        return _node(element)
+        return _node(element, depth=depth + 1)
     value: dict[str, Any] = {}
     if element.text is not None:
         value["label"] = element.text

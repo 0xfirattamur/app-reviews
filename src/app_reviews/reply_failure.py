@@ -6,11 +6,11 @@ for its own store's error body.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app_reviews.core import safe_json
 from app_reviews.core.classify import http_error
 from app_reviews.core.http import HttpResponse
 from app_reviews.errors import ReplyOutcomeUnknownError, ReplyRejectedError
@@ -37,7 +37,7 @@ class StoreError:
 def json_object(body: str) -> dict[str, Any]:
     """``body`` as a JSON object, or ``{}`` when it is not one."""
     try:
-        data = json.loads(body)
+        data = safe_json.loads(body)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}

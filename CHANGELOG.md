@@ -20,6 +20,9 @@ recent versions are also kept in
   overflowing date, so a hostile header (`1_0`, `inf`, `Sun, 06 Nov 1994
   08:49:37 +9999999999999999`) no longer crashes a request, and retry schedules
   past 1023 attempts no longer overflow.
+- Store responses nested deeper than Python can parse are now reported as
+  `ParseError`, or as a page `error` of kind `"parse"`, instead of raising
+  `RecursionError`.
 
 ## [1.3.0] - 2026-10-25
 
