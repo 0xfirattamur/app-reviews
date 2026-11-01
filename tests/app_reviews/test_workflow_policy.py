@@ -231,6 +231,16 @@ def test_every_setup_uv_step_uses_an_exact_tool_version() -> None:
     assert violations == []
 
 
+def test_release_workflow_never_restores_or_saves_the_uv_cache() -> None:
+    release, _ = _workflow("release.yml")
+    setups: list[dict[str, Any]] = []
+    for job in release["jobs"].values():
+        setups.extend(_steps_using(job, "astral-sh/setup-uv"))
+
+    assert setups
+    assert all(step["with"].get("enable-cache") is False for step in setups)
+
+
 def test_release_matrix_is_complete_and_gates_build_and_publication() -> None:
     release, _ = _workflow("release.yml")
     jobs = release["jobs"]
