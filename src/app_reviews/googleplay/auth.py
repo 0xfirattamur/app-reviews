@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
+from app_reviews.core.auth import BearerCache
 from app_reviews.core.classify import describe_failure, error_for, http_error
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
@@ -87,10 +88,6 @@ class GoogleAuth(PooledClient):
     ERROR_BODY_CHARS = 200
     """How much of a failed exchange's body reaches the exception message."""
 
-    REFRESH_MARGIN_SECONDS = 60
-    """Re-exchange this long before expiry, so a request that starts just under
-    the wire does not arrive with a token that has already expired."""
-
     _FORM_HEADERS: ClassVar[dict[str, str]] = {
         "Content-Type": "application/x-www-form-urlencoded"
     }
@@ -117,21 +114,18 @@ class GoogleAuth(PooledClient):
         self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
-        self._bearer_header: str | None = None
-        self._expires_at = 0.0
+        self._bearer = BearerCache()
 
     def close(self) -> None:
         """Clear cached credentials and close only a pool created here."""
         self._key = None
-        self._bearer_header = None
-        self._expires_at = 0.0
+        self._bearer.clear()
         super().close()
 
     async def aclose(self) -> None:
         """Async equivalent of :meth:`close`."""
         self._key = None
-        self._bearer_header = None
-        self._expires_at = 0.0
+        self._bearer.clear()
         await super().aclose()
 
     def authorization_header(self) -> str:
@@ -142,7 +136,7 @@ class GoogleAuth(PooledClient):
         ``ParseError`` when a success carried no token. All of them
         ``AppReviewsError``.
         """
-        if (cached := self._cached_header()) is not None:
+        if (cached := self._bearer.get(time.time())) is not None:
             return cached
         url, body = self._build_token_request()
         response = self._http.post(
@@ -157,7 +151,7 @@ class GoogleAuth(PooledClient):
         CPU work with nothing to await, so it runs off the loop rather than
         blocking it on an RSA signature.
         """
-        if (cached := self._cached_header()) is not None:
+        if (cached := self._bearer.get(time.time())) is not None:
             return cached
         url, body = await asyncio.to_thread(self._build_token_request)
         response = await self._http.apost(
@@ -312,26 +306,8 @@ class GoogleAuth(PooledClient):
         )
         return self._credentials.token_uri, body
 
-    def _cached_header(self) -> str | None:
-        """The held token while it is still worth reusing, else None.
-
-        Returns the value rather than answering yes/no. A boolean ``_fresh()``
-        could not narrow ``self._bearer_header`` for the caller, so both entry points
-        needed a ``type: ignore`` on their return, silencing the checker on a
-        public method to work around a private one's shape.
-
-        The header is read once into a local so a concurrent ``close()`` cannot
-        turn the check's ``True`` into a returned ``None``.
-        """
-        header = self._bearer_header
-        if header is not None and time.time() < self._expires_at:
-            return header
-        return None
-
     def _store_token(self, token: str, expires_in: int) -> str:
-        self._bearer_header = f"Bearer {token}"
-        self._expires_at = time.time() + expires_in - self.REFRESH_MARGIN_SECONDS
-        return self._bearer_header
+        return self._bearer.store(token, expires_in, time.time())
 
     def _read_token(self, response: HttpResponse) -> tuple[str, int]:
         """The access token and its lifetime, or the error that explains why not.

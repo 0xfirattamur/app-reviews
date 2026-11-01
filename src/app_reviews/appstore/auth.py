@@ -10,6 +10,7 @@ from typing import Any, Self
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from app_reviews.core.auth import BearerCache
 from app_reviews.core.jwt import (
     convert_der_to_raw_signature,
     encode_base64url,
@@ -21,10 +22,6 @@ from app_reviews.models.config import AppStoreAuth, ConnectCredentials
 
 TOKEN_EXPIRY_SECONDS = 20 * 60
 """Apple's cap. A Connect token minted for longer than 20 minutes is rejected."""
-
-REFRESH_MARGIN_SECONDS = 60
-"""Re-sign this long before expiry, so a request that starts just under the wire
-does not arrive with a token that has already died."""
 
 
 def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
@@ -78,8 +75,7 @@ class ConnectAuth:
     def __init__(self, credentials: ConnectCredentials) -> None:
         self._credentials = credentials
         self._key: ec.EllipticCurvePrivateKey | None = None
-        self._token: str | None = None
-        self._expires_at = 0.0
+        self._bearer = BearerCache()
 
     def _build_header(self) -> dict[str, str]:
         return {"alg": "ES256", "kid": self._credentials.key_id, "typ": "JWT"}
@@ -136,18 +132,13 @@ class ConnectAuth:
         The clock is read once and used for both the JWT's ``iat``/``exp`` and the
         local expiry, so what this class believes about the token cannot drift
         from what it actually signed.
-
-        ``self._token`` is read once into a local: a ``close()`` from another
-        thread between the check and the return would otherwise make this
-        return ``"Bearer None"``.
         """
-        token = self._token
-        if token is None or time.time() >= self._expires_at:
-            issued_at = int(time.time())
-            token = self.generate_token(issued_at)
-            self._token = token
-            self._expires_at = issued_at + TOKEN_EXPIRY_SECONDS - REFRESH_MARGIN_SECONDS
-        return f"Bearer {token}"
+        cached = self._bearer.get(time.time())
+        if cached is not None:
+            return cached
+        issued_at = int(time.time())
+        token = self.generate_token(issued_at)
+        return self._bearer.store(token, TOKEN_EXPIRY_SECONDS, issued_at)
 
     async def aauthorization_header(self) -> str:
         """Signing is local CPU work with nothing to await, so it runs off the loop."""
@@ -156,8 +147,7 @@ class ConnectAuth:
     def close(self) -> None:
         """Discard cached signing material and bearer-token state."""
         self._key = None
-        self._token = None
-        self._expires_at = 0.0
+        self._bearer.clear()
 
     async def aclose(self) -> None:
         """Async lifecycle twin; cleanup itself performs no I/O."""
