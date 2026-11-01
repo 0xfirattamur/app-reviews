@@ -104,3 +104,7 @@ class AppVersionEntry:
     version: str
     released_at: datetime
     release_notes: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-safe plain dict of every field, with ``released_at`` as ISO 8601."""
+        return fields_to_dict(self)

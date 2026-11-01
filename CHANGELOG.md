@@ -11,6 +11,8 @@ recent versions are also kept in
 - `FetchResult.ok` is `True` when no country failed, the same test as `not
   result.errors`.
 - `Review.key` is the `(store, source, id)` tuple to deduplicate reviews on.
+- `AppVersionEntry.to_dict()` and `AppStoreVersion.to_dict()` return JSON-safe
+  dicts with ISO 8601 dates.
 
 ### Fixed
 

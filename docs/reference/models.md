@@ -531,6 +531,8 @@ with AppStoreSearch() as client:
 | `released_at` | `datetime` | When that version shipped: timezone-aware UTC, to the second. |
 | `release_notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. Same name as `AppMetadata.release_notes`. |
 
+`to_dict()` returns a JSON-safe plain dict of the three fields, with `released_at` as an ISO 8601 string.
+
 ---
 
 ## AppStoreVersion
@@ -551,6 +553,8 @@ The official API has no release date. For when versions reached the store, use
 | `created_at` | `datetime \| None` | `createdDate`: when the version was created in App Store Connect, not when it shipped. |
 | `earliest_release_date` | `datetime \| None` | `earliestReleaseDate`: the earliest moment a `SCHEDULED` release may go out. |
 | `release_notes` | `dict[str, str]` | `whatsNew` per locale, such as `{"en-US": "..."}`; locales without text are omitted. |
+
+`to_dict()` returns a JSON-safe plain dict of every field, with the two dates as ISO 8601 strings.
 
 ---
 
