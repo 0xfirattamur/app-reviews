@@ -435,12 +435,28 @@ class TestResultsWithoutAnIdAreSkipped:
 
         assert app.app_id == "com.example.app"
 
-    def test_lookup_returns_none_rather_than_raising(self):
-        """``lookup`` already signals "no usable app" with None."""
+    async def test_lookup_of_an_unusable_result_is_a_parse_error(self, twin):
+        """Results with no usable app are not "no such app", as on Google Play."""
         body = json.dumps({"results": [{"trackName": "A"}]})
         client = _client(lambda r: httpx.Response(200, text=body))
 
-        assert client.lookup("123") is None
+        with pytest.raises(ParseError, match="no usable app"):
+            await twin.call(client, "lookup", "123")
+
+    @pytest.mark.parametrize("first_entry", [None, "text", 3, []])
+    async def test_lookup_of_a_result_that_is_not_an_object_is_a_parse_error(
+        self, twin, first_entry
+    ):
+        body = json.dumps({"results": [first_entry]})
+        client = _client(lambda r: httpx.Response(200, text=body))
+
+        with pytest.raises(ParseError, match="no usable app"):
+            await twin.call(client, "lookup", "123")
+
+    async def test_lookup_without_results_is_still_none(self, twin):
+        client = _client(lambda r: httpx.Response(200, text=_payload([])))
+
+        assert await twin.call(client, "lookup", "123") is None
 
 
 class TestTheAsyncPathSendsTheSameQuery:

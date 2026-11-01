@@ -94,7 +94,11 @@ class AppStoreSearch(PooledClient):
         *,
         country: Country | str = Country.US,
     ) -> AppMetadata | None:
-        """Look up an app by numeric trackId or reverse-DNS bundleId."""
+        """Look up an app by numeric trackId or reverse-DNS bundleId.
+
+        None when the store has no such app. A result this cannot turn into an
+        app raises ``ParseError``.
+        """
         return get_and_parse(
             self._http,
             self.LOOKUP_URL,
@@ -204,11 +208,22 @@ class AppStoreSearch(PooledClient):
         return apps
 
     def _parse_lookup(self, response: HttpResponse) -> AppMetadata | None:
-        """The one result, or None, which is also how "no such app" is reported."""
+        """The one result, or None for an empty ``results``: "no such app".
+
+        A first result with no usable app is a page this cannot read, and raises
+        ``ParseError``, as Google Play's lookup does. Answering None would read
+        as an app that does not exist.
+        """
         search_entries = self._read_search_results(response, "iTunes Lookup API")
         if not search_entries:
             return None
-        return self._parse_metadata(search_entries[0])
+        app = self._parse_metadata(search_entries[0])
+        if app is None:
+            raise ParseError(
+                "iTunes Lookup API returned a result with no usable app",
+                status=response.status,
+            )
+        return app
 
     def _read_search_results(self, response: HttpResponse, api: str) -> list[Any]:
         """The ``results`` array, or ``ParseError`` if the body is unreadable.

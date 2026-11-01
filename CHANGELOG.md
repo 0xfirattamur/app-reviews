@@ -48,6 +48,9 @@ recent versions are also kept in
 - `AppStoreVersions.versions()` and `aversions()` now raise `ParseError` when
   `links.next` repeats a page or the walk passes `AppStoreVersions.MAX_PAGES`,
   instead of returning a partial list or never ending.
+- `AppStoreSearch.lookup()` and `alookup()` now raise `ParseError` when the
+  store returns a result with no usable app, instead of returning `None` as if
+  the app did not exist.
 
 ## [1.3.0] - 2026-10-25
 
