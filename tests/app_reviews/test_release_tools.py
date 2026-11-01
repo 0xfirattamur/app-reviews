@@ -12,6 +12,10 @@ from pathlib import Path
 
 import pytest
 
+# Builds distributions and runs the release scripts: repository tooling, not
+# library behaviour, so it runs in its own CI job rather than on every matrix cell.
+pytestmark = pytest.mark.release
+
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
     "project"

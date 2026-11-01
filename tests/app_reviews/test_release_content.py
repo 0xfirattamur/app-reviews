@@ -7,6 +7,8 @@ import tarfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import app_reviews
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -140,6 +142,7 @@ def test_citation_metadata_is_present_and_versioned() -> None:
     assert "repository-code: https://github.com/0xfirattamur/app-reviews" in citation
 
 
+@pytest.mark.release
 def test_sdist_excludes_generated_workspace_content(tmp_path: Path) -> None:
     sentinels = [
         ROOT / ".cache/release-artifact-sentinel",

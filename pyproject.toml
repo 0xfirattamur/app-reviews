@@ -131,8 +131,11 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["live: live E2E tests that hit real store endpoints (skipped by default)"]
-addopts = "-m 'not live'"
+markers = [
+    "live: live E2E tests that hit real store endpoints (skipped by default)",
+    "release: repository release and CI policy checks that build distributions or run scripts (skipped by default; run with -m release)",
+]
+addopts = "-m 'not live and not release'"
 
 [tool.coverage.run]
 source = ["app_reviews"]

@@ -14,6 +14,10 @@ import yaml
 
 from scripts.verify_release import is_semver_tag, verify_release, verify_tag_ancestry
 
+# Checks files of this repository, not library behaviour, so it runs in the
+# dedicated release CI job instead of on every matrix cell.
+pytestmark = pytest.mark.release
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
@@ -260,7 +264,7 @@ def test_release_matrix_is_complete_and_gates_build_and_publication() -> None:
     matrix_jobs = [
         name
         for name, job in jobs.items()
-        if any("pytest" in command for command in _runs(job))
+        if "strategy" in job and any("pytest" in command for command in _runs(job))
     ]
     assert len(matrix_jobs) == 1
     matrix = jobs[matrix_jobs[0]]["strategy"]["matrix"]["include"]
@@ -270,6 +274,20 @@ def test_release_matrix_is_complete_and_gates_build_and_publication() -> None:
     )
     for publisher in _publish_jobs(jobs):
         assert matrix_jobs[0] in _dependency_closure(jobs, publisher)
+
+
+def test_release_runs_the_release_marked_tests_before_any_publisher() -> None:
+    release, _ = _workflow("release.yml")
+    jobs = release["jobs"]
+    checkers = [
+        name
+        for name, job in jobs.items()
+        if any("pytest -m release" in command for command in _runs(job))
+    ]
+
+    assert len(checkers) == 1
+    for publisher in _publish_jobs(jobs):
+        assert checkers[0] in _dependency_closure(jobs, publisher)
 
 
 def test_release_identity_gate_runs_on_full_history_and_precedes_everything() -> None:
@@ -361,6 +379,13 @@ def test_ci_tests_every_supported_python_and_platform() -> None:
     assert {(cell["os"], cell["python-version"]) for cell in matrix} == (
         SUPPORTED_RELEASE_CELLS
     )
+
+
+def test_ci_runs_the_release_marked_tests_that_default_runs_deselect() -> None:
+    ci, _ = _workflow("ci.yml")
+    commands = _all_commands(ci)
+
+    assert any("pytest -m release" in command for command in commands)
 
 
 def test_latest_dependency_signal_runs_only_on_schedule_without_the_lockfile() -> None:
