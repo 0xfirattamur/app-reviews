@@ -119,6 +119,15 @@ class Review:
                 object.__setattr__(self, name, value.replace(tzinfo=UTC))
 
     @property
+    def key(self) -> tuple[Store, Source, str]:
+        """``(store, source, id)``: the key to deduplicate reviews on.
+
+        ``id`` is unique only within a ``(store, source)`` pair, so the same
+        real-world review fetched through two sources has two different keys.
+        """
+        return (self.store, self.source, self.id)
+
+    @property
     def dated_at(self) -> datetime:
         """Whichever timestamp this review's source reports.
 

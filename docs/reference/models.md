@@ -80,7 +80,7 @@ from app_reviews import DeviceMetadata
     real-world App Store review fetched via `appstore_scraper` and via
     `appstore_official` carries two different ids.
 
-    Key deduplication on `(store, source, id)`, and use `source` to tell provenance apart.
+    Key deduplication on `(store, source, id)`, which is `review.key`, and use `source` to tell provenance apart.
 
 For App Store Connect, `customerReviewResponses` requires a Connect `customerReviews.id`. RSS ids are numeric (`14357217033`) and Connect ids are opaque, and Apple exposes no mapping between them: the `customerReviews` endpoint has no id filter and no legacy-id attribute. So an `appstore_scraper` id cannot be used to reply.
 

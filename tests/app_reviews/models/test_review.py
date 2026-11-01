@@ -202,3 +202,19 @@ class TestEnrichmentFields:
                 None,
                 "positional reply",
             )
+
+
+class TestKey:
+    def test_key_is_store_source_and_id(self):
+        review = make_review(store="googleplay", source="googleplay_scraper", id="abc")
+        assert review.key == ("googleplay", "googleplay_scraper", "abc")
+
+    def test_same_id_from_another_source_has_another_key(self):
+        scraped = make_review(source="appstore_scraper", id="1")
+        official = make_review(source="appstore_official", id="1")
+        assert scraped.key != official.key
+
+    def test_key_deduplicates_a_refetched_review(self):
+        first = make_review(id="1")
+        again = make_review(id="1", rating=1)
+        assert len({first.key, again.key}) == 1

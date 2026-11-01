@@ -10,6 +10,7 @@ recent versions are also kept in
 
 - `FetchResult.ok` is `True` when no country failed, the same test as `not
   result.errors`.
+- `Review.key` is the `(store, source, id)` tuple to deduplicate reviews on.
 
 ### Fixed
 
