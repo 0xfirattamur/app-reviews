@@ -20,12 +20,12 @@ from app_reviews.core.http import HttpClient
 from app_reviews.googleplay.auth import GoogleAuth
 from app_reviews.googleplay.developer_api import GooglePlayOfficialProvider
 from app_reviews.models.config import ConnectCredentials
-from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
 
 
 def _creds() -> ConnectCredentials:
     return ConnectCredentials(
-        key_id="K7YXJ5RHF2", issuer_id="issuer-uuid", private_key=_TEST_PRIVATE_KEY
+        key_id="K7YXJ5RHF2", issuer_id="issuer-uuid", private_key=TEST_EC_PRIVATE_KEY
     )
 
 

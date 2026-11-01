@@ -14,9 +14,11 @@ from app_reviews.googleplay import (
     GooglePlayOfficialProvider,
     GooglePlayScraperProvider,
 )
-from tests.app_reviews.appstore.test_auth import _make_credentials
-from tests.app_reviews.factories import StaticToken
-from tests.app_reviews.googleplay.test_auth import _SERVICE_ACCOUNT_JSON
+from tests.app_reviews.factories import (
+    StaticToken,
+    connect_credentials,
+    service_account_json,
+)
 
 
 class BorrowedHttp:
@@ -71,7 +73,7 @@ class TestGoogleAuthLifecycle:
     def _auth(self, http=None):
         import json
 
-        data = json.dumps(_SERVICE_ACCOUNT_JSON)
+        data = json.dumps(service_account_json())
         with patch("builtins.open", mock_open(read_data=data)):
             return GoogleAuth("/fake/key.json", http=http)
 
@@ -100,7 +102,7 @@ class TestGoogleAuthLifecycle:
 
 class TestConnectAuthLifecycle:
     async def test_sync_and_async_contexts_clear_cached_signing_state(self):
-        auth = ConnectAuth(_make_credentials())
+        auth = ConnectAuth(connect_credentials())
         auth.authorization_header()
 
         with auth as entered:

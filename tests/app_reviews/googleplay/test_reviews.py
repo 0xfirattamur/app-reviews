@@ -11,7 +11,7 @@ caller actually holds. Mirrors ``tests/app_reviews/appstore/test_reviews.py``.
 """
 
 import json
-import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -23,7 +23,7 @@ from app_reviews import (
     GooglePlayAuth,
     GooglePlayReviews,
 )
-from tests.app_reviews.googleplay.test_auth import _TEST_RSA_KEY
+from tests.app_reviews.factories import service_account_json
 from tests.app_reviews.transport import client_for
 
 
@@ -33,50 +33,49 @@ def _client(service_account_path: str) -> GooglePlayReviews:
     )
 
 
-def _write(contents: str) -> str:
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        f.write(contents)
-        return f.name
-
-
-def _service_account(**overrides) -> str:
+def _service_account(write_file: Callable[[str], str], **overrides) -> str:
     """Path to a service-account JSON file, with fields overridden."""
-    document = {
-        "client_email": "test@test.iam.gserviceaccount.com",
-        "private_key": _TEST_RSA_KEY,
-        "token_uri": "https://oauth2.googleapis.com/token",
-        **overrides,
-    }
-    return _write(json.dumps(document))
+    return write_file(json.dumps(service_account_json(**overrides)))
 
 
 class TestUnusableKeyFile:
     @pytest.mark.parametrize(
         ("label", "path_factory"),
         [
-            ("missing", lambda: "/nope/definitely-missing.json"),
-            ("a directory", tempfile.mkdtemp),
-            ("empty", lambda: _write("")),
-            ("not JSON", lambda: _write("not json at all\n")),
-            ("JSON but not an object", lambda: _write("[1, 2, 3]")),
-            ("no client_email", lambda: _service_account(client_email="")),
-            ("no private_key", lambda: _service_account(private_key="")),
-            ("private_key is not a PEM", lambda: _service_account(private_key="nope")),
+            ("missing", lambda write_file: "/nope/definitely-missing.json"),
+            ("a directory", lambda write_file: str(Path(write_file("")).parent)),
+            ("empty", lambda write_file: write_file("")),
+            ("not JSON", lambda write_file: write_file("not json at all\n")),
+            ("JSON but not an object", lambda write_file: write_file("[1, 2, 3]")),
+            (
+                "no client_email",
+                lambda write_file: _service_account(write_file, client_email=""),
+            ),
+            (
+                "no private_key",
+                lambda write_file: _service_account(write_file, private_key=""),
+            ),
+            (
+                "private_key is not a PEM",
+                lambda write_file: _service_account(write_file, private_key="nope"),
+            ),
             (
                 "token_uri is not HTTPS",
-                lambda: _service_account(
-                    token_uri="http://oauth2.googleapis.com/token"
+                lambda write_file: _service_account(
+                    write_file, token_uri="http://oauth2.googleapis.com/token"
                 ),
             ),
             (
                 "token_uri is not Google",
-                lambda: _service_account(token_uri="https://evil.example/token"),
+                lambda write_file: _service_account(
+                    write_file, token_uri="https://evil.example/token"
+                ),
             ),
         ],
     )
-    def test_it_raises_auth_error(self, label, path_factory):
+    def test_it_raises_auth_error(self, label, path_factory, write_file):
         with pytest.raises(AuthError):
-            _client(path_factory()).fetch("com.example.app")
+            _client(path_factory(write_file)).fetch("com.example.app")
 
     def test_auth_error_is_catchable_as_the_base(self):
         with pytest.raises(AppReviewsError):
@@ -98,32 +97,32 @@ class TestUnusableKeyFile:
 
 
 class TestUsableKeyFile:
-    def test_a_real_key_builds_the_official_provider(self):
-        assert _client(_service_account()).source == "googleplay_official"
+    def test_a_real_key_builds_the_official_provider(self, write_file):
+        assert _client(_service_account(write_file)).source == "googleplay_official"
 
     def test_no_auth_needs_no_key_and_uses_the_scraper(self):
         assert GooglePlayReviews().source == "googleplay_scraper"
 
-    def test_the_key_is_read_once_per_client(self):
+    def test_the_key_is_read_once_per_client(self, write_file):
         """Provider construction is cached, so the file is not re-read per call."""
-        path = Path(_service_account())
+        path = Path(_service_account(write_file))
         client = _client(str(path))
         assert client.source == "googleplay_official"
         path.unlink()  # gone now; a second read would fail
 
         assert client.source == "googleplay_official"
 
-    async def test_the_async_path_resolves_the_same_provider(self):
-        client = _client(_service_account())
+    async def test_the_async_path_resolves_the_same_provider(self, write_file):
+        client = _client(_service_account(write_file))
 
         assert (await client._abuild_provider()).source == "googleplay_official"
 
 
 class TestTheProviderSharesTheClientsPool:
-    def test_the_official_provider_gets_the_clients_http(self):
+    def test_the_official_provider_gets_the_clients_http(self, write_file):
         """The token exchange and the review requests travel on one pool, so
         proxy and retry cannot diverge between them."""
-        client = _client(_service_account())
+        client = _client(_service_account(write_file))
         provider = client._build_provider()
 
         assert provider._http is client._http
@@ -136,7 +135,7 @@ class TestTheProviderSharesTheClientsPool:
 
 
 class TestTranslationLanguage:
-    def test_it_reaches_the_developer_api_request(self):
+    def test_it_reaches_the_developer_api_request(self, write_file):
         review_requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -150,7 +149,7 @@ class TestTranslationLanguage:
         client = client_for(
             GooglePlayReviews,
             handler,
-            auth=GooglePlayAuth(service_account_path=_service_account()),
+            auth=GooglePlayAuth(service_account_path=_service_account(write_file)),
             translation_language=" de-DE ",
         )
 
@@ -163,9 +162,9 @@ class TestTranslationLanguage:
             GooglePlayReviews(translation_language="de")
 
     @pytest.mark.parametrize("language", ["", "   "])
-    def test_a_blank_language_is_rejected(self, language):
+    def test_a_blank_language_is_rejected(self, language, write_file):
         with pytest.raises(ValueError, match="non-empty"):
             GooglePlayReviews(
-                auth=GooglePlayAuth(service_account_path=_service_account()),
+                auth=GooglePlayAuth(service_account_path=_service_account(write_file)),
                 translation_language=language,
             )

@@ -20,7 +20,7 @@ from app_reviews import (
     ReplyRejectedError,
     ReviewReply,
 )
-from tests.app_reviews.googleplay.test_auth import _SERVICE_ACCOUNT_JSON
+from tests.app_reviews.factories import service_account_json
 from tests.app_reviews.transport import client_for
 
 _REVIEWS = (
@@ -48,7 +48,7 @@ class _Api:
 
 
 def _replies(handler, *, retries: int = 3) -> GooglePlayReplies:
-    auth = GooglePlayAuth(service_account_info=_SERVICE_ACCOUNT_JSON)
+    auth = GooglePlayAuth(service_account_info=service_account_json())
     return client_for(GooglePlayReplies, handler, retries=retries, auth=auth)
 
 

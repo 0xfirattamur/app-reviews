@@ -13,27 +13,32 @@ import pytest
 
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
-
-from .test_fetch import MultiCountryProvider
-from .test_paging import NOW, FakeClient, FakeProvider, _page, _review
+from tests.app_reviews.factories import (
+    NOW,
+    FakeClient,
+    FakeProvider,
+    MultiCountryProvider,
+    make_page,
+    make_review,
+)
 
 
 class TestIterReviews:
     def test_zero_limit_does_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         assert list(FakeClient(provider).iter_reviews("123", limit=0)) == []
         assert provider.calls == []
 
     def test_negative_limit_is_rejected_without_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         with pytest.raises(ValueError, match="limit"):
             list(FakeClient(provider).iter_reviews("123", limit=-1))
         assert provider.calls == []
 
     def test_empty_countries_do_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         assert list(FakeClient(provider).iter_reviews("123", countries=[])) == []
         assert provider.calls == []
@@ -41,8 +46,14 @@ class TestIterReviews:
     def test_yields_individual_reviews_across_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], None),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -54,9 +65,9 @@ class TestIterReviews:
         """The point of the rung: taking one review must not walk the feed."""
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -70,8 +81,8 @@ class TestIterReviews:
         """``fetch`` fans out to every country up front; this must not."""
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us-1")], None)],
-                "gb": [_page([_review(NOW, "gb-1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us-1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb-1")], None)],
             }
         )
 
@@ -83,8 +94,8 @@ class TestIterReviews:
     def test_spans_countries_in_order(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us-1")], None)],
-                "gb": [_page([_review(NOW, "gb-1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us-1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb-1")], None)],
             }
         )
 
@@ -94,7 +105,8 @@ class TestIterReviews:
 
     def test_a_global_source_is_walked_once(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], None)], source="appstore_official"
+            [make_page([make_review(created_at=NOW, id="a")], None)],
+            source="appstore_official",
         )
 
         reviews = list(
@@ -107,8 +119,14 @@ class TestIterReviews:
     def test_limit_counts_reviews_yielded_not_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], None),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -121,9 +139,9 @@ class TestIterReviews:
     def test_limit_stops_paging_too(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -134,9 +152,9 @@ class TestIterReviews:
     def test_public_max_pages_bounds_the_stream(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -150,9 +168,9 @@ class TestIterReviews:
     def test_limit_spans_countries(self):
         provider = MultiCountryProvider(
             {
-                "us": [_page([_review(NOW, "us-1")], None)],
-                "gb": [_page([_review(NOW, "gb-1")], None)],
-                "de": [_page([_review(NOW, "de-1")], None)],
+                "us": [make_page([make_review(created_at=NOW, id="us-1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb-1")], None)],
+                "de": [make_page([make_review(created_at=NOW, id="de-1")], None)],
             }
         )
 
@@ -175,9 +193,9 @@ class TestIterReviews:
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
             [
-                _page([_review(NOW, "new")], "1"),
-                _page([_review(old, "old")], "2"),
-                _page([_review(old, "older")], "3"),
+                make_page([make_review(created_at=NOW, id="new")], "1"),
+                make_page([make_review(created_at=old, id="old")], "2"),
+                make_page([make_review(created_at=old, id="older")], "3"),
             ]
         )
 
@@ -199,7 +217,7 @@ class TestIterReviews:
         provider = MultiCountryProvider(
             {
                 "us": [PageResult(error=err)],
-                "gb": [_page([_review(NOW, "gb-1")], None)],
+                "gb": [make_page([make_review(created_at=NOW, id="gb-1")], None)],
             }
         )
 
@@ -215,8 +233,14 @@ class TestIterReviews:
 class TestAsyncParity:
     async def test_aiter_reviews_matches_iter_reviews(self):
         pages = [
-            _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-            _page([_review(NOW, "c")], None),
+            make_page(
+                [
+                    make_review(created_at=NOW, id="a"),
+                    make_review(created_at=NOW, id="b"),
+                ],
+                "1",
+            ),
+            make_page([make_review(created_at=NOW, id="c")], None),
         ]
 
         sync = list(
@@ -232,8 +256,8 @@ class TestAsyncParity:
     async def test_aiter_reviews_is_lazy(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
             ]
         )
 
@@ -243,7 +267,17 @@ class TestAsyncParity:
         assert len(provider.calls) == 1
 
     async def test_aiter_reviews_honours_limit(self):
-        provider = FakeProvider([_page([_review(NOW, "a"), _review(NOW, "b")], "1")])
+        provider = FakeProvider(
+            [
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                )
+            ]
+        )
 
         stream = FakeClient(provider).aiter_reviews("123", countries=["us"], limit=1)
 
@@ -252,9 +286,9 @@ class TestAsyncParity:
     async def test_aiter_reviews_honours_max_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -272,7 +306,10 @@ class TestOnPage:
 
     def test_it_runs_before_the_pages_reviews_are_yielded(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+            [
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
+            ]
         )
         seen: list[str | None] = []
 
@@ -291,7 +328,7 @@ class TestOnPage:
         provider = MultiCountryProvider(
             {
                 "us": [PageResult(error=error)],
-                "gb": [_page([], None)],
+                "gb": [make_page([], None)],
             }
         )
         seen: list[tuple[str | None, PageResult]] = []
@@ -312,7 +349,8 @@ class TestOnPage:
 
     def test_a_global_source_reports_no_country(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], None)], source="appstore_official"
+            [make_page([make_review(created_at=NOW, id="a")], None)],
+            source="appstore_official",
         )
         countries: list[str | None] = []
 
@@ -327,7 +365,15 @@ class TestOnPage:
     def test_page_rows_are_counted_before_since_trims_them(self):
         old = NOW - timedelta(days=10)
         provider = FakeProvider(
-            [_page([_review(NOW, "new"), _review(old, "old")], None)]
+            [
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="new"),
+                        make_review(created_at=old, id="old"),
+                    ],
+                    None,
+                )
+            ]
         )
         row_counts: list[int] = []
 
@@ -345,7 +391,10 @@ class TestOnPage:
 
     def test_an_exception_from_the_callback_ends_the_stream(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+            [
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
+            ]
         )
 
         def refuse(country, page):
@@ -360,7 +409,10 @@ class TestOnPage:
         assert len(provider.calls) == 1
 
     async def test_the_async_twin_reports_the_same_pages(self):
-        pages = [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+        pages = [
+            make_page([make_review(created_at=NOW, id="a")], "1"),
+            make_page([make_review(created_at=NOW, id="b")], None),
+        ]
         sync_seen: list[tuple[str | None, str | None]] = []
         async_seen: list[tuple[str | None, str | None]] = []
 

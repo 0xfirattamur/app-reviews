@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
 import locale
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 
@@ -22,3 +24,20 @@ def german_time_locale() -> Iterator[None]:
         pytest.skip("the de_DE.UTF-8 locale is not installed")
     yield
     locale.setlocale(locale.LC_TIME, previous)
+
+
+@pytest.fixture
+def write_file(tmp_path: Path) -> Callable[[str], str]:
+    """Write text to a new file under ``tmp_path`` and return its path.
+
+    For tests that hand a path to code reading a key file. Each call makes a
+    distinct file; pytest removes the directory with the test's other temp data.
+    """
+    names = (f"key-{number}" for number in itertools.count())
+
+    def write(contents: str) -> str:
+        path = tmp_path / next(names)
+        path.write_text(contents)
+        return str(path)
+
+    return write

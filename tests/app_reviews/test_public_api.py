@@ -235,11 +235,11 @@ class TestOfficialProvidersAreConstructible:
         from app_reviews import AppStoreAuth
         from app_reviews.appstore import AppStoreOfficialProvider, ConnectAuth
         from app_reviews.models.config import ConnectCredentials
-        from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+        from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
 
         assert AppStoreAuth is not None
         creds = ConnectCredentials(
-            key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY
+            key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY
         )
         provider = AppStoreOfficialProvider(ConnectAuth(creds))
 

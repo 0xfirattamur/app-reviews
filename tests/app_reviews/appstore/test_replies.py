@@ -21,7 +21,7 @@ from app_reviews import (
     ReviewReply,
     ServerError,
 )
-from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
 from tests.app_reviews.transport import Recorder, client_for
 
 _BASE = "https://api.appstoreconnect.apple.com/v1"
@@ -44,7 +44,7 @@ def _response_doc(
 
 
 def _replies(handler, *, retries: int = 3) -> AppStoreReplies:
-    auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY)
+    auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY)
     return client_for(AppStoreReplies, handler, retries=retries, auth=auth)
 
 

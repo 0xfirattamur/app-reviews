@@ -15,7 +15,7 @@ from app_reviews import (
     NotFoundError,
     ParseError,
 )
-from tests.app_reviews.appstore.test_auth import _TEST_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
 from tests.app_reviews.transport import client_for
 
 _URL = "https://api.appstoreconnect.apple.com/v1/apps/123/appStoreVersions"
@@ -62,7 +62,7 @@ def _localization(loc_id: str, locale: str, whats_new: str | None) -> dict:
 
 
 def _client(handler) -> AppStoreVersions:
-    auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=_TEST_PRIVATE_KEY)
+    auth = AppStoreAuth(key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY)
     return client_for(AppStoreVersions, handler, auth=auth)
 
 

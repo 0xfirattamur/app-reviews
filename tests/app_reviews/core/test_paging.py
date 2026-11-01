@@ -1,7 +1,7 @@
 """Tests for the public page-level API: rungs 1 and 2 of the client ladder."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import get_args
 
 import pytest
@@ -15,7 +15,6 @@ from app_reviews.core.paging import (
     orders_newest_first,
     prefer_stop_reason,
 )
-from app_reviews.core.reviews import BaseReviews
 from app_reviews.errors import (
     AuthError,
     ParseError,
@@ -25,8 +24,14 @@ from app_reviews.errors import (
 )
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
-from app_reviews.models.review import Review
 from app_reviews.models.types import Sort, Source
+from tests.app_reviews.factories import (
+    NOW,
+    FakeClient,
+    FakeProvider,
+    make_page,
+    make_review,
+)
 
 
 @pytest.mark.parametrize("safety_reason", ["cycle", "stalled", "max_pages"])
@@ -39,73 +44,13 @@ def test_limit_preserves_higher_priority_stop_reasons(higher_reason):
     assert prefer_stop_reason(higher_reason, "limit") == higher_reason
 
 
-def _review(created_at: datetime, review_id: str = "1", rating: int = 5) -> Review:
-    return Review(
-        store="appstore",
-        app_id="123",
-        country="us",
-        rating=rating,
-        title="t",
-        body="b",
-        author_name="a",
-        created_at=created_at,
-        source="appstore_scraper",
-        id=review_id,
-    )
-
-
-class FakeProvider:
-    """A scripted provider. Records every (country, cursor) it was asked for.
-
-    ``calls`` records every request regardless of entry point, so existing
-    assertions on call counts hold for both sync and async walks. ``async_calls``
-    records only requests that went through ``afetch_page``, so a test can
-    prove the async path actually used it instead of silently falling back to
-    the sync ``fetch_page`` body.
-    """
-
-    def __init__(self, pages, source="appstore_scraper"):
-        self._pages = pages
-        self.source = source
-        self.calls: list[tuple[str, str | None]] = []
-        self.async_calls: list[tuple[str, str | None]] = []
-
-    def fetch_page(self, app_id, country, cursor):
-        self.calls.append((country, cursor))
-        return self._page_for(cursor)
-
-    async def afetch_page(self, app_id, country, cursor):
-        self.calls.append((country, cursor))
-        self.async_calls.append((country, cursor))
-        return self._page_for(cursor)
-
-    def _page_for(self, cursor):
-        index = 0 if cursor is None else int(cursor)
-        if index >= len(self._pages):
-            return PageResult()
-        return self._pages[index]
-
-
-class FakeClient(BaseReviews):
-    def __init__(self, provider):
-        super().__init__()
-        self._provider = provider
-
-    def _build_provider(self):
-        return self._provider
-
-
-def _page(reviews, next_cursor):
-    return PageResult(reviews=reviews, next_cursor=next_cursor)
-
-
-NOW = datetime(2026, 7, 30, tzinfo=UTC)
-
-
 class TestFetchPage:
     def test_returns_a_single_page_without_paging(self):
         provider = FakeProvider(
-            [_page([_review(NOW)], "1"), _page([_review(NOW)], None)]
+            [
+                make_page([make_review(created_at=NOW)], "1"),
+                make_page([make_review(created_at=NOW)], None),
+            ]
         )
         client = FakeClient(provider)
 
@@ -116,7 +61,9 @@ class TestFetchPage:
         assert len(provider.calls) == 1
 
     def test_passes_the_cursor_through(self):
-        provider = FakeProvider([_page([], "1"), _page([_review(NOW)], None)])
+        provider = FakeProvider(
+            [make_page([], "1"), make_page([make_review(created_at=NOW)], None)]
+        )
         client = FakeClient(provider)
 
         client.fetch_page("123", country="us", cursor="1")
@@ -124,14 +71,14 @@ class TestFetchPage:
         assert provider.calls == [("us", "1")]
 
     def test_never_sets_a_stop_reason(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         page = FakeClient(provider).fetch_page("123", country="us")
 
         assert page.stopped_because is None
 
     def test_country_defaults_for_a_global_provider(self):
-        provider = FakeProvider([_page([], None)], source="googleplay_official")
+        provider = FakeProvider([make_page([], None)], source="googleplay_official")
 
         FakeClient(provider).fetch_page("123")
 
@@ -142,9 +89,9 @@ class TestIterPages:
     def test_walks_until_the_cursor_is_exhausted(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us"))
@@ -153,7 +100,7 @@ class TestIterPages:
         assert [r.id for p in pages for r in p.reviews] == ["a", "b", "c"]
 
     def test_marks_the_final_page_exhausted(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         pages = list(FakeClient(provider).iter_pages("123", country="us"))
 
@@ -161,7 +108,10 @@ class TestIterPages:
 
     def test_intermediate_pages_have_no_stop_reason(self):
         provider = FakeProvider(
-            [_page([_review(NOW)], "1"), _page([_review(NOW)], None)]
+            [
+                make_page([make_review(created_at=NOW)], "1"),
+                make_page([make_review(created_at=NOW)], None),
+            ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us"))
 
@@ -169,7 +119,9 @@ class TestIterPages:
         assert pages[1].stopped_because == "exhausted"
 
     def test_resumes_from_a_supplied_cursor(self):
-        provider = FakeProvider([_page([], "1"), _page([_review(NOW, "b")], None)])
+        provider = FakeProvider(
+            [make_page([], "1"), make_page([make_review(created_at=NOW, id="b")], None)]
+        )
         pages = list(FakeClient(provider).iter_pages("123", country="us", cursor="1"))
 
         assert [r.id for p in pages for r in p.reviews] == ["b"]
@@ -181,9 +133,9 @@ class TestSinceEarlyStop:
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
             [
-                _page([_review(NOW, "new")], "1"),
-                _page([_review(old, "old")], "2"),
-                _page([_review(old, "older")], "3"),
+                make_page([make_review(created_at=NOW, id="new")], "1"),
+                make_page([make_review(created_at=old, id="old")], "2"),
+                make_page([make_review(created_at=old, id="older")], "3"),
             ]
         )
         client = FakeClient(provider)
@@ -198,7 +150,10 @@ class TestSinceEarlyStop:
 
     def test_does_not_stop_while_pages_are_within_the_window(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+            [
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
+            ]
         )
         client = FakeClient(provider)
 
@@ -212,7 +167,10 @@ class TestSinceEarlyStop:
     def test_accepts_a_plain_date(self):
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
-            [_page([_review(old, "old")], "1"), _page([_review(old)], "2")]
+            [
+                make_page([make_review(created_at=old, id="old")], "1"),
+                make_page([make_review(created_at=old)], "2"),
+            ]
         )
         client = FakeClient(provider)
 
@@ -224,8 +182,8 @@ class TestSinceEarlyStop:
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
             [
-                _page([_review(old, "old")], "1"),
-                _page([_review(NOW, "new")], None),
+                make_page([make_review(created_at=old, id="old")], "1"),
+                make_page([make_review(created_at=NOW, id="new")], None),
             ],
             source="googleplay_official",
         )
@@ -241,8 +199,14 @@ class TestLimit:
     def test_stops_once_limit_reviews_are_yielded(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], "2"),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], "2"),
             ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us", limit=2))
@@ -254,9 +218,9 @@ class TestLimit:
     def test_accumulates_across_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], "3"),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], "3"),
             ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us", limit=2))
@@ -266,7 +230,17 @@ class TestLimit:
 
     def test_exhausted_outranks_limit(self):
         """No more data must never be reported as 'we stopped asking'."""
-        provider = FakeProvider([_page([_review(NOW, "a"), _review(NOW, "b")], None)])
+        provider = FakeProvider(
+            [
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    None,
+                )
+            ]
+        )
 
         pages = list(FakeClient(provider).iter_pages("123", country="us", limit=2))
 
@@ -274,7 +248,10 @@ class TestLimit:
 
     def test_no_limit_walks_to_exhaustion(self):
         provider = FakeProvider(
-            [_page([_review(NOW, "a")], "1"), _page([_review(NOW, "b")], None)]
+            [
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], None),
+            ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us"))
 
@@ -284,8 +261,14 @@ class TestLimit:
     async def test_aiter_pages_honours_limit(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a"), _review(NOW, "b")], "1"),
-                _page([_review(NOW, "c")], "2"),
+                make_page(
+                    [
+                        make_review(created_at=NOW, id="a"),
+                        make_review(created_at=NOW, id="b"),
+                    ],
+                    "1",
+                ),
+                make_page([make_review(created_at=NOW, id="c")], "2"),
             ]
         )
         pages = [
@@ -305,9 +288,9 @@ class TestErrorHandling:
         error = FetchError(country="us", message="boom", kind="server", status=503)
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
                 PageResult(error=error),
-                _page([_review(NOW, "never")], None),
+                make_page([make_review(created_at=NOW, id="never")], None),
             ]
         )
         pages = list(FakeClient(provider).iter_pages("123", country="us"))
@@ -340,8 +323,8 @@ class TestAsyncParity:
         def build():
             return FakeProvider(
                 [
-                    _page([_review(NOW, "a")], "1"),
-                    _page([_review(NOW, "b")], None),
+                    make_page([make_review(created_at=NOW, id="a")], "1"),
+                    make_page([make_review(created_at=NOW, id="b")], None),
                 ]
             )
 
@@ -365,9 +348,9 @@ class TestAsyncParity:
         old = NOW - timedelta(days=30)
         provider = FakeProvider(
             [
-                _page([_review(NOW, "new")], "1"),
-                _page([_review(old, "old")], "2"),
-                _page([_review(old, "older")], "3"),
+                make_page([make_review(created_at=NOW, id="new")], "1"),
+                make_page([make_review(created_at=old, id="old")], "2"),
+                make_page([make_review(created_at=old, id="older")], "3"),
             ]
         )
         pages = [
@@ -381,7 +364,7 @@ class TestAsyncParity:
         assert len(provider.calls) == 2
 
     async def test_afetch_page_returns_one_page(self):
-        provider = FakeProvider([_page([_review(NOW)], "1")])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], "1")])
 
         page = await FakeClient(provider).afetch_page("123", country="us")
 
@@ -406,9 +389,9 @@ class TestPublicRequestBudget:
     def test_iter_pages_honours_max_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -421,9 +404,9 @@ class TestPublicRequestBudget:
     async def test_aiter_pages_honours_max_pages(self):
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([_review(NOW, "b")], "2"),
-                _page([_review(NOW, "c")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([make_review(created_at=NOW, id="b")], "2"),
+                make_page([make_review(created_at=NOW, id="c")], None),
             ]
         )
 
@@ -436,13 +419,13 @@ class TestPublicRequestBudget:
         assert len(provider.calls) == 2
 
     def test_zero_limit_iter_pages_does_no_io(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         assert list(FakeClient(provider).iter_pages("123", limit=0)) == []
         assert provider.calls == []
 
     def test_negative_limit_iter_pages_is_rejected(self):
-        provider = FakeProvider([_page([_review(NOW)], None)])
+        provider = FakeProvider([make_page([make_review(created_at=NOW)], None)])
 
         with pytest.raises(ValueError, match="limit"):
             list(FakeClient(provider).iter_pages("123", limit=-1))
@@ -469,7 +452,9 @@ class _CyclingProvider:
             raise AssertionError(
                 f"the walk did not stop after {self._GIVE_UP} identical cursors"
             )
-        return _page([_review(NOW, review_id=f"r{self.calls}")], self._cursor)
+        return make_page(
+            [make_review(created_at=NOW, id=f"r{self.calls}")], self._cursor
+        )
 
     async def afetch_page(self, app_id, country, cursor):
         return self.fetch_page(app_id, country, cursor)
@@ -485,13 +470,18 @@ class TestSinceIsAppliedToStreamedReviews:
     """
 
     def _client(self):
-        inside = [_review(NOW, "r0"), _review(NOW - timedelta(days=1), "r1")]
-        straddling = [
-            _review(NOW - timedelta(days=2), "r2"),
-            _review(NOW - timedelta(days=90), "old-1"),
-            _review(NOW - timedelta(days=120), "old-2"),
+        inside = [
+            make_review(created_at=NOW, id="r0"),
+            make_review(created_at=NOW - timedelta(days=1), id="r1"),
         ]
-        return FakeClient(FakeProvider([_page(inside, "1"), _page(straddling, "2")]))
+        straddling = [
+            make_review(created_at=NOW - timedelta(days=2), id="r2"),
+            make_review(created_at=NOW - timedelta(days=90), id="old-1"),
+            make_review(created_at=NOW - timedelta(days=120), id="old-2"),
+        ]
+        return FakeClient(
+            FakeProvider([make_page(inside, "1"), make_page(straddling, "2")])
+        )
 
     def test_nothing_older_than_since_is_yielded(self):
         since = NOW - timedelta(days=10)
@@ -526,7 +516,9 @@ class TestExhaustedOutranksSince:
     "there is no more data" is never reported as "we stopped asking"."""
 
     def test_a_final_page_that_also_predates_since_reports_exhausted(self):
-        page = _page([_review(NOW - timedelta(days=90), "old")], None)
+        page = make_page(
+            [make_review(created_at=NOW - timedelta(days=90), id="old")], None
+        )
         client = FakeClient(FakeProvider([page]))
 
         pages = list(client.iter_pages("123", since=NOW - timedelta(days=10)))
@@ -535,8 +527,10 @@ class TestExhaustedOutranksSince:
 
     def test_a_mid_walk_page_that_predates_since_still_reports_since(self):
         pages = [
-            _page([_review(NOW - timedelta(days=90), "old")], "1"),
-            _page([_review(NOW, "never-reached")], None),
+            make_page(
+                [make_review(created_at=NOW - timedelta(days=90), id="old")], "1"
+            ),
+            make_page([make_review(created_at=NOW, id="never-reached")], None),
         ]
         provider = FakeProvider(pages)
         client = FakeClient(provider)
@@ -583,7 +577,10 @@ class TestARepeatingCursorEndsTheWalk:
 
     def test_a_resumed_walk_does_not_request_its_initial_cursor_twice(self):
         provider = FakeProvider(
-            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+            [
+                make_page([], None),
+                make_page([make_review(created_at=NOW, id="resumed")], "1"),
+            ]
         )
 
         pages = list(FakeClient(provider).iter_pages("123", cursor="1"))
@@ -594,7 +591,10 @@ class TestARepeatingCursorEndsTheWalk:
 
     async def test_an_async_resumed_walk_does_not_request_initial_cursor_twice(self):
         provider = FakeProvider(
-            [_page([], None), _page([_review(NOW, "resumed")], "1")]
+            [
+                make_page([], None),
+                make_page([make_review(created_at=NOW, id="resumed")], "1"),
+            ]
         )
 
         pages = [
@@ -637,9 +637,10 @@ class _FreshCursorProvider:
                 f"the walk did not stop after {self._GIVE_UP} fresh cursors"
             )
         reviews = [
-            _review(NOW, review_id=f"r{self.calls}-{i}") for i in range(self._per_page)
+            make_review(created_at=NOW, id=f"r{self.calls}-{i}")
+            for i in range(self._per_page)
         ]
-        return _page(reviews, f"cursor-{self.calls}")
+        return make_page(reviews, f"cursor-{self.calls}")
 
     async def afetch_page(self, app_id, country, cursor):
         return self.fetch_page(app_id, country, cursor)
@@ -693,9 +694,9 @@ class TestASourceThatNeverStopsEndsTheWalk:
         means it has stopped advancing."""
         provider = FakeProvider(
             [
-                _page([_review(NOW, "a")], "1"),
-                _page([], "2"),
-                _page([_review(NOW, "b")], None),
+                make_page([make_review(created_at=NOW, id="a")], "1"),
+                make_page([], "2"),
+                make_page([make_review(created_at=NOW, id="b")], None),
             ]
         )
 
@@ -708,12 +709,14 @@ class TestASourceThatNeverStopsEndsTheWalk:
         """Only a *consecutive* run counts, so intermittent empty pages survive."""
         policy = StopPolicy("appstore_scraper", None, None, max_empty_pages=3)
 
-        assert policy.evaluate(_page([], "c1"))[0] is None
-        assert policy.evaluate(_page([], "c2"))[0] is None
-        assert policy.evaluate(_page([_review(NOW)], "c3"))[0] is None  # streak reset
-        assert policy.evaluate(_page([], "c4"))[0] is None
-        assert policy.evaluate(_page([], "c5"))[0] is None
-        assert policy.evaluate(_page([], "c6"))[0] == "stalled"
+        assert policy.evaluate(make_page([], "c1"))[0] is None
+        assert policy.evaluate(make_page([], "c2"))[0] is None
+        assert (
+            policy.evaluate(make_page([make_review(created_at=NOW)], "c3"))[0] is None
+        )  # streak reset
+        assert policy.evaluate(make_page([], "c4"))[0] is None
+        assert policy.evaluate(make_page([], "c5"))[0] is None
+        assert policy.evaluate(make_page([], "c6"))[0] == "stalled"
 
 
 class TestThePageCeiling:
@@ -722,7 +725,10 @@ class TestThePageCeiling:
 
     def test_a_never_exhausting_source_stops_at_the_ceiling(self):
         policy = StopPolicy("appstore_scraper", None, None, max_pages=5)
-        reasons = [policy.evaluate(_page([_review(NOW)], f"c{i}"))[0] for i in range(5)]
+        reasons = [
+            policy.evaluate(make_page([make_review(created_at=NOW)], f"c{i}"))[0]
+            for i in range(5)
+        ]
 
         assert reasons[:-1] == [None, None, None, None]
         assert reasons[-1] == "max_pages"
@@ -730,7 +736,7 @@ class TestThePageCeiling:
     def test_the_ceiling_bounds_retained_cursors(self):
         policy = StopPolicy("appstore_scraper", None, None, max_pages=5)
         for i in range(5):
-            policy.evaluate(_page([_review(NOW)], f"c{i}"))
+            policy.evaluate(make_page([make_review(created_at=NOW)], f"c{i}"))
 
         assert len(policy._cursors) <= 5
 
@@ -738,12 +744,18 @@ class TestThePageCeiling:
         """More data exists; ``exhausted`` would claim it does not."""
         policy = StopPolicy("appstore_scraper", None, None, max_pages=1)
 
-        assert policy.evaluate(_page([_review(NOW)], "c0"))[0] == "max_pages"
+        assert (
+            policy.evaluate(make_page([make_review(created_at=NOW)], "c0"))[0]
+            == "max_pages"
+        )
 
     def test_a_walk_that_ends_on_its_own_is_unaffected(self):
         policy = StopPolicy("appstore_scraper", None, None, max_pages=5)
 
-        assert policy.evaluate(_page([_review(NOW)], None))[0] == "exhausted"
+        assert (
+            policy.evaluate(make_page([make_review(created_at=NOW)], None))[0]
+            == "exhausted"
+        )
 
 
 class _RaisingProvider:
@@ -765,7 +777,9 @@ class _RaisingProvider:
         self.calls += 1
         if self.calls > self._fail_after:
             raise self._exc
-        return _page([_review(NOW, f"r{self.calls}")], f"{self.calls}")
+        return make_page(
+            [make_review(created_at=NOW, id=f"r{self.calls}")], f"{self.calls}"
+        )
 
     async def afetch_page(self, app_id, country, cursor):
         return self.fetch_page(app_id, country, cursor)
@@ -782,7 +796,7 @@ class _PerCountryRaiser:
     def fetch_page(self, app_id, country, cursor):
         if country == self._failing:
             raise ServerError("token endpoint returned 503", status=503)
-        return _page([_review(NOW, country)], None)
+        return make_page([make_review(created_at=NOW, id=country)], None)
 
     async def afetch_page(self, app_id, country, cursor):
         return self.fetch_page(app_id, country, cursor)
@@ -921,7 +935,8 @@ class TestCountriesOnAGlobalSourceSaysSo:
     def _global_client(self):
         return FakeClient(
             FakeProvider(
-                [_page([_review(NOW, "r1")], None)], source="appstore_official"
+                [make_page([make_review(created_at=NOW, id="r1")], None)],
+                source="appstore_official",
             )
         )
 
@@ -945,7 +960,9 @@ class TestCountriesOnAGlobalSourceSaysSo:
     def test_a_per_country_source_does_not_warn(self, caplog):
         import logging
 
-        client = FakeClient(FakeProvider([_page([_review(NOW, "r1")], None)]))
+        client = FakeClient(
+            FakeProvider([make_page([make_review(created_at=NOW, id="r1")], None)])
+        )
         with caplog.at_level(logging.WARNING):
             client.fetch("123", countries=["de"])
 
@@ -986,7 +1003,9 @@ class TestSortAcceptsAnEquivalentString:
 
     @pytest.mark.parametrize("order", ["newest", "oldest", "rating"])
     def test_a_plain_string_with_a_limit_does_not_crash(self, order):
-        client = FakeClient(FakeProvider([_page([_review(NOW, "1")], None)]))
+        client = FakeClient(
+            FakeProvider([make_page([make_review(created_at=NOW, id="1")], None)])
+        )
 
         assert len(client.fetch("123", sort=order, limit=5).reviews) == 1
 
@@ -994,7 +1013,9 @@ class TestSortAcceptsAnEquivalentString:
         """``is not Sort.NEWEST`` was true for the string, so the early stop was
         silently disabled and an INFO line claimed newest-first could not bound it."""
         pages = [
-            _page([_review(NOW, str(i)) for i in range(5)], str(i + 1))
+            make_page(
+                [make_review(created_at=NOW, id=str(i)) for i in range(5)], str(i + 1)
+            )
             for i in range(4)
         ]
         provider = FakeProvider(pages)
@@ -1005,7 +1026,9 @@ class TestSortAcceptsAnEquivalentString:
 
     @pytest.mark.parametrize("order", ["newest", Sort.NEWEST])
     def test_string_and_member_agree(self, order):
-        client = FakeClient(FakeProvider([_page([_review(NOW, "1")], None)]))
+        client = FakeClient(
+            FakeProvider([make_page([make_review(created_at=NOW, id="1")], None)])
+        )
 
         assert len(client.fetch("123", sort=order, limit=5).reviews) == 1
 
@@ -1025,11 +1048,14 @@ class TestTheStreamLimitCountsYieldedReviews:
         old, new = NOW - timedelta(days=90), NOW
         return FakeProvider(
             [
-                _page(
-                    [_review(old, f"o{i}") for i in range(4)] + [_review(new, "n0")],
+                make_page(
+                    [make_review(created_at=old, id=f"o{i}") for i in range(4)]
+                    + [make_review(created_at=new, id="n0")],
                     "1",
                 ),
-                _page([_review(new, f"n{i}") for i in range(1, 6)], None),
+                make_page(
+                    [make_review(created_at=new, id=f"n{i}") for i in range(1, 6)], None
+                ),
             ],
             source="googleplay_official",
         )
@@ -1076,7 +1102,17 @@ class TestZeroAndNegativeLimits:
 
     def _client(self):
         return FakeClient(
-            FakeProvider([_page([_review(NOW, "1"), _review(NOW, "2")], None)])
+            FakeProvider(
+                [
+                    make_page(
+                        [
+                            make_review(created_at=NOW, id="1"),
+                            make_review(created_at=NOW, id="2"),
+                        ],
+                        None,
+                    )
+                ]
+            )
         )
 
     def test_iter_reviews_yields_nothing_for_zero(self):
@@ -1119,14 +1155,14 @@ class TestAsyncFanOutDoesNotAbandonItsPeers:
             if country == self.failing:
                 raise AuthError("bad key", status=401)
             self.finished.append(country)
-            return _page([_review(NOW, country)], None)
+            return make_page([make_review(created_at=NOW, id=country)], None)
 
         async def afetch_page(self, app_id, country, cursor):
             if country == self.failing:
                 raise AuthError("bad key", status=401)
             await asyncio.sleep(0.05)
             self.finished.append(country)
-            return _page([_review(NOW, country)], None)
+            return make_page([make_review(created_at=NOW, id=country)], None)
 
     async def test_the_other_countries_finish_before_the_error_surfaces(self):
         provider = self._SlowExceptFor("us")
@@ -1151,11 +1187,13 @@ class TestSinceAndUntilAreInclusiveAtTheBoundary:
         return FakeClient(
             FakeProvider(
                 [
-                    _page(
+                    make_page(
                         [
-                            _review(NOW, "newer"),
-                            _review(boundary, "on-the-boundary"),
-                            _review(NOW - timedelta(days=10), "older"),
+                            make_review(created_at=NOW, id="newer"),
+                            make_review(created_at=boundary, id="on-the-boundary"),
+                            make_review(
+                                created_at=NOW - timedelta(days=10), id="older"
+                            ),
                         ],
                         None,
                     )
@@ -1211,9 +1249,9 @@ class TestResumingFromAPersistedCursor:
 
     def _pages(self):
         return [
-            _page([_review(NOW, "p1")], "1"),
-            _page([_review(NOW, "p2")], "2"),
-            _page([_review(NOW, "p3")], None),
+            make_page([make_review(created_at=NOW, id="p1")], "1"),
+            make_page([make_review(created_at=NOW, id="p2")], "2"),
+            make_page([make_review(created_at=NOW, id="p3")], None),
         ]
 
     def test_a_yielded_page_keeps_its_cursor(self):
@@ -1229,7 +1267,7 @@ class TestResumingFromAPersistedCursor:
         provider = FakeProvider(
             [
                 PageResult(
-                    reviews=[_review(NOW, "p1")],
+                    reviews=[make_review(created_at=NOW, id="p1")],
                     next_cursor="1",
                     skipped_reviews=2,
                 )
