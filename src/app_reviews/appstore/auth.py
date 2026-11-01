@@ -136,12 +136,18 @@ class ConnectAuth:
         The clock is read once and used for both the JWT's ``iat``/``exp`` and the
         local expiry, so what this class believes about the token cannot drift
         from what it actually signed.
+
+        ``self._token`` is read once into a local: a ``close()`` from another
+        thread between the check and the return would otherwise make this
+        return ``"Bearer None"``.
         """
-        if self._token is None or time.time() >= self._expires_at:
+        token = self._token
+        if token is None or time.time() >= self._expires_at:
             issued_at = int(time.time())
-            self._token = self.generate_token(issued_at)
+            token = self.generate_token(issued_at)
+            self._token = token
             self._expires_at = issued_at + TOKEN_EXPIRY_SECONDS - REFRESH_MARGIN_SECONDS
-        return f"Bearer {self._token}"
+        return f"Bearer {token}"
 
     async def aauthorization_header(self) -> str:
         """Signing is local CPU work with nothing to await, so it runs off the loop."""

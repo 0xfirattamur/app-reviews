@@ -79,6 +79,11 @@ class GoogleAuth(PooledClient):
     DEFAULT_EXPIRES_IN = 3600
     """Used when Google omits ``expires_in``. Its tokens are an hour in practice."""
 
+    MAX_EXPIRES_IN = 3600
+    """Ceiling on a token's claimed lifetime. A response is remote content: an
+    absurd ``expires_in`` would otherwise pin one token, revoked or not, for the
+    life of the process."""
+
     ERROR_BODY_CHARS = 200
     """How much of a failed exchange's body reaches the exception message."""
 
@@ -314,9 +319,13 @@ class GoogleAuth(PooledClient):
         could not narrow ``self._bearer_header`` for the caller, so both entry points
         needed a ``type: ignore`` on their return, silencing the checker on a
         public method to work around a private one's shape.
+
+        The header is read once into a local so a concurrent ``close()`` cannot
+        turn the check's ``True`` into a returned ``None``.
         """
-        if self._bearer_header is not None and time.time() < self._expires_at:
-            return self._bearer_header
+        header = self._bearer_header
+        if header is not None and time.time() < self._expires_at:
+            return header
         return None
 
     def _store_token(self, token: str, expires_in: int) -> str:
@@ -327,32 +336,41 @@ class GoogleAuth(PooledClient):
     def _read_token(self, response: HttpResponse) -> tuple[str, int]:
         """The access token and its lifetime, or the error that explains why not.
 
-        A transport failure sets ``status=0`` with no body, so it is handled
-        before the generic non-2xx check to avoid reporting a misleading
-        "HTTP 0".
-
         Each failure raises the class matching what went wrong, through the same
         ``error_for`` the search path uses: ``AuthError`` only for a rejected
         credential, ``TransportError`` for a dead connection, ``ServerError`` for
         a 5xx from Google, ``ParseError`` for a success carrying no token. The
         distinction decides whether retrying can possibly help.
         """
+        self._raise_for_failed_exchange(response)
+        return self._parse_token(response)
+
+    def _raise_for_failed_exchange(self, response: HttpResponse) -> None:
+        """Raise the error a transport failure or a non-2xx answer stands for.
+
+        A transport failure sets ``status=0`` with no body, so it is handled
+        before the generic non-2xx check to avoid reporting a misleading
+        "HTTP 0".
+        """
         if response.transport_error is not None:
             raise error_for(response.status, response.transport_error)(
                 f"Google token exchange failed: {response.transport_error}",
                 status=response.status or None,
             )
-        if not response.ok:
-            # Truncated: the body is remote content and ends up in an exception
-            # message that the walk logs at WARNING.
-            message = (
-                f"Google token exchange failed (HTTP {response.status}): "
-                f"{response.body[: self.ERROR_BODY_CHARS]}"
-            )
-            if _is_rejected_credential(response):
-                raise AuthError(message, status=response.status)
-            raise http_error(response, message)
+        if response.ok:
+            return
+        # Truncated: the body is remote content and ends up in an exception
+        # message that the walk logs at WARNING.
+        message = (
+            f"Google token exchange failed (HTTP {response.status}): "
+            f"{response.body[: self.ERROR_BODY_CHARS]}"
+        )
+        if _is_rejected_credential(response):
+            raise AuthError(message, status=response.status)
+        raise http_error(response, message)
 
+    def _parse_token(self, response: HttpResponse) -> tuple[str, int]:
+        """The access token and its lifetime from a 2xx body, or ``ParseError``."""
         try:
             body = response.json()
             token = body["access_token"]
@@ -361,7 +379,13 @@ class GoogleAuth(PooledClient):
                 f"Google token exchange returned no access_token: {exc}",
                 status=response.status,
             ) from exc
-        return str(token), self._expires_in(body)
+        if not isinstance(token, str) or not token:
+            raise ParseError(
+                "Google token exchange returned an access_token that is not a "
+                "non-empty string",
+                status=response.status,
+            )
+        return token, self._expires_in(body)
 
     def _expires_in(self, body: dict[str, Any]) -> int:
         """The token's lifetime in seconds, defaulted when Google does not say.
@@ -369,10 +393,13 @@ class GoogleAuth(PooledClient):
         Anything unusable falls back rather than raising: the exchange already
         succeeded and a token is in hand, so all this decides is when to
         re-exchange. A non-positive lifetime would mean re-exchanging on every
-        single request.
+        single request, and one beyond ``MAX_EXPIRES_IN`` is clamped. ``OverflowError``
+        is caught because JSON's ``1e999`` parses to ``inf``.
         """
         try:
             seconds = int(body.get("expires_in", self.DEFAULT_EXPIRES_IN))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return self.DEFAULT_EXPIRES_IN
-        return seconds if seconds > 0 else self.DEFAULT_EXPIRES_IN
+        if seconds <= 0:
+            return self.DEFAULT_EXPIRES_IN
+        return min(seconds, self.MAX_EXPIRES_IN)

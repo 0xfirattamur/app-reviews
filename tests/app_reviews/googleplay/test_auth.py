@@ -316,6 +316,68 @@ class TestGoogleRejectingTheKeyIsAnAuthError:
         assert [error.kind for error in result.errors] == ["request"]
 
 
+class TestTheAccessTokenIsChecked:
+    @pytest.mark.parametrize("bad", [None, "", 123, ["tok"]])
+    def test_a_token_that_is_not_a_non_empty_string_is_a_parse_error(self, bad):
+        with pytest.raises(ParseError, match="access_token"):
+            _auth_on(_token(bad)).authorization_header()
+
+    @pytest.mark.parametrize("bad", [None, "", 123])
+    async def test_the_async_exchange_rejects_them_too(self, bad):
+        with pytest.raises(ParseError, match="access_token"):
+            await _auth_on(_token(bad)).aauthorization_header()
+
+    def test_a_concurrent_close_cannot_produce_a_bearer_none(self, monkeypatch):
+        """``close()`` lands between the freshness check and the return."""
+        auth = _auth_on(_token())
+        held = auth.authorization_header()
+
+        def close_then_report_a_time_before_expiry():
+            auth.close()
+            return -1.0
+
+        monkeypatch.setattr(
+            "app_reviews.googleplay.auth.time.time",
+            close_then_report_a_time_before_expiry,
+        )
+
+        assert auth._cached_header() == held
+
+
+class TestTheTokenLifetimeIsClamped:
+    @staticmethod
+    def _counting_auth(expires_in_json: str):
+        exchanges = []
+
+        def handler(request):
+            exchanges.append(request)
+            body = f'{{"access_token": "tok", "expires_in": {expires_in_json}}}'
+            return httpx.Response(200, text=body)
+
+        return _auth_on(handler), exchanges
+
+    @pytest.mark.parametrize("expires_in", ["999999999", "1e999"])
+    def test_an_absurd_lifetime_is_re_exchanged_after_an_hour(
+        self, fake_clock, expires_in
+    ):
+        auth, exchanges = self._counting_auth(expires_in)
+
+        auth.authorization_header()
+        fake_clock.advance(GoogleAuth.MAX_EXPIRES_IN - 1)
+        auth.authorization_header()
+
+        assert len(exchanges) == 2
+
+    def test_a_modest_lifetime_is_kept_as_given(self, fake_clock):
+        auth, exchanges = self._counting_auth("1800")
+
+        auth.authorization_header()
+        fake_clock.advance(1000)
+        auth.authorization_header()
+
+        assert len(exchanges) == 1
+
+
 class TestAsyncTokenExchange:
     async def test_aauthorization_header_returns_bearer_token(self):
         auth = _auth_on(_token("at-123"))

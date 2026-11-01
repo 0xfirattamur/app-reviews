@@ -39,6 +39,8 @@ recent versions are also kept in
 - `RetryConfig` now rejects `bool` counts, `nan` or infinite `timeout`,
   `backoff_factor` and `max_backoff`, and `retry_on` entries that are not HTTP
   status codes.
+- `GooglePlayReviews` token exchange now raises `ParseError` for a missing,
+  empty or non-string `access_token`, and caps `expires_in` at one hour.
 
 ## [1.3.0] - 2026-10-25
 
