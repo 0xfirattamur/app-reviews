@@ -6,6 +6,11 @@ recent versions are also kept in
 
 ## Unreleased
 
+### Added
+
+- `FetchResult.ok` is `True` when no country failed, the same test as `not
+  result.errors`.
+
 ### Fixed
 
 - A non-string App Store `private_key`, or a non-string `client_email`,

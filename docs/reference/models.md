@@ -103,6 +103,7 @@ from app_reviews import FetchResult
 | `reviews` | `list[Review]` | The fetched reviews, merged across countries, filtered and sorted. |
 | `errors` | `list[FetchError]` | Per-country fetch failures. Derived from `outcomes`, so it can never disagree with them or be lost by a transform. |
 | `xml_fallback_errors` | `list[FetchError]` | App Store RSS pages whose empty JSON answer the XML feed could not confirm. Diagnostics, not failures, so they are not in `errors`. Derived from `outcomes`. |
+| `ok` | `bool` | `True` when no country failed, that is `not result.errors`. `xml_fallback_errors` do not count: those pages still succeeded. An empty result with `ok` is a genuine "no reviews". |
 | `outcomes` | `list[CountryOutcome]` | One entry per country actually walked. See [CountryOutcome](#countryoutcome). |
 | `skipped_reviews` | `int` | Total malformed or unusable review rows skipped across all outcomes. Derived from `outcomes`. |
 

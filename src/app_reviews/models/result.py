@@ -112,6 +112,16 @@ class FetchResult:
         return [o.error for o in self.outcomes if o.error is not None]
 
     @property
+    def ok(self) -> bool:
+        """True when no country failed.
+
+        Equivalent to ``not result.errors``. An empty result with ``ok`` is a
+        genuine "no reviews"; ``xml_fallback_errors`` do not count, because
+        those pages still succeeded.
+        """
+        return not self.errors
+
+    @property
     def xml_fallback_errors(self) -> list[FetchError]:
         """Every empty App Store RSS answer the XML feed could not confirm.
 
