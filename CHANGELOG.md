@@ -57,6 +57,8 @@ recent versions are also kept in
 - `ReviewReply.updated_at` is now timezone-aware for App Store Connect replies
   whose `lastModifiedDate` carries no offset, read as UTC like `Review`
   timestamps.
+- `GooglePlaySearch` and `AppStoreSearch.version_history()` now parse a page
+  full of unclosed script markers in linear time instead of stalling.
 
 ## [1.3.0] - 2026-10-25
 

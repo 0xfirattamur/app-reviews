@@ -8,6 +8,7 @@ of kind ``parse``, on the sync and async paths alike.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -187,3 +188,50 @@ async def test_over_deep_nesting_is_a_parse_error(case: Case, twin: Twin) -> Non
     page_error = outcome.error if isinstance(outcome, PageResult) else outcome
     assert page_error is not None, "the body was read as a success"
     assert page_error.kind == "parse"
+
+
+HOSTILE_PAGE_TIME_BUDGET_SECONDS = 2.0
+"""Linear work on these pages takes milliseconds; the regexes they target took
+tens of seconds. The budget sits far from both so a slow machine cannot flake."""
+
+MARKER_COUNT = 20_000
+
+UNCLOSED_PLAY_CALLBACKS = "AF_initDataCallback({key: 'ds:1', data:" * MARKER_COUNT
+UNTERMINATED_SCRIPT_TAGS = "<script " * MARKER_COUNT
+UNCLOSED_SERVER_DATA_SCRIPTS = (
+    '<script id="serialized-server-data" type="application/json">' * MARKER_COUNT
+)
+
+
+async def _play_search_page(twin: Twin, body: str) -> Any:
+    search = client_for(GooglePlaySearch, _serving(body))
+    return await twin.call(search, "search", "whatsapp")
+
+
+async def _product_page_history(twin: Twin, body: str) -> Any:
+    search = client_for(AppStoreSearch, _serving(body))
+    return await twin.call(search, "version_history", "310633997")
+
+
+HOSTILE_PAGES = {
+    "play-unclosed-callbacks": (_play_search_page, UNCLOSED_PLAY_CALLBACKS),
+    "product-page-unterminated-tags": (_product_page_history, UNTERMINATED_SCRIPT_TAGS),
+    "product-page-unclosed-data": (
+        _product_page_history,
+        UNCLOSED_SERVER_DATA_SCRIPTS,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("read_page", "body"), HOSTILE_PAGES.values(), ids=HOSTILE_PAGES.keys()
+)
+async def test_a_page_of_unclosed_markers_is_parsed_in_linear_time(
+    read_page: Callable[[Twin, str], Awaitable[Any]], body: str, twin: Twin
+) -> None:
+    started = time.perf_counter()
+
+    with pytest.raises(ParseError):
+        await read_page(twin, body)
+
+    assert time.perf_counter() - started < HOSTILE_PAGE_TIME_BUDGET_SECONDS

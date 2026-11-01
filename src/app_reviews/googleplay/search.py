@@ -75,7 +75,8 @@ class GooglePlaySearch(PooledClient):
     SEARCH_DATASET = "ds:4"
     DETAIL_DATASET = "ds:5"
 
-    _BLOCK = re.compile(r"AF_initDataCallback[\s\S]*?</script")
+    _BLOCK_START = "AF_initDataCallback"
+    _BLOCK_END = "</script"
     _KEY = re.compile(r"(ds:\d+)'")
     _DATA = re.compile(r"\bdata:\s*")
 
@@ -313,8 +314,7 @@ class GooglePlaySearch(PooledClient):
         which leaves the trailer after it alone.
         """
         datasets: dict[str, Any] = {}
-        for block_match in self._BLOCK.finditer(page_html):
-            block = block_match.group(0)
+        for block in self._iter_blocks(page_html):
             key_match = self._KEY.search(block)
             data_start = self._DATA.search(block)
             if key_match is None or data_start is None:
@@ -325,6 +325,23 @@ class GooglePlaySearch(PooledClient):
             except ValueError:
                 _LOG.debug("Skipped an unreadable %s payload", dataset_key)
         return datasets
+
+    def _iter_blocks(self, page_html: str) -> Iterator[str]:
+        """Each ``AF_initDataCallback`` block, up to and including its ``</script``.
+
+        Found with ``str.find`` rather than ``AF_initDataCallback[\\s\\S]*?</script``:
+        with no closing tag that lazy match rescans the rest of the page from
+        every marker, so a page of repeated markers took quadratic time. Without
+        a closing tag after one marker there is none after the next, so the scan
+        stops.
+        """
+        position = 0
+        while (start := page_html.find(self._BLOCK_START, position)) != -1:
+            closing = page_html.find(self._BLOCK_END, start)
+            if closing == -1:
+                return
+            position = closing + len(self._BLOCK_END)
+            yield page_html[start:position]
 
     def _order_datasets(
         self, datasets: dict[str, Any], preferred_key: str

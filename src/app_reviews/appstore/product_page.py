@@ -26,10 +26,15 @@ __all__ = ["parse_version_history"]
 
 _API = "App Store product page"
 
-_SERVER_DATA = re.compile(
-    r'<script[^>]*\bid="serialized-server-data"[^>]*>(.*?)</script>', re.DOTALL
+_SERVER_DATA_OPENING = re.compile(
+    r'<script[^>]{0,256}\bid="serialized-server-data"[^>]{0,256}>'
 )
-"""The JSON the page embeds to hydrate itself."""
+"""The tag of the script that embeds the JSON the page hydrates itself from.
+
+Its attributes are bounded so a page of unterminated ``<script`` tags costs a
+fixed amount per tag instead of a scan to the end of the body."""
+
+_SCRIPT_CLOSING = "</script>"
 
 _VERSION_LABEL = re.compile(r"^Version(?:\s+|$)")
 """The prefix some storefronts render before the number: ``Version 9.1.84``."""
@@ -52,11 +57,11 @@ def parse_version_history(response: HttpResponse) -> list[AppVersionEntry]:
         return []
     raise_for_http_failure(response, _API, credentialed=False)
     status = response.status
-    match = _SERVER_DATA.search(response.body)
-    if match is None:
+    page_data = _embedded_page_data(response.body)
+    if page_data is None:
         raise ParseError(f"{_API} carried no embedded page data", status=status)
     try:
-        page_document = safe_json.loads(match.group(1))
+        page_document = safe_json.loads(page_data)
     except json.JSONDecodeError as exc:
         raise ParseError(
             f"Unreadable page data from {_API}: {exc}", status=status
@@ -69,6 +74,22 @@ def parse_version_history(response: HttpResponse) -> list[AppVersionEntry]:
     entries = [_parse_history_entry(item, status) for item in history_items]
     entries.sort(key=lambda entry: entry.released_at, reverse=True)
     return entries
+
+
+def _embedded_page_data(body: str) -> str | None:
+    """The text of the page's ``serialized-server-data`` script, or None.
+
+    The opening tag is a bounded regex and the closing tag a ``find``: a lazy
+    ``(.*?)</script>`` rescans the rest of the body from every opening tag, which
+    a page of unclosed tags turns into quadratic work.
+    """
+    opening = _SERVER_DATA_OPENING.search(body)
+    if opening is None:
+        return None
+    closing = body.find(_SCRIPT_CLOSING, opening.end())
+    if closing == -1:
+        return None
+    return body[opening.end() : closing]
 
 
 def _find_version_history_action(page_document: Any) -> dict[str, Any] | None:
