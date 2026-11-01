@@ -5,10 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app_reviews.models._json import fields_to_dict
 from app_reviews.models._validate import require_count
 from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import FeedFormat, StopReason
+
+_REMAINING_KEY_ORDER = (
+    "skipped_reviews",
+    "next_cursor",
+    "error",
+    "stopped_because",
+    "feed_format",
+    "xml_fallback_error",
+)
+"""The order ``to_dict`` has always emitted after ``reviews``; consumers rely on it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +57,7 @@ class PageResult:
             "reviews": [
                 review.to_dict(include_raw=include_raw) for review in self.reviews
             ],
-            "skipped_reviews": self.skipped_reviews,
-            "next_cursor": self.next_cursor,
-            "error": self.error.to_dict() if self.error is not None else None,
-            "stopped_because": self.stopped_because,
-            "feed_format": self.feed_format,
-            "xml_fallback_error": (
-                self.xml_fallback_error.to_dict()
-                if self.xml_fallback_error is not None
-                else None
+            **fields_to_dict(
+                self, exclude=("reviews",), key_order=_REMAINING_KEY_ORDER
             ),
         }

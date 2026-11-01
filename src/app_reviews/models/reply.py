@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app_reviews.models._json import fields_to_dict
 from app_reviews.models.types import ReplyState
 
 
@@ -34,12 +35,4 @@ class ReviewReply:
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-safe plain dict, with ``updated_at`` as ISO 8601."""
-        return {
-            "review_id": self.review_id,
-            "reply_id": self.reply_id,
-            "text": self.text,
-            "state": self.state,
-            "updated_at": (
-                self.updated_at.isoformat() if self.updated_at is not None else None
-            ),
-        }
+        return fields_to_dict(self)
