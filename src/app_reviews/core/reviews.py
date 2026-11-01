@@ -28,6 +28,7 @@ from app_reviews.core.paging import (
     StopPolicy,
     is_per_country,
     orders_newest_first,
+    plan_limits,
     prefer_stop_reason,
     with_stop_reason,
 )
@@ -441,7 +442,15 @@ class BaseReviews(PooledClient, abc.ABC):
         for country in self._country_list(provider, request.selection):
             if limit is not None and yielded_count >= limit:
                 return
-            walk_limit = self._stream_walk_limit(provider, since, limit, yielded_count)
+            walk_limit = plan_limits(
+                is_newest_first=self._is_newest_first(provider),
+                sort=Sort.NEWEST,
+                limit=limit,
+                ratings=None,
+                until=None,
+                since=since,
+                yielded=yielded_count,
+            ).stream_limit
             pages = self._walk(
                 provider,
                 app_id,
@@ -481,7 +490,15 @@ class BaseReviews(PooledClient, abc.ABC):
         for country in self._country_list(provider, request.selection):
             if limit is not None and yielded_count >= limit:
                 return
-            walk_limit = self._stream_walk_limit(provider, since, limit, yielded_count)
+            walk_limit = plan_limits(
+                is_newest_first=self._is_newest_first(provider),
+                sort=Sort.NEWEST,
+                limit=limit,
+                ratings=None,
+                until=None,
+                since=since,
+                yielded=yielded_count,
+            ).stream_limit
             pages = self._awalk(
                 provider,
                 app_id,
@@ -553,29 +570,6 @@ class BaseReviews(PooledClient, abc.ABC):
             return PageResult(
                 error=fetch_error_from_exception(country=country or None, exc=exc)
             )
-
-    def _stream_walk_limit(
-        self,
-        provider: ReviewProvider,
-        since: date | datetime | None,
-        limit: int | None,
-        yielded: int,
-    ) -> int | None:
-        """How many reviews the walk may stop at, for one country of a stream.
-
-        ``limit`` counts reviews *yielded*; ``StopPolicy`` counts reviews
-        *fetched*. The two only agree when nothing between them drops a review.
-        A ``since`` filter does exactly that, and on a source without a
-        newest-first guarantee there is no early stop to make the boundary page
-        the last one, so the walk would stop on fetched count with matching
-        reviews still unfetched. Left unbounded there; the stream's own counter
-        ends it.
-        """
-        if limit is None:
-            return None
-        if since is not None and not self._is_newest_first(provider):
-            return None
-        return limit - yielded
 
     def _bind_page_callback(
         self,
@@ -732,19 +726,24 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> _FetchPlan:
         """Resolve the countries, limits, filter and fan-out width for one fetch."""
         countries = self._country_list(provider, request.selection)
+        limits = plan_limits(
+            is_newest_first=self._is_newest_first(provider),
+            sort=sort,
+            limit=limit,
+            ratings=ratings,
+            until=until,
+            since=since,
+        )
+        self._log_exhaustive_walk(provider, sort, limit, ratings=ratings, until=until)
         return _FetchPlan(
             countries=countries,
             since=since,
             page_budget=request.page_budget,
-            walk_limit=self._walk_limit(
-                provider, sort, limit, ratings=ratings, until=until
-            ),
+            walk_limit=limits.walk_limit,
             matches_filters=build_review_predicate(
                 ratings=ratings, since=since, until=until
             ),
-            matching_limit=self._matching_limit(
-                provider, sort, limit, ratings=ratings, until=until
-            ),
+            matching_limit=limits.matching_limit,
             worker_count=self._workers(countries, concurrency),
         )
 
@@ -831,7 +830,7 @@ class BaseReviews(PooledClient, abc.ABC):
                 failures.append(error)
                 raise
 
-    def _walk_limit(
+    def _log_exhaustive_walk(
         self,
         provider: ReviewProvider,
         sort: Sort,
@@ -839,26 +838,15 @@ class BaseReviews(PooledClient, abc.ABC):
         *,
         ratings: list[int] | None,
         until: date | datetime | None,
-    ) -> int | None:
-        """How many reviews the page walk may stop at, if any.
+    ) -> None:
+        """Say why an unfiltered ``limit`` cannot stop the walk early.
 
-        Bounding the walk is only sound when the fetch order matches the
-        requested order (newest-first source, newest-first sort), and when
-        nothing downstream can drop reviews before the limit is applied.
-
-        ``sort`` is coerced because ``Sort`` is a ``StrEnum`` and the equivalent
-        plain string is accepted everywhere else: compared with ``is``, ``"newest"``
-        took the slow path and then died reading ``.value`` off a ``str``.
-
-        With ``ratings``/``until``, a raw-review limit would be unsound because
-        some fetched rows are later discarded. ``build_review_predicate`` handles
-        that case by counting matches instead; this method therefore leaves the
-        raw walk unbounded by review count.
+        The decision is ``plan_limits``'; this only reports it. With
+        ``ratings``/``until`` the walk is bounded by matches instead, so
+        nothing is reported.
         """
-        if limit is None:
-            return None
-        if ratings is not None or until is not None:
-            return None
+        if limit is None or ratings is not None or until is not None:
+            return
         order = Sort(sort)
         if order is not Sort.NEWEST:
             _LOG.info(
@@ -867,32 +855,13 @@ class BaseReviews(PooledClient, abc.ABC):
                 order.value,
                 limit,
             )
-            return None
-        if not self._is_newest_first(provider):
+        elif not self._is_newest_first(provider):
             _LOG.info(
                 "%s does not guarantee newest-first ordering, so limit=%d "
                 "cannot stop the walk early",
                 provider.source,
                 limit,
             )
-            return None
-        return limit
-
-    def _matching_limit(
-        self,
-        provider: ReviewProvider,
-        sort: Sort,
-        limit: int | None,
-        *,
-        ratings: list[int] | None,
-        until: date | datetime | None,
-    ) -> int | None:
-        """Limit that may stop a walk by counting filtered matches."""
-        if limit is None or (ratings is None and until is None):
-            return None
-        if Sort(sort) is not Sort.NEWEST or not self._is_newest_first(provider):
-            return None
-        return limit
 
     def _is_newest_first(self, provider: ReviewProvider) -> bool:
         """Whether this client's pages arrive newest-first.

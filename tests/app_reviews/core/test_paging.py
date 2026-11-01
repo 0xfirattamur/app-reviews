@@ -13,6 +13,7 @@ from app_reviews.core.paging import (
     StopPolicy,
     is_per_country,
     orders_newest_first,
+    plan_limits,
     prefer_stop_reason,
 )
 from app_reviews.errors import (
@@ -1350,3 +1351,178 @@ class TestTheTablesOnlyNameRealSources:
     @pytest.mark.parametrize("table", [_PER_COUNTRY, _NEWEST_FIRST])
     def test_every_entry_is_a_source_literal(self, table):
         assert table <= set(get_args(Source))
+
+
+_SINCE = NOW - timedelta(days=30)
+
+# (newest_first, sort, limit, ratings, until, since, yielded)
+# -> (walk, matching, stream)
+_LIMIT_PLANS = [
+    pytest.param(
+        True, Sort.NEWEST, None, None, None, None, 0, (None, None, None), id="no-limit"
+    ),
+    pytest.param(
+        True,
+        Sort.NEWEST,
+        None,
+        [5],
+        NOW,
+        _SINCE,
+        0,
+        (None, None, None),
+        id="no-limit-with-filters",
+    ),
+    pytest.param(
+        True,
+        Sort.NEWEST,
+        5,
+        None,
+        None,
+        None,
+        0,
+        (5, None, 5),
+        id="newest-on-newest-first",
+    ),
+    pytest.param(
+        True,
+        "newest",
+        5,
+        None,
+        None,
+        None,
+        0,
+        (5, None, 5),
+        id="newest-as-plain-string",
+    ),
+    pytest.param(
+        True,
+        Sort.OLDEST,
+        5,
+        None,
+        None,
+        None,
+        0,
+        (None, None, 5),
+        id="oldest-needs-exhaustion",
+    ),
+    pytest.param(
+        True,
+        Sort.RATING,
+        5,
+        None,
+        None,
+        None,
+        0,
+        (None, None, 5),
+        id="rating-needs-exhaustion",
+    ),
+    pytest.param(
+        False,
+        Sort.NEWEST,
+        5,
+        None,
+        None,
+        None,
+        0,
+        (None, None, 5),
+        id="unordered-source",
+    ),
+    pytest.param(
+        True,
+        Sort.NEWEST,
+        5,
+        [5],
+        None,
+        None,
+        0,
+        (None, 5, 5),
+        id="ratings-count-matches",
+    ),
+    pytest.param(
+        True,
+        Sort.NEWEST,
+        5,
+        None,
+        NOW,
+        None,
+        0,
+        (None, 5, 5),
+        id="until-counts-matches",
+    ),
+    pytest.param(
+        True, Sort.OLDEST, 5, [5], None, None, 0, (None, None, 5), id="filtered-oldest"
+    ),
+    pytest.param(
+        False,
+        Sort.NEWEST,
+        5,
+        [5],
+        None,
+        None,
+        0,
+        (None, None, 5),
+        id="filtered-unordered",
+    ),
+    pytest.param(
+        True,
+        Sort.NEWEST,
+        5,
+        None,
+        None,
+        _SINCE,
+        2,
+        (5, None, 3),
+        id="since-on-newest-first",
+    ),
+    pytest.param(
+        False,
+        Sort.NEWEST,
+        5,
+        None,
+        None,
+        _SINCE,
+        2,
+        (None, None, None),
+        id="since-on-unordered-leaves-stream-unbounded",
+    ),
+    pytest.param(
+        False,
+        Sort.NEWEST,
+        5,
+        None,
+        None,
+        None,
+        2,
+        (None, None, 3),
+        id="stream-counts-yielded",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    (
+        "newest_first",
+        "sort",
+        "limit",
+        "ratings",
+        "until",
+        "since",
+        "yielded",
+        "expected",
+    ),
+    _LIMIT_PLANS,
+)
+def test_plan_limits_decides_which_limits_may_stop_a_walk(
+    newest_first, sort, limit, ratings, until, since, yielded, expected
+):
+    plan = plan_limits(
+        is_newest_first=newest_first,
+        sort=sort,
+        limit=limit,
+        ratings=ratings,
+        until=until,
+        since=since,
+        yielded=yielded,
+    )
+
+    assert (plan.walk_limit, plan.matching_limit, plan.stream_limit) == expected

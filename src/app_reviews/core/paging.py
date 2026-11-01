@@ -21,7 +21,7 @@ from datetime import date, datetime
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import CountryOutcome, FetchError, to_aware_datetime
 from app_reviews.models.review import Review
-from app_reviews.models.types import FeedFormat, Source, StopReason
+from app_reviews.models.types import FeedFormat, Sort, Source, StopReason
 
 _LOG = logging.getLogger(__name__)
 
@@ -272,3 +272,55 @@ class StopPolicy:
             )
             return "max_pages"
         return None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LimitPlan:
+    """Which review counts may end a walk early, one field per kind of count."""
+
+    walk_limit: int | None
+    """Fetched-review count that may end one country walk of ``fetch``."""
+    matching_limit: int | None
+    """Matching-review count that may end one country walk of ``fetch``."""
+    stream_limit: int | None
+    """Fetched-review count that may end one country walk of a stream."""
+
+
+def plan_limits(
+    *,
+    is_newest_first: bool,
+    sort: Sort,
+    limit: int | None,
+    ratings: list[int] | None,
+    until: date | datetime | None,
+    since: date | datetime | None,
+    yielded: int = 0,
+) -> LimitPlan:
+    """Decide which of the caller's ``limit`` may be pushed down into the walk.
+
+    Bounding a walk is only sound when the fetch order matches the requested
+    order (a newest-first source, ``Sort.NEWEST``). Then ``limit`` stops the
+    walk by fetched count, or, when ``ratings`` or ``until`` can drop fetched
+    rows, by matching count (``matching_limit``); a raw count would stop too
+    early there. Otherwise both stay None and the walk is exhaustive.
+
+    ``sort`` is coerced because ``Sort`` is a ``StrEnum`` and the equivalent
+    plain string is accepted everywhere else.
+
+    ``stream_limit`` is for ``iter_reviews``, where ``limit`` counts reviews
+    *yielded* and ``StopPolicy`` counts reviews *fetched*. A ``since`` filter
+    drops reviews between the two, and without a newest-first guarantee there
+    is no early stop to make the boundary page the last, so the walk would stop
+    on fetched count with matching reviews still unfetched. Left unbounded
+    there; the stream's own counter ends it.
+    """
+    if limit is None:
+        return LimitPlan(walk_limit=None, matching_limit=None, stream_limit=None)
+    can_push_down = Sort(sort) is Sort.NEWEST and is_newest_first
+    can_drop_rows = ratings is not None or until is not None
+    can_stop_before_matches = since is not None and not is_newest_first
+    return LimitPlan(
+        walk_limit=limit if can_push_down and not can_drop_rows else None,
+        matching_limit=limit if can_push_down and can_drop_rows else None,
+        stream_limit=None if can_stop_before_matches else limit - yielded,
+    )
