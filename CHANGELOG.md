@@ -45,6 +45,9 @@ recent versions are also kept in
   and `GooglePlayReplies` now raise `ValueError` for an id or country of `.` or
   `..` instead of sending a request to another path, and `AppStoreSearch` no
   longer treats non-ASCII digits such as `²` as a trackId.
+- `AppStoreVersions.versions()` and `aversions()` now raise `ParseError` when
+  `links.next` repeats a page or the walk passes `AppStoreVersions.MAX_PAGES`,
+  instead of returning a partial list or never ending.
 
 ## [1.3.0] - 2026-10-25
 
