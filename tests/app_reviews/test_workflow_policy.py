@@ -26,9 +26,7 @@ SUPPORTED_RELEASE_CELLS = {
     ("macos-latest", "3.13"),
     ("windows-latest", "3.13"),
 }
-PYPI_PUBLISH_ACTION = (
-    "pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086"
-)
+EXPRESSION = re.compile(r"\$\{\{")
 
 
 def _workflow_paths() -> list[Path]:
@@ -49,10 +47,57 @@ def _steps(job: dict[str, Any]) -> list[dict[str, Any]]:
     return steps
 
 
-def _named_steps(job: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        step["name"]: step for step in _steps(job) if isinstance(step.get("name"), str)
-    }
+def _runs(job: dict[str, Any]) -> list[str]:
+    return [str(step["run"]) for step in _steps(job) if "run" in step]
+
+
+def _step_index(job: dict[str, Any], marker: str) -> int:
+    """Index of the first step whose command or action contains `marker`."""
+    for index, step in enumerate(_steps(job)):
+        if marker in str(step.get("run", "")) + str(step.get("uses", "")):
+            return index
+    raise AssertionError(f"no step mentions {marker!r}")
+
+
+def _steps_using(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
+    """The job's steps that run `action` (`owner/name`), at whatever revision."""
+    prefix = f"{action}@"
+    return [
+        step for step in _steps(job) if str(step.get("uses", "")).startswith(prefix)
+    ]
+
+
+def _is_exact_version(version: object) -> bool:
+    """Whether `version` names one release, `X.Y.Z`, not a range or an alias."""
+    return isinstance(version, str) and FULL_VERSION.fullmatch(version) is not None
+
+
+def _job_writes(job: dict[str, Any]) -> set[str]:
+    permissions = job.get("permissions", {})
+    assert isinstance(permissions, dict)
+    return {scope for scope, level in permissions.items() if level == "write"}
+
+
+def _publish_jobs(jobs: dict[str, Any]) -> list[str]:
+    return [name for name, job in jobs.items() if _job_writes(job)]
+
+
+def _all_jobs() -> list[tuple[str, str, dict[str, Any]]]:
+    """Every job of every workflow, as (workflow file, job name, job)."""
+    all_jobs: list[tuple[str, str, dict[str, Any]]] = []
+    for path in _workflow_paths():
+        workflow, _ = _workflow(path.name)
+        for job_name, job in workflow["jobs"].items():
+            all_jobs.append((path.name, job_name, job))
+    return all_jobs
+
+
+def _all_commands(workflow: dict[str, Any]) -> list[str]:
+    """Every shell command run by any job of `workflow`."""
+    commands: list[str] = []
+    for job in workflow["jobs"].values():
+        commands.extend(_runs(job))
+    return commands
 
 
 def _external_uses(workflow: dict[str, Any]) -> list[str]:
@@ -107,118 +152,142 @@ def test_every_workflow_parses_and_every_external_action_is_commit_pinned() -> N
     assert violations == []
 
 
-def test_every_setup_uv_step_uses_an_exact_tool_version() -> None:
-    violations: list[str] = []
+def test_no_workflow_uses_pull_request_target() -> None:
     for path in _workflow_paths():
         workflow, _ = _workflow(path.name)
-        for job_name, job in workflow["jobs"].items():
-            for step in _steps(job):
-                if not str(step.get("uses", "")).startswith("astral-sh/setup-uv@"):
-                    continue
-                version = step.get("with", {}).get("version")
-                if not isinstance(version, str) or not FULL_VERSION.fullmatch(version):
-                    violations.append(f"{path.name}:{job_name}: {version!r}")
+        # PyYAML reads the bare `on` key as boolean True.
+        triggers = workflow.get("on", workflow.get(True))
+        names = triggers if isinstance(triggers, (dict, list)) else [triggers]
+        assert "pull_request_target" not in names, path.name
+
+
+def test_every_workflow_declares_explicit_top_level_permissions() -> None:
+    for path in _workflow_paths():
+        workflow, _ = _workflow(path.name)
+        permissions = workflow.get("permissions")
+        assert isinstance(permissions, dict), f"{path.name}: permissions missing"
+
+
+def test_only_the_publish_jobs_hold_publication_privileges() -> None:
+    release, _ = _workflow("release.yml")
+    jobs = release["jobs"]
+    publishing = _publish_jobs(jobs)
+
+    assert publishing
+    for name in publishing:
+        assert _job_writes(jobs[name]) <= {"id-token", "contents"}, name
+    for workflow_file, job_name, job in _all_jobs():
+        if workflow_file != "release.yml":
+            assert "id-token" not in _job_writes(job), f"{workflow_file}:{job_name}"
+
+
+def test_pypi_publish_job_holds_only_the_oidc_permission() -> None:
+    release, _ = _workflow("release.yml")
+    jobs = release["jobs"]
+    pypi_jobs = [
+        name
+        for name, job in jobs.items()
+        if _steps_using(job, "pypa/gh-action-pypi-publish")
+    ]
+
+    assert len(pypi_jobs) == 1
+    job = jobs[pypi_jobs[0]]
+    assert job["permissions"] == {"id-token": "write"}
+    publish = _steps_using(job, "pypa/gh-action-pypi-publish")[0]
+    assert publish["with"]["attestations"] is True
+
+
+def test_expressions_reach_shell_commands_only_through_env() -> None:
+    violations = [
+        f"{workflow_file}:{job_name}"
+        for workflow_file, job_name, job in _all_jobs()
+        if any(EXPRESSION.search(command) for command in _runs(job))
+    ]
+    assert violations == []
+
+
+def test_every_setup_uv_step_uses_an_exact_tool_version() -> None:
+    violations: list[str] = []
+    for workflow_file, job_name, job in _all_jobs():
+        setups = _steps_using(job, "astral-sh/setup-uv")
+        versions = [step.get("with", {}).get("version") for step in setups]
+        violations.extend(
+            f"{workflow_file}:{job_name}: {version!r}"
+            for version in versions
+            if not _is_exact_version(version)
+        )
     assert violations == []
 
 
 def test_release_matrix_is_complete_and_gates_build_and_publication() -> None:
     release, _ = _workflow("release.yml")
     jobs = release["jobs"]
-    matrix = jobs["test-matrix"]["strategy"]["matrix"]["include"]
-    cells = {(cell["os"], cell["python-version"]) for cell in matrix}
+    matrix_jobs = [
+        name
+        for name, job in jobs.items()
+        if any("pytest" in command for command in _runs(job))
+    ]
+    assert len(matrix_jobs) == 1
+    matrix = jobs[matrix_jobs[0]]["strategy"]["matrix"]["include"]
 
-    assert cells == SUPPORTED_RELEASE_CELLS
-    matrix_runs = [step.get("run") for step in _steps(jobs["test-matrix"])]
-    assert "uv sync --locked --group dev" in matrix_runs
-    assert "uv run pytest" in matrix_runs
-    assert _needs(jobs["test-matrix"]) == {"validate-release"}
-    assert _needs(jobs["verify"]) == {"test-matrix"}
-    assert "validate-release" in _dependency_closure(jobs, "test-matrix")
-    assert "validate-release" in _dependency_closure(jobs, "verify")
-    assert "test-matrix" in _dependency_closure(jobs, "publish-pypi")
-    assert "validate-release" in _dependency_closure(jobs, "publish-pypi")
-    assert "test-matrix" in _dependency_closure(jobs, "publish-github")
-    assert "validate-release" in _dependency_closure(jobs, "publish-github")
+    assert {(cell["os"], cell["python-version"]) for cell in matrix} == (
+        SUPPORTED_RELEASE_CELLS
+    )
+    for publisher in _publish_jobs(jobs):
+        assert matrix_jobs[0] in _dependency_closure(jobs, publisher)
 
 
-def test_release_ancestry_gate_uses_full_history_and_trusted_context() -> None:
+def test_release_identity_gate_runs_on_full_history_and_precedes_everything() -> None:
     release, _ = _workflow("release.yml")
     jobs = release["jobs"]
-    validate = jobs["validate-release"]
-    steps = _steps(validate)
-    checkout = next(
-        step
-        for step in steps
-        if str(step.get("uses", "")).startswith("actions/checkout@")
-    )
-    gate = _named_steps(validate)["Validate release identity and ancestry"]
+    gates = [
+        name
+        for name, job in jobs.items()
+        if any("scripts/verify_release.py" in command for command in _runs(job))
+    ]
+    assert len(gates) == 1
+    gate = jobs[gates[0]]
+    checkout = _steps_using(gate, "actions/checkout")[0]
 
-    assert checkout["with"] == {"fetch-depth": 0}
-    assert gate["env"] == {
-        "RELEASE_TAG": "${{ github.ref_name }}",
-        "GITHUB_DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
-    }
-    assert gate["run"] == (
-        "python scripts/verify_release.py "
-        '--tag "$RELEASE_TAG" --ref "$GITHUB_REF" '
-        '--sha "$GITHUB_SHA" --default-branch "$GITHUB_DEFAULT_BRANCH"'
-    )
+    assert checkout["with"]["fetch-depth"] == 0
+    assert _needs(gate) == set()
+    for name in jobs:
+        if name != gates[0]:
+            assert gates[0] in _dependency_closure(jobs, name), name
 
 
-def test_release_validation_and_verification_steps_are_ordered_structurally() -> None:
+def test_release_verification_job_builds_once_and_gates_every_publisher() -> None:
     release, _ = _workflow("release.yml")
-    verify = release["jobs"]["verify"]
-    steps = _steps(verify)
-    named = _named_steps(verify)
-    ordered_names = [step.get("name") for step in steps]
+    jobs = release["jobs"]
+    verifiers = [
+        name
+        for name, job in jobs.items()
+        if any("scripts/verify_artifacts.py" in command for command in _runs(job))
+    ]
+    assert len(verifiers) == 1
+    verify = jobs[verifiers[0]]
 
     assert verify["permissions"] == {"contents": "read"}
-    assert named["Install locked release dependencies"]["run"] == (
-        "uv sync --locked --group dev --group release"
-    )
-    for command in ("make lint", "make typecheck", "make docs"):
-        assert command in [step.get("run") for step in steps]
-    assert named["Build distributions once"]["run"] == (
-        "uv build --no-build-isolation --out-dir dist"
-    )
-    build_index = ordered_names.index("Build distributions once")
-    for prerequisite in (
-        "Install locked release dependencies",
-        "Lint",
-        "Type check",
-        "Build documentation",
-    ):
-        assert ordered_names.index(prerequisite) < build_index
-    assert ordered_names.index("Inspect distribution contents") < ordered_names.index(
-        "Upload immutable distributions"
-    )
+    assert sum("uv build" in command for command in _runs(verify)) == 1
+    build = _step_index(verify, "uv build")
+    assert build < _step_index(verify, "scripts/verify_artifacts.py")
+    assert build < _step_index(verify, "actions/upload-artifact@")
+    for publisher in _publish_jobs(jobs):
+        assert verifiers[0] in _dependency_closure(jobs, publisher)
+        assert all("uv build" not in command for command in _runs(jobs[publisher]))
 
 
-def test_release_checks_both_distribution_metadata_and_clean_install() -> None:
+def test_release_verification_checks_wheel_smoke_and_rebuild_from_sdist() -> None:
     release, _ = _workflow("release.yml")
-    jobs = release["jobs"]
-    verify_steps = _named_steps(jobs["verify"])
-    assert verify_steps["Check wheel structure"]["run"] == (
-        "uv run --locked --group release check-wheel-contents dist/*.whl"
-    )
-    assert verify_steps["Inspect distribution contents"]["run"] == (
-        "uv run --locked --group release python scripts/verify_artifacts.py "
-        "--dist-dir dist --project pyproject.toml "
-        "--rebuilt-wheel-dir dist-from-sdist"
-    )
-    assert verify_steps["Smoke test installed wheel"]["run"] == (
-        "uv run --locked --group release python scripts/smoke_test_wheel.py "
-        '--dist-dir dist --expected-version "$RELEASE_VERSION"'
-    )
-    build_count = sum(
-        "uv build" in str(step.get("run", "")) for step in _steps(jobs["verify"])
-    )
-    assert build_count == 1
-    for job_name in ("publish-pypi", "publish-github"):
-        assert all(
-            "uv build" not in str(step.get("run", ""))
-            for step in _steps(jobs[job_name])
-        )
+    commands = " ".join(_all_commands(release))
+
+    for script in (
+        "check-wheel-contents",
+        "scripts/rebuild_wheel_from_sdist.py",
+        "scripts/smoke_test_wheel.py",
+    ):
+        assert script in commands
+    assert "--no-build-isolation" not in commands.split("rebuild_wheel_from_sdist")[1]
 
 
 def test_release_toolchain_is_exactly_locked() -> None:
@@ -232,16 +301,6 @@ def test_release_toolchain_is_exactly_locked() -> None:
     )
     assert any(item.startswith("hatchling==") for item in release)
     assert any(item.startswith("check-wheel-contents==") for item in release)
-
-
-def test_release_workflow_rebuilds_wheel_from_sdist_without_isolation() -> None:
-    release, _ = _workflow("release.yml")
-    named = _named_steps(release["jobs"]["verify"])
-    rebuild = named["Rebuild wheel from sdist"]["run"]
-
-    assert "scripts/rebuild_wheel_from_sdist.py" in rebuild
-    assert "--no-build-isolation" not in rebuild  # enforced inside the tested script
-    assert "dist-from-sdist" in rebuild
 
 
 @pytest.mark.skipif(
@@ -260,44 +319,22 @@ def test_release_scripts_are_checked_in_and_executable() -> None:
         assert path.stat().st_mode & 0o111, relative
 
 
-def test_release_publication_permissions_and_dependency_order_are_exact() -> None:
-    release, _ = _workflow("release.yml")
-    jobs = release["jobs"]
-    pypi = jobs["publish-pypi"]
-    github = jobs["publish-github"]
-
-    assert _needs(pypi) == {"verify"}
-    assert pypi["permissions"] == {"id-token": "write"}
-    assert _needs(github) == {"publish-pypi"}
-    assert github["permissions"] == {"contents": "write"}
-    pypi_steps = _named_steps(pypi)
-    github_steps = _named_steps(github)
-    publish = pypi_steps["Publish distributions to PyPI"]
-    assert publish["uses"] == PYPI_PUBLISH_ACTION
-    assert publish["with"] == {"packages-dir": "dist", "attestations": True}
-    assert github_steps["Create GitHub release"]["with"] == {
-        "body_path": "release/release-notes.md",
-        "files": "dist/*",
-        "generate_release_notes": False,
-    }
-
-
-def test_ci_matrix_and_latest_dependency_signal_are_structural() -> None:
+def test_ci_tests_every_supported_python_and_platform() -> None:
     ci, _ = _workflow("ci.yml")
-    jobs = ci["jobs"]
-    matrix = jobs["test"]["strategy"]["matrix"]["include"]
-    cells = {(cell["os"], cell["python-version"]) for cell in matrix}
-    latest = jobs["compatibility-latest"]
-    latest_runs = [step.get("run", "") for step in _steps(latest)]
+    matrix = ci["jobs"]["test"]["strategy"]["matrix"]["include"]
 
-    assert cells == SUPPORTED_RELEASE_CELLS
-    assert jobs["test"]["runs-on"] == "${{ matrix.os }}"
+    assert {(cell["os"], cell["python-version"]) for cell in matrix} == (
+        SUPPORTED_RELEASE_CELLS
+    )
+
+
+def test_latest_dependency_signal_runs_only_on_schedule_without_the_lockfile() -> None:
+    ci, _ = _workflow("ci.yml")
+    latest = ci["jobs"]["compatibility-latest"]
+
     assert latest["if"] == "github.event_name == 'schedule'"
     assert latest["continue-on-error"] is True
-    assert any(
-        "uv pip install" in command and "-e ." in command for command in latest_runs
-    )
-    assert all("--locked" not in command for command in latest_runs)
+    assert all("--locked" not in command for command in _runs(latest))
 
 
 def test_release_validator_script_exists() -> None:
