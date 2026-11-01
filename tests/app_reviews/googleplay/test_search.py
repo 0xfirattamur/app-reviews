@@ -833,3 +833,156 @@ class TestReleaseNotes:
         results = _serving(_search_page(groups=[[_entry()]])).search("whatsapp")
 
         assert [a.release_notes for a in results] == [None]
+
+
+def _results_page(*sections: Any) -> str:
+    """A search page whose sections slot holds exactly ``sections``."""
+    return _page("ds:4", [[None, list(sections)]])
+
+
+def _results_section(
+    *, groups: Any = None, featured: list[Any] | None = None
+) -> list[Any]:
+    """One results section with its entry groups and featured slot set verbatim."""
+    section: list[Any] = [None] * 24
+    section[22] = groups
+    if featured is not None:
+        slot: list[Any] = [None] * 17
+        slot[16] = featured
+        section[23] = slot
+    return section
+
+
+class TestOddlyShapedPagesStillAnswerSearch:
+    """Play's layout is undocumented, so a section or a block of the wrong shape
+    costs only itself: the readable parts of the page still answer."""
+
+    async def test_a_callback_block_without_data_is_skipped(self, twin) -> None:
+        dataless = "<script>AF_initDataCallback({key: 'ds:3', hash: '1'});</script>"
+        keyless = "<script>AF_initDataCallback({data:[1], sideChannel: {}});</script>"
+
+        results = await twin.call(
+            _serving(dataless + keyless + _search_page()), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_a_section_with_no_results_in_it_is_skipped(self, twin) -> None:
+        sections = [
+            None,
+            ["a list", "with neither slot"],
+            _results_section(groups=[[_entry()]]),
+        ]
+
+        results = await twin.call(
+            _serving(_results_page(*sections)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_a_featured_hit_is_returned_when_the_groups_are_missing(
+        self, twin
+    ) -> None:
+        section = _results_section(groups=None, featured=[None, None, _detail_block()])
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.whatsapp"]
+
+    async def test_groups_of_the_wrong_type_beside_an_empty_section_are_no_results(
+        self, twin
+    ) -> None:
+        sections = [
+            _results_section(groups=[]),
+            _results_section(groups="not a list of groups"),
+        ]
+
+        results = await twin.call(
+            _serving(_results_page(*sections)), "search", "whatsapp"
+        )
+
+        assert results == []
+
+    async def test_a_featured_hit_without_a_link_is_skipped(self, twin) -> None:
+        block = _detail_block()
+        block[41] = None
+        section = _results_section(
+            groups=[[_entry(app_id="com.other")]], featured=[None, None, block]
+        )
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.other"]
+
+    @pytest.mark.parametrize(
+        "link",
+        [
+            "https://play.google.com/store/apps/details",
+            "https://play.google.com/store/apps/details?id=",
+        ],
+    )
+    async def test_a_featured_hit_whose_link_names_no_package_is_skipped(
+        self, twin, link
+    ) -> None:
+        block = _detail_block()
+        block[41] = [[None, None, link]]
+        section = _results_section(
+            groups=[[_entry(app_id="com.other")]], featured=[None, None, block]
+        )
+
+        results = await twin.call(
+            _serving(_results_page(section)), "search", "whatsapp"
+        )
+
+        assert [app.app_id for app in results] == ["com.other"]
+
+
+class TestPricesWithoutADisplayString:
+    """Play usually sends the storefront's own formatted price; without one the
+    price falls back to the currency code and the amount."""
+
+    async def test_an_entry_with_no_price_slot_is_free(self, twin) -> None:
+        entry = _entry()
+        entry[0][8] = None
+
+        results = await twin.call(
+            _serving(_search_page(groups=[[entry]])), "search", "whatsapp"
+        )
+
+        assert [app.price for app in results] == ["Free"]
+
+    @pytest.mark.parametrize("display", [None, "", "   ", 5])
+    async def test_a_paid_app_falls_back_to_currency_and_amount(
+        self, twin, display
+    ) -> None:
+        page = _detail_page(
+            price_micros=4_990_000, currency=" usd ", formatted_price=display
+        )
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "USD 4.99"
+
+    @pytest.mark.parametrize("currency", [None, "", "  ", 3])
+    async def test_a_paid_app_without_a_usable_currency_is_unknown(
+        self, twin, currency
+    ) -> None:
+        page = _detail_page(price_micros=4_990_000, currency=currency)
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"
+
+    async def test_a_boolean_amount_is_unknown_not_one_micro(self, twin) -> None:
+        page = _detail_page(price_micros=True)
+
+        app = await twin.call(_serving(page), "lookup", "com.whatsapp")
+
+        assert app is not None
+        assert app.price == "Unknown"

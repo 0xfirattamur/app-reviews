@@ -441,3 +441,128 @@ class TestTheSortConstantIsThePlayValueForNewest:
 
     def test_newest_is_two(self):
         assert GooglePlayScraperProvider.SORT_NEWEST == 2
+
+
+def _rpc_row(payload: Any) -> list[Any]:
+    """The envelope row this provider reads, wrapping ``payload`` as Play does."""
+    return ["wrb.fr", "oCPfdb", json.dumps(payload), None, "generic"]
+
+
+def _envelope(*rows: Any) -> str:
+    return ")]}'\n\n" + json.dumps(list(rows))
+
+
+class TestTheEnvelopeIsReadStrictly:
+    """A body we cannot read is a classified error; a body that says "nothing
+    more" is an honest empty page. Neither may raise, and neither may be
+    mistaken for the other."""
+
+    async def test_an_rpc_answered_with_null_is_an_empty_last_page(self, twin):
+        body = _envelope(["wrb.fr", "oCPfdb", None, None, "generic"])
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is None
+        assert page.reviews == []
+        assert page.next_cursor is None
+
+    async def test_a_body_that_is_not_json_is_a_parse_error(self, twin):
+        page = await twin.call(
+            _serving(")]}'\n\nthis is not json"), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    async def test_unrelated_rows_are_passed_over_to_find_the_rpc(self, twin):
+        junk = [
+            "not a row",
+            ["wrb.fr"],
+            ["di", "oCPfdb", "{}"],
+            ["wrb.fr", "someOtherRpc", "[]"],
+        ]
+        real = _rpc_row([[_gp_entry()], None, [None]])
+
+        page = await twin.call(
+            _serving(_envelope(*junk, real)), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is None
+        assert [review.id for review in page.reviews] == ["abc123"]
+
+    async def test_only_unrelated_rows_is_a_parse_error(self, twin):
+        body = _envelope("not a row", ["wrb.fr", "someOtherRpc", "[]"])
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+
+class TestAbsentSlotsAreNotErrors:
+    """Slots Play leaves out or nulls mean "none", and only a slot present with
+    the wrong shape is malformed."""
+
+    @pytest.mark.parametrize("payload", [[], [None], [None, None, [None]]])
+    async def test_a_payload_with_no_review_container_is_an_empty_page(
+        self, twin, payload
+    ):
+        page = await twin.call(
+            _serving(_envelope(_rpc_row(payload))), "fetch_page", "app", "us", None
+        )
+
+        assert page.error is None
+        assert page.reviews == []
+
+    async def test_a_payload_without_a_pagination_slot_has_no_next_page(self, twin):
+        body = _envelope(_rpc_row([[_gp_entry()]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert len(page.reviews) == 1
+        assert page.next_cursor is None
+
+    async def test_a_pagination_pair_with_a_null_token_has_no_next_page(self, twin):
+        body = _envelope(_rpc_row([[_gp_entry()], [None, None], [None]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert len(page.reviews) == 1
+        assert page.next_cursor is None
+
+    async def test_a_pagination_pair_missing_its_token_slot_is_a_parse_error(
+        self, twin
+    ):
+        body = _envelope(_rpc_row([[_gp_entry()], [None], [None]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", None)
+
+        assert page.error is not None and page.error.kind == "parse"
+
+    async def test_a_review_with_no_text_keeps_an_empty_body(self, twin):
+        entry = _gp_entry()
+        entry[4] = None
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.body for review in page.reviews] == [""]
+
+    @pytest.mark.parametrize("version_slot", [None, ""])
+    async def test_a_review_without_an_app_version_has_none(self, twin, version_slot):
+        entry = _gp_entry()
+        entry[10] = version_slot
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.app_version for review in page.reviews] == [None]
+
+    async def test_a_review_that_stops_before_the_version_slot_has_none(self, twin):
+        entry = _gp_entry()[:10]
+
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "app", "us", None
+        )
+
+        assert [review.app_version for review in page.reviews] == [None]

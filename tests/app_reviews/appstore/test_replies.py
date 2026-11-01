@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import httpx
@@ -21,7 +24,7 @@ from app_reviews import (
     ReviewReply,
     ServerError,
 )
-from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
+from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY, connect_credentials
 from tests.app_reviews.transport import Recorder, client_for
 
 _BASE = "https://api.appstoreconnect.apple.com/v1"
@@ -331,3 +334,69 @@ class TestDeleteReply:
 
         assert await _replies(record).adelete_reply("review-9") is True
         assert record.requests[-1].method == "DELETE"
+
+
+class TestTheSigningKeyLifecycle:
+    """``AppStoreReplies`` loads its key on the first request, keeps one bearer
+    token across calls, and drops that token when the client is closed."""
+
+    async def test_one_token_serves_several_calls(self, twin, fake_clock):
+        record = Recorder(httpx.Response(200, json={"data": None}))
+        replies = _replies(record)
+
+        await twin.call(replies, "get_reply", "review-1")
+        fake_clock.advance(1)
+        await twin.call(replies, "get_reply", "review-2")
+
+        first, second = (r.headers["authorization"] for r in record.requests)
+        assert first == second
+
+    async def test_closing_drops_the_token(self, twin, fake_clock):
+        record = Recorder(httpx.Response(200, json={"data": None}))
+        replies = _replies(record)
+        await twin.call(replies, "get_reply", "review-1")
+
+        await twin.call(replies, "close")
+        fake_clock.advance(1)
+        await twin.call(replies, "get_reply", "review-2")
+
+        first, second = (r.headers["authorization"] for r in record.requests)
+        assert first != second
+
+    async def test_closing_before_any_request_is_safe(self, twin):
+        record = Recorder(httpx.Response(200, json={"data": None}))
+        replies = _replies(record)
+
+        await twin.call(replies, "close")
+
+        assert record.requests == []
+
+
+class TestTheKeyIsLoadedOnceUnderConcurrentFirstRequests:
+    def test_two_threads_asking_at_once_share_one_load(self, monkeypatch):
+        """The key file is read once, however many threads make the first call."""
+        loads: list[object] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_load(auth):
+            loads.append(auth)
+            started.set()
+            assert release.wait(timeout=2)
+            return connect_credentials()
+
+        monkeypatch.setattr(
+            "app_reviews.appstore.api.load_connect_credentials", slow_load
+        )
+        replies = _replies(Recorder(httpx.Response(200, json={"data": None})))
+
+        with ThreadPoolExecutor(max_workers=2) as threads:
+            first = threads.submit(replies.get_reply, "review-1")
+            assert started.wait(timeout=2)
+            second = threads.submit(replies.get_reply, "review-2")
+            time.sleep(0.05)  # let the second thread reach the loader's lock
+            release.set()
+            first.result(timeout=2)
+            second.result(timeout=2)
+
+        assert len(loads) == 1
