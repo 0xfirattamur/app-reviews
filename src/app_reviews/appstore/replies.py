@@ -17,15 +17,17 @@ https://developer.apple.com/help/app-store-connect/monitor-ratings-and-reviews/r
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import quote
 
 from app_reviews.appstore.api import ConnectAPIClient
-from app_reviews.appstore.connect import parse_review_response
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError
 from app_reviews.models.reply import ReviewReply
+from app_reviews.models.types import ReplyState
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
 _API = "the App Store Connect API"
@@ -166,3 +168,44 @@ def _store_error(body: str) -> StoreError:
     if not isinstance(entry, dict):
         return StoreError()
     return StoreError.of(entry.get("code"), entry.get("detail"))
+
+
+_REPLY_STATES: dict[str, ReplyState] = {
+    "PUBLISHED": "published",
+    "PENDING_PUBLISH": "pending",
+}
+"""Apple's documented ``CustomerReviewResponseV1.state`` values."""
+
+
+def parse_review_response(resource: Any, review_id: str) -> ReviewReply:
+    """A ``customerReviewResponses`` resource as the reply to ``review_id``.
+
+    Raises on an unknown state rather than guessing it is published.
+    """
+    attributes = resource["attributes"]
+    state = _REPLY_STATES.get(attributes["state"])
+    if state is None:
+        raise ValueError(f"unknown reply state {attributes['state']!r}")
+    text = attributes["responseBody"]
+    if not isinstance(text, str):
+        raise TypeError(f"responseBody is {type(text).__name__}, expected a string")
+    return ReviewReply(
+        review_id=review_id,
+        reply_id=str(resource["id"]),
+        text=text,
+        state=state,
+        updated_at=_reply_timestamp(attributes.get("lastModifiedDate")),
+    )
+
+
+def _reply_timestamp(last_modified: Any) -> datetime | None:
+    """``last_modified`` as an aware datetime; an offset-less one is read as UTC.
+
+    The same rule ``Review`` applies to its timestamps, so a reply and its review
+    always compare.
+    """
+    if not last_modified:
+        return None
+    modified_at = datetime.fromisoformat(last_modified)
+    is_naive = modified_at.tzinfo is None
+    return modified_at.replace(tzinfo=UTC) if is_naive else modified_at

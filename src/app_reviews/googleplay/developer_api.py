@@ -23,6 +23,8 @@ from app_reviews.core.untyped import (
     page_from_entries,
 )
 from app_reviews.core.validation import require_path_segment
+from app_reviews.googleplay.replies import find_developer_comment, parse_developer_reply
+from app_reviews.googleplay.timestamps import parse_protobuf_timestamp
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
 from app_reviews.models.review import DeviceMetadata, Review
@@ -32,39 +34,6 @@ _LOG = logging.getLogger(__name__)
 
 _SOURCE_NAME = "the Google Play Developer API"
 """How both a failed status and a malformed body name this source."""
-
-
-def parse_protobuf_timestamp(value: Any) -> datetime:
-    """Read a protobuf ``Timestamp`` (``{seconds, nanos}``) as one instant.
-
-    ``nanos`` is sub-second precision for that same instant, not a second
-    timestamp. ``seconds`` deliberately has no default: defaulting it to 0
-    dated a review the API sent no timestamp for to 1970-01-01, and
-    ``updated_at`` is the only date this source reports, so ``sort``, ``since``
-    and ``until`` all read it, so a wrong one is worse than a dropped review.
-    """
-    seconds = int(value["seconds"])
-    nanos = int(value.get("nanos", 0))
-    return datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=nanos // 1000)
-
-
-def parse_developer_reply(review_id: str, text: Any, last_modified: Any) -> ReviewReply:
-    """A Play ``developerComment`` (or a reply write's ``result``) as a reply.
-
-    Play applies a reply immediately and gives it no id of its own, so it is
-    always ``"published"`` with ``reply_id=None``.
-    """
-    if not isinstance(text, str):
-        raise TypeError(f"reply text is {type(text).__name__}, expected a string")
-    return ReviewReply(
-        review_id=review_id,
-        reply_id=None,
-        text=text,
-        state="published",
-        updated_at=(
-            None if last_modified is None else parse_protobuf_timestamp(last_modified)
-        ),
-    )
 
 
 _DEVICE_TEXT_FIELDS: dict[str, str] = {
@@ -296,7 +265,7 @@ class GooglePlayOfficialProvider(PooledClient):
         A reply that cannot be read is logged and dropped; the review it
         answers is still usable.
         """
-        reply_comment = _find_developer_comment(entry["comments"])
+        reply_comment = find_developer_comment(entry["comments"])
         if reply_comment is None:
             return None
         developer_comment = reply_comment["developerComment"]
@@ -313,14 +282,6 @@ class GooglePlayOfficialProvider(PooledClient):
                 exc,
             )
             return None
-
-
-def _find_developer_comment(comments: Any) -> dict[str, Any] | None:
-    """The first ``comments`` entry holding a ``developerComment``, or None."""
-    for comment in comments:
-        if isinstance(comment, dict) and "developerComment" in comment:
-            return comment
-    return None
 
 
 def _optional_text(value: Any) -> str | None:
