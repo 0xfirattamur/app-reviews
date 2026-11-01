@@ -466,6 +466,33 @@ class TestTheEnvelopeIsReadStrictly:
         assert page.reviews == []
         assert page.next_cursor is None
 
+    async def test_an_rpc_error_row_is_a_request_error_not_the_end_of_the_walk(
+        self, twin
+    ):
+        """Captured live 2026-11-02: an invalid page token answers HTTP 200 with
+        the status in slot 5, where a finished walk answers a payload."""
+        body = _envelope(["wrb.fr", "oCPfdb", None, None, None, [3], "generic"])
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", "bad-token")
+
+        assert page.reviews == []
+        assert page.next_cursor is None
+        assert page.error is not None
+        assert page.error.kind == "request"
+        assert page.error.status == 200
+        assert page.error.message == (
+            "Google Play rejected the reviews request (RPC status 3)"
+        )
+
+    async def test_the_end_of_the_reviews_is_a_payload_without_a_next_token(self, twin):
+        body = _envelope(_rpc_row([[_gp_entry()], None, [None]]))
+
+        page = await twin.call(_serving(body), "fetch_page", "app", "us", "last-page")
+
+        assert page.error is None
+        assert len(page.reviews) == 1
+        assert page.next_cursor is None
+
     async def test_a_body_that_is_not_json_is_a_parse_error(self, twin):
         page = await twin.call(
             _serving(")]}'\n\nthis is not json"), "fetch_page", "app", "us", None

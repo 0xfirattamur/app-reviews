@@ -29,6 +29,8 @@ recent versions are also kept in
 - `GooglePlayReviews` token exchange now raises `AuthError` when Google answers
   400 with `invalid_grant`, `invalid_client` or `unauthorized_client`, instead
   of a request error.
+- `GooglePlayReviews` now reports a rejected page token as a `FetchError` of
+  kind `"request"` instead of ending the walk as if the reviews had run out.
 
 ## [1.3.0] - 2026-10-25
 

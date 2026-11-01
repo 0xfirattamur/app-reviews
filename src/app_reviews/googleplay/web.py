@@ -14,6 +14,7 @@ from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.page import PageResult
+from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import Source
 
@@ -22,6 +23,14 @@ _LOG = logging.getLogger(__name__)
 
 class _ParseFailed(Exception):
     """The batchexecute envelope could not be read at all."""
+
+
+class _RpcRejected(Exception):
+    """Play answered the RPC with an error status instead of a payload."""
+
+    def __init__(self, rpc_status: object) -> None:
+        super().__init__(f"RPC status {rpc_status}")
+        self.rpc_status = rpc_status
 
 
 _UNUSABLE = (
@@ -159,6 +168,8 @@ class GooglePlayScraperProvider(PooledClient):
             return failure
         try:
             entries, next_cursor = self._parse_envelope(response.body)
+        except _RpcRejected as exc:
+            return _rejected_page(exc, response.status)
         except (_ParseFailed, *_UNUSABLE) as exc:
             return malformed_page(
                 country=None,
@@ -190,7 +201,8 @@ class GooglePlayScraperProvider(PooledClient):
     def _find_rpc_payload(self, rows: Any) -> list[Any] | None:
         """This RPC's decoded payload, or None when Play answered it with null.
 
-        A null answer means the app has no more reviews. A body without this
+        A null answer means the app has no more reviews, unless the row carries
+        an error status, which raises ``_RpcRejected``. A body without this
         RPC's row at all is unreadable, and raises.
         """
         for row in rows:
@@ -198,6 +210,8 @@ class GooglePlayScraperProvider(PooledClient):
                 continue
             if row[0] != "wrb.fr" or row[1] != self.RPC_ID:
                 continue
+            if row[2] is None:
+                _raise_if_rejected(row)
             return self._decode_review_payload(row[2])
         raise _ParseFailed(f"no {self.RPC_ID} envelope in response")
 
@@ -333,3 +347,31 @@ class GooglePlayScraperProvider(PooledClient):
         if len(entry) <= self._APP_VERSION or entry[self._APP_VERSION] in (None, ""):
             return None
         return self._string(entry[self._APP_VERSION], "app version")
+
+
+_RPC_STATUS_SLOT = 5
+"""Where an RPC row carries its error status, as ``[3]``, when it has no payload."""
+
+
+def _raise_if_rejected(row: list[Any]) -> None:
+    """Raise ``_RpcRejected`` for a payload-less row that carries an error status.
+
+    Play answers an invalid page token with HTTP 200 and a null payload plus a
+    status, while a finished walk answers a payload. A null payload with no
+    status stays what it always was: nothing more to read.
+    """
+    if len(row) <= _RPC_STATUS_SLOT or not row[_RPC_STATUS_SLOT]:
+        return
+    status = row[_RPC_STATUS_SLOT]
+    raise _RpcRejected(status[0] if isinstance(status, list) else status)
+
+
+def _rejected_page(rejection: _RpcRejected, http_status: int) -> PageResult:
+    """The failed page for a request Play refused inside a successful response."""
+    error = FetchError(
+        country=None,
+        message=f"Google Play rejected the reviews request ({rejection})",
+        kind="request",
+        status=http_status,
+    )
+    return PageResult(error=error)
