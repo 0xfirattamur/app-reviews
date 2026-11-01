@@ -72,13 +72,13 @@ class AppStoreReviews(BaseReviews):
 
     def _build_provider(self) -> ReviewProvider:
         if self._auth is None:
-            return AppStoreScraperProvider(**self._provider_kwargs)
+            return AppStoreScraperProvider(http=self._http)
         return AppStoreOfficialProvider(
             ConnectAuth(load_connect_credentials(self._auth)),
             server_ratings=self._server_ratings,
             server_territories=self._server_territories,
             server_sort=self._server_sort,
-            **self._provider_kwargs,
+            http=self._http,
         )
 
     async def _abuild_provider(self) -> ReviewProvider:

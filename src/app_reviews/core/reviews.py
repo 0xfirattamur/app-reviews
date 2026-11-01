@@ -285,6 +285,28 @@ class BaseReviews(PooledClient, abc.ABC):
     ``AuthError`` is the carve-out at every rung: it is raised, not reported. An
     unusable credential is configuration, identical for every country and page,
     so reporting it N times would bury the one fact that matters.
+
+    **Subclass hooks.** A store's client supplies its providers and the few facts
+    the ladder cannot derive from ``provider.source``:
+
+    - ``_build_provider`` (abstract): return the ``ReviewProvider`` for this
+      client's configuration, passing ``http=self._http`` so every request shares
+      the client's pool, retry policy and rate limiter. May read credentials and
+      block; ``source`` and the ladder call it at most once and cache the result.
+    - ``_abuild_provider``: same contract from an async context. Defaults to
+      ``_build_provider``; override when construction does blocking I/O (a key
+      file read, a token exchange) so the event loop is not held.
+    - ``_is_newest_first(provider)``: whether this client's pages arrive
+      newest-first. Defaults to ``orders_newest_first(provider.source)``;
+      override when the caller can change the order, since every early stop
+      (``since``, a newest-first ``limit``) trusts the answer.
+    - ``_validate_country_argument(country)`` and
+      ``_validate_countries_argument(countries)``: raise ``ValueError`` for a
+      country the store cannot honour, before any provider is built or I/O
+      done. Default to accepting everything; override for stores with no
+      country axis.
+    - ``DEFAULT_COUNTRY``: the storefront walked when a per-country source is
+      given none.
     """
 
     DEFAULT_COUNTRY = "us"
@@ -311,10 +333,6 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> None:
         super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._cached_provider: ReviewProvider | None = None
-
-    @property
-    def _provider_kwargs(self) -> dict[str, Any]:
-        return {"http": self._http}
 
     @abc.abstractmethod
     def _build_provider(self) -> ReviewProvider: ...
