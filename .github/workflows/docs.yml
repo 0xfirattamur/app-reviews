@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: docs-${{ github.ref }}
@@ -14,8 +14,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      # The write token is not left in .git/config, where every later step
+      # (dependency install, mkdocs plugins) could read it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.5"
@@ -36,6 +42,16 @@ jobs:
       - run: uv run mkdocs build --strict
         env:
           ENABLE_SOCIAL_CARDS: "true"
-      - run: uv run mkdocs gh-deploy --force
+      - name: Deploy to GitHub Pages
         env:
           ENABLE_SOCIAL_CARDS: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Hand the token to git for this command only, through the process
+          # environment, so it is never written to disk.
+          credentials=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          echo "::add-mask::$credentials"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credentials"
+          uv run mkdocs gh-deploy --force

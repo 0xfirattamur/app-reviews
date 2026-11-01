@@ -166,6 +166,18 @@ def test_every_workflow_declares_explicit_top_level_permissions() -> None:
         workflow, _ = _workflow(path.name)
         permissions = workflow.get("permissions")
         assert isinstance(permissions, dict), f"{path.name}: permissions missing"
+        assert permissions.get("contents") in {"read", "none"}, path.name
+
+
+def test_docs_deploy_never_persists_the_write_token_in_the_checkout() -> None:
+    docs, _ = _workflow("docs.yml")
+    for job in docs["jobs"].values():
+        checkouts = _steps_using(job, "actions/checkout")
+        assert checkouts
+        assert all(
+            step.get("with", {}).get("persist-credentials") is False
+            for step in checkouts
+        )
 
 
 def test_only_the_publish_jobs_hold_publication_privileges() -> None:
