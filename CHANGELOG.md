@@ -67,6 +67,9 @@ recent versions are also kept in
   `client.close()`) no longer raise `Event loop is closed`.
 - `GooglePlayReplies.get_reply()` and `aget_reply()` skip a non-object entry in
   the review's `comments` instead of raising `ParseError`.
+- `AppStoreVersions` refuses a `links.next` carrying control characters, a
+  fragment or user-info, the same way `AppStoreReviews` does, instead of
+  following it with the JWT.
 
 ## [1.3.0] - 2026-10-25
 

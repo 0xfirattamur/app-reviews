@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from app_reviews.appstore.api import CONNECT_HOST, refuse_foreign_url
 from app_reviews.appstore.replies import parse_review_response
 from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
@@ -46,7 +47,7 @@ class AppStoreOfficialProvider(PooledClient):
 
     source: Source = "appstore_official"
 
-    API_HOST = "api.appstoreconnect.apple.com"
+    API_HOST = CONNECT_HOST
     CURSOR_PATH_PREFIX = "/v1/apps/"
     """A ``links.next`` may only point back at the app-reviews endpoints.
 
@@ -110,9 +111,16 @@ class AppStoreOfficialProvider(PooledClient):
         if cursor is None:
             return self._first_page_url(app_id)
 
-        if (refusal := self._cursor_refusal(app_id, cursor)) is not None:
+        refusal = refuse_foreign_url(
+            cursor, host=self.API_HOST, exact_path=self._reviews_path(app_id)
+        )
+        if refusal is not None:
             return refused_cursor_page(country=None, cursor=cursor, reason=refusal)
         return self._with_responses_included(cursor)
+
+    def _reviews_path(self, app_id: str) -> str:
+        """The one path a request, and so a cursor, may name for ``app_id``."""
+        return f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
 
     def _first_page_url(self, app_id: str) -> str:
         """The first page, with replies included and any server-side filters.
@@ -130,7 +138,7 @@ class AppStoreOfficialProvider(PooledClient):
             query["filter[rating]"] = ",".join(map(str, self._server_ratings))
         if self._server_territories:
             query["filter[territory]"] = ",".join(self._server_territories)
-        path = f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
+        path = self._reviews_path(app_id)
         return f"https://{self.API_HOST}{path}?{urlencode(query, safe=',[]')}"
 
     def _with_responses_included(self, url: str) -> str:
@@ -140,44 +148,6 @@ class AppStoreOfficialProvider(PooledClient):
             return url
         separator = "&" if query else "?"
         return f"{url}{separator}include=response"
-
-    def _cursor_refusal(self, app_id: str, cursor: str) -> str | None:
-        """Why this cursor cannot be requested, or None if it can.
-
-        ``urlsplit`` raises on a malformed IPv6 literal, so even parsing the
-        cursor has to be guarded: the validator exists to *report* a bad cursor,
-        and raising out of it defeats the point.
-
-        Control characters are refused before anything else: ``urlsplit`` strips
-        them, so a cursor could pass this check and still forge a record in a log
-        line that renders the URL.
-        """
-        if any(ch in cursor for ch in "\r\n\t"):
-            return "it contains control characters"
-        try:
-            parsed = urlsplit(cursor)
-        except ValueError as exc:
-            return f"it cannot be parsed as a URL ({exc})"
-        if parsed.scheme != "https":
-            return "expected an https URL"
-        if parsed.username is not None or parsed.password is not None:
-            return "user-info is not allowed"
-        if parsed.hostname != self.API_HOST:
-            return f"expected a URL on {self.API_HOST}"
-        try:
-            port = parsed.port
-        except ValueError as exc:
-            return f"it has an invalid port ({exc})"
-        if port not in (None, 443):
-            return f"expected the default port, got {port}"
-        expected_path = (
-            f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
-        )
-        if parsed.path != expected_path:
-            return f"expected the exact path {expected_path}"
-        if parsed.fragment:
-            return "fragments are not allowed"
-        return None
 
     def _to_page(self, response: HttpResponse, app_id: str) -> PageResult:
         """Turn one HTTP outcome into a ``PageResult``.

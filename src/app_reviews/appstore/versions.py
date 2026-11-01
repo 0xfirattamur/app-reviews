@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode
 
-from app_reviews.appstore.api import ConnectAPIClient
+from app_reviews.appstore.api import CONNECT_HOST, ConnectAPIClient, refuse_foreign_url
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
 from app_reviews.core.validation import require_path_segment
@@ -190,13 +190,11 @@ class AppStoreVersions(ConnectAPIClient):
             raise TypeError(
                 f"'links.next' is {type(next_cursor).__name__}, expected a string"
             )
-        parsed = urlsplit(next_cursor)
-        if (
-            parsed.scheme != "https"
-            or parsed.netloc != urlsplit(self.API_BASE).netloc
-            or parsed.path != self._path(app_id)
-        ):
-            raise ValueError(f"refusing 'links.next' outside {self._path(app_id)}")
+        refusal = refuse_foreign_url(
+            next_cursor, host=CONNECT_HOST, exact_path=self._path(app_id)
+        )
+        if refusal is not None:
+            raise ValueError(f"refusing 'links.next': {refusal}")
         return next_cursor
 
     def _sort_newest_first(

@@ -143,6 +143,9 @@ class TestVersions:
             "http://api.appstoreconnect.apple.com/v1/apps/123/appStoreVersions",
             "https://api.appstoreconnect.apple.com/v1/users",
             "https://user@api.appstoreconnect.apple.com/v1/apps/123/appStoreVersions",
+            _URL + "?cursor=2\nforged record",
+            _URL + "?cursor=2\t",
+            _URL + "#fragment",
         ],
     )
     async def test_a_next_link_elsewhere_is_refused_without_following_it(
