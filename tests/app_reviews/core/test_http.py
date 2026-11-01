@@ -22,7 +22,7 @@ from app_reviews import (
     GooglePlayReviews,
     GooglePlaySearch,
 )
-from app_reviews.core.http import HttpClient
+from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.models.config import RetryConfig
 from tests.app_reviews.transport import Recorder, query_of
 
@@ -120,6 +120,17 @@ class TestUnknownCharset:
 
         assert response.status == 200
         assert response.body == "café"
+
+
+class TestResponseReprHidesTheBody:
+    """The Google token exchange answers with a bearer token in the body, and a
+    ``repr`` lands in logs, tracebacks and pytest output."""
+
+    def test_the_body_is_not_in_the_repr(self):
+        response = HttpResponse(200, "secret-token")
+
+        assert "secret-token" not in repr(response)
+        assert "status=200" in repr(response)
 
 
 class TestPost:

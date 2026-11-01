@@ -14,6 +14,8 @@ recent versions are also kept in
 - `HttpClient` decodes a response naming a charset Python does not know
   (`Content-Type: ...; charset=bogus`) as UTF-8 instead of raising
   `LookupError`.
+- `HttpResponse.body` is left out of `repr()`, so a token-exchange body cannot
+  leak through logs or tracebacks.
 
 ## [1.3.0] - 2026-10-25
 

@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -93,10 +93,13 @@ class HttpResponse:
 
     ``retry_after`` is the raw ``Retry-After`` header of the final attempt, so a
     caller that gives up on a 429 can say how long the store asked it to wait.
+
+    ``body`` is left out of ``repr``: some responses (the Google token exchange)
+    carry a bearer token in it.
     """
 
     status: int
-    body: str
+    body: str = field(repr=False)
     transport_error: str | None = None
     retry_after: str | None = None
 
