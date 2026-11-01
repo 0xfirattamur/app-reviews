@@ -11,6 +11,9 @@ recent versions are also kept in
 - A non-string App Store `private_key`, or a non-string `client_email`,
   `private_key` or `token_uri` in a Google service account, now raises
   `AuthError` when the key is loaded instead of a bare `TypeError`.
+- `HttpClient` decodes a response naming a charset Python does not know
+  (`Content-Type: ...; charset=bogus`) as UTF-8 instead of raising
+  `LookupError`.
 
 ## [1.3.0] - 2026-10-25
 

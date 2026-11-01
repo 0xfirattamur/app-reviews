@@ -104,6 +104,24 @@ class TestGet:
         assert "no route to host" in resp.transport_error
 
 
+class TestUnknownCharset:
+    """A server can name a charset Python has never heard of; that is its quirk,
+    not a failed exchange, so the body is read as UTF-8 instead of raising."""
+
+    async def test_an_unknown_charset_decodes_as_utf_8(self, twin):
+        def handler(request):
+            return httpx.Response(
+                200,
+                content="café".encode(),
+                headers={"Content-Type": "text/plain; charset=bogus"},
+            )
+
+        response = await twin.call(_client(handler), "get", "https://example.test/x")
+
+        assert response.status == 200
+        assert response.body == "café"
+
+
 class TestPost:
     def test_sends_the_body(self):
         record = Recorder(httpx.Response(201, text="created"))

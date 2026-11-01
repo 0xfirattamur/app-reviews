@@ -529,9 +529,17 @@ class HttpClient:
             )
 
     def _decode_body(self, buffered: list[bytes], raw: httpx.Response) -> str:
-        return b"".join(buffered).decode(
-            raw.charset_encoding or "utf-8", errors="replace"
-        )
+        """Decode with the charset the server named, or UTF-8 when it names none.
+
+        A charset Python has no codec for (``charset=bogus``) is the server's
+        quirk, not a failed exchange, and would otherwise escape as a
+        ``LookupError`` from a client that promises ``HttpResponse``.
+        """
+        body = b"".join(buffered)
+        try:
+            return body.decode(raw.charset_encoding or "utf-8", errors="replace")
+        except LookupError:
+            return body.decode("utf-8", errors="replace")
 
     def _to_error_response(self, exc: Exception) -> HttpResponse:
         return HttpResponse(
