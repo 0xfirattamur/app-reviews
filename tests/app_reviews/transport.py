@@ -8,8 +8,9 @@ builder for the client under test, and a reader for a request's query string.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from urllib.parse import parse_qs
 
 import httpx
@@ -78,3 +79,41 @@ def client_for(
 def query_of(request: httpx.Request) -> dict[str, list[str]]:
     """The request's query string as ``{name: [values]}``, decoded."""
     return parse_qs(request.url.query.decode(), keep_blank_values=True)
+
+
+class Twin:
+    """Runs one scenario through a client's sync method or its async twin.
+
+    Every network entry point has both (``fetch_page``/``afetch_page``), and a
+    behaviour such as error classification must hold on both. A test takes the
+    ``twin`` fixture, which runs it once per path, and calls
+    ``await twin.call(client, "fetch_page", ...)``: sync mode calls the method as
+    named, async mode awaits the ``a``-prefixed twin.
+    """
+
+    def __init__(self, mode: Literal["sync", "async"]) -> None:
+        self.mode: Literal["sync", "async"] = mode
+
+    async def call(self, target: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Call ``target.method`` in this mode and return what it returns.
+
+        Exceptions propagate unchanged, so ``pytest.raises`` works on both paths.
+        """
+        if self.mode == "sync":
+            return getattr(target, method)(*args, **kwargs)
+        async_method = getattr(target, f"a{method}")
+        return await async_method(*args, **kwargs)
+
+    def start(
+        self, target: Any, method: str, *args: Any, **kwargs: Any
+    ) -> asyncio.Task[Any]:
+        """Start the call without waiting for it, for tests that observe it midway.
+
+        The sync method runs on a worker thread so it cannot block the test's
+        event loop; the async twin runs as a task on that loop.
+        """
+        if self.mode == "sync":
+            work = asyncio.to_thread(getattr(target, method), *args, **kwargs)
+            return asyncio.ensure_future(work)
+        async_method = getattr(target, f"a{method}")
+        return asyncio.ensure_future(async_method(*args, **kwargs))

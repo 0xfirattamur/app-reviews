@@ -174,11 +174,11 @@ class TestErrorClassification:
             (503, "server", True),
         ],
     )
-    def test_status_maps_to_kind(self, status, kind, retryable):
+    async def test_status_maps_to_kind(self, twin, status, kind, retryable):
         def handler(request):
             return httpx.Response(status, text="")
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is not None
         assert page.error.kind == kind
@@ -186,20 +186,24 @@ class TestErrorClassification:
         assert page.error.retryable is retryable
         assert page.error.country == "us"
 
-    def test_transport_failure_carries_the_real_message(self):
+    async def test_transport_failure_carries_the_real_message(self, twin):
         def handler(request):
             raise httpx.ConnectError("connection refused")
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is not None
         assert page.error.kind == "transport"
         assert "connection refused" in page.error.message
         assert "HTTP 0" not in page.error.message
 
-    def test_public_feed_403_is_retryable_throttling_not_credentials(self):
-        page = _provider(lambda request: httpx.Response(403, text="")).fetch_page(
-            "12345", "us", None
+    async def test_public_feed_403_is_retryable_throttling_not_credentials(self, twin):
+        page = await twin.call(
+            _provider(lambda request: httpx.Response(403, text="")),
+            "fetch_page",
+            "12345",
+            "us",
+            None,
         )
 
         assert page.error is not None
@@ -207,7 +211,7 @@ class TestErrorClassification:
         assert page.error.retryable is True
         assert "access may be blocked or throttled" in page.error.message
 
-    def test_403_is_not_retried_in_package(self, no_sleep):
+    async def test_403_is_not_retried_in_package(self, twin, no_sleep):
         """Retrying a blocked storefront only extends the block."""
         attempts = []
 
@@ -218,7 +222,7 @@ class TestErrorClassification:
         client = AppStoreReviews(
             http=HttpClient(transport=httpx.MockTransport(handler), retry=RetryConfig())
         )
-        page = client.fetch_page("12345", country="us")
+        page = await twin.call(client, "fetch_page", "12345", country="us")
 
         assert page.error is not None
         assert page.error.kind == "rate_limited"
@@ -255,26 +259,26 @@ class TestErrorClassification:
         limiter.acquire()
         assert fake_clock.waited() == pytest.approx(30.0)
 
-    def test_malformed_json_is_a_parse_error(self):
+    async def test_malformed_json_is_a_parse_error(self, twin):
         def handler(request):
             return httpx.Response(200, text="not json at all")
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_null_feed_body_is_a_parse_error(self):
+    async def test_null_feed_body_is_a_parse_error(self, twin):
         def handler(request):
             return httpx.Response(200, text="null")
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_a_non_dict_version_field_costs_only_the_field(self):
+    async def test_a_non_dict_version_field_costs_only_the_field(self, twin):
         """``app_version`` is optional, so a wrong shape gives None; it does not
         cost the review, and it certainly does not cost the page."""
         odd = _rss_entry("odd")
@@ -283,7 +287,7 @@ class TestErrorClassification:
         def handler(request):
             return httpx.Response(200, text=_feed([odd, _rss_entry("good")]))
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["odd", "good"]
@@ -362,7 +366,7 @@ class TestEntryResilience:
     both official providers.
     """
 
-    def test_a_bad_entry_is_skipped_and_the_rest_survive(self):
+    async def test_a_bad_entry_is_skipped_and_the_rest_survive(self, twin):
         broken = _rss_entry("broken")
         del broken["updated"]
 
@@ -371,24 +375,24 @@ class TestEntryResilience:
                 200, text=_feed([_rss_entry("a"), broken, _rss_entry("b")])
             )
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["a", "b"]
 
-    def test_a_bad_entry_preserves_the_cursor(self):
+    async def test_a_bad_entry_preserves_the_cursor(self, twin):
         broken = _rss_entry("broken")
         broken["updated"] = {"label": "not-a-date"}
 
         def handler(_r):
             return httpx.Response(200, text=_feed([broken, _rss_entry("a")]))
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.next_cursor == "2"
         assert [r.id for r in page.reviews] == ["a"]
 
-    def test_skipped_entries_are_logged(self, caplog):
+    async def test_skipped_entries_are_logged(self, twin, caplog):
         """Dropped rows must leave a trace."""
         import logging
 
@@ -396,7 +400,7 @@ class TestEntryResilience:
             return httpx.Response(200, text=_feed([{"id": {"label": "x"}}]))
 
         with caplog.at_level(logging.WARNING):
-            _provider(handler).fetch_page("12345", "us", None)
+            await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert "Skipped review" in caplog.text
 
@@ -407,32 +411,32 @@ class TestSingleEntryQuirk:
     so every row was silently discarded and the app looked reviewless.
     """
 
-    def test_one_review_arrives_as_an_object(self):
+    async def test_one_review_arrives_as_an_object(self, twin):
         def handler(_r):
             return httpx.Response(
                 200, text=json.dumps({"feed": {"entry": _rss_entry("solo")}})
             )
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert [r.id for r in page.reviews] == ["solo"]
         assert page.error is None
 
-    def test_a_list_still_works(self):
+    async def test_a_list_still_works(self, twin):
         def handler(_r):
             return httpx.Response(200, text=_feed([_rss_entry("a"), _rss_entry("b")]))
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert len(page.reviews) == 2
 
-    def test_a_nonsense_entry_value_is_a_parse_error(self):
+    async def test_a_nonsense_entry_value_is_a_parse_error(self, twin):
         """Neither a list nor a dict is a malformed envelope, not empty data."""
 
         def handler(_r):
             return httpx.Response(200, text=json.dumps({"feed": {"entry": "oops"}}))
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
@@ -445,24 +449,26 @@ class TestCursorRobustness:
     """
 
     @pytest.mark.parametrize("cursor", ["abc", "", "1.5", "-3", "0", "  ", "1e2"])
-    def test_an_unusable_cursor_becomes_an_error_not_an_exception(self, cursor):
+    async def test_an_unusable_cursor_becomes_an_error_not_an_exception(
+        self, twin, cursor
+    ):
         def handler(_r):
             return httpx.Response(200, text=_feed([_rss_entry()]))
 
-        page = _provider(handler).fetch_page("12345", "us", cursor)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", cursor)
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_a_bad_cursor_never_reaches_the_network(self):
+    async def test_a_bad_cursor_never_reaches_the_network(self, twin):
         calls = []
 
         def handler(r):
             calls.append(1)
             return httpx.Response(200, text=_feed([_rss_entry()]))
 
-        _provider(handler).fetch_page("12345", "us", "abc")
+        await twin.call(_provider(handler), "fetch_page", "12345", "us", "abc")
 
         assert calls == []
 
@@ -474,13 +480,13 @@ class TestCursorRobustness:
 
         assert page.error is not None and page.error.kind == "parse"
 
-    def test_past_the_depth_cap_is_still_a_clean_stop(self):
+    async def test_past_the_depth_cap_is_still_a_clean_stop(self, twin):
         """Not an error: the feed genuinely has no page 11."""
 
         def handler(_r):
             return httpx.Response(200, text=_feed([_rss_entry()]))
 
-        page = _provider(handler).fetch_page("12345", "us", "11")
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", "11")
 
         assert page.error is None
         assert page.reviews == []
@@ -495,47 +501,47 @@ class TestFieldLevelResilience:
     ``None``, not a dropped review and not an empty string.
     """
 
-    def _one(self, mutate):
+    async def _one(self, twin, mutate):
         entry = _rss_entry()
         mutate(entry)
 
         def handler(_r):
             return httpx.Response(200, text=_feed([entry]))
 
-        return _provider(handler).fetch_page("12345", "us", None)
+        return await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
-    def test_a_missing_title_keeps_the_review(self):
-        page = self._one(lambda e: e.pop("title"))
-
-        assert len(page.reviews) == 1
-        assert page.reviews[0].title is None
-
-    def test_an_empty_title_is_none_not_blank(self):
-        page = self._one(lambda e: e["title"].update(label=""))
-
-        assert page.reviews[0].title is None
-
-    def test_a_wrongly_shaped_title_keeps_the_review(self):
-        page = self._one(lambda e: e.update(title="Great"))
+    async def test_a_missing_title_keeps_the_review(self, twin):
+        page = await self._one(twin, lambda e: e.pop("title"))
 
         assert len(page.reviews) == 1
         assert page.reviews[0].title is None
 
-    def test_a_missing_author_keeps_the_review(self):
-        page = self._one(lambda e: e.pop("author"))
+    async def test_an_empty_title_is_none_not_blank(self, twin):
+        page = await self._one(twin, lambda e: e["title"].update(label=""))
+
+        assert page.reviews[0].title is None
+
+    async def test_a_wrongly_shaped_title_keeps_the_review(self, twin):
+        page = await self._one(twin, lambda e: e.update(title="Great"))
+
+        assert len(page.reviews) == 1
+        assert page.reviews[0].title is None
+
+    async def test_a_missing_author_keeps_the_review(self, twin):
+        page = await self._one(twin, lambda e: e.pop("author"))
 
         assert len(page.reviews) == 1
         assert page.reviews[0].author_name == ""
 
-    def test_an_empty_version_is_none(self):
-        page = self._one(lambda e: e["im:version"].update(label=""))
+    async def test_an_empty_version_is_none(self, twin):
+        page = await self._one(twin, lambda e: e["im:version"].update(label=""))
 
         assert page.reviews[0].app_version is None
 
-    def test_an_empty_body_stays_an_empty_string(self):
+    async def test_an_empty_body_stays_an_empty_string(self, twin):
         """``body`` is not optional: a review with nothing written is still a
         review, and "" is the honest value for it."""
-        page = self._one(lambda e: e["content"].update(label=""))
+        page = await self._one(twin, lambda e: e["content"].update(label=""))
 
         assert page.reviews[0].body == ""
 
@@ -549,15 +555,17 @@ class TestFieldLevelResilience:
             ("updated", lambda e: e["updated"].update(label="not-a-date")),
         ],
     )
-    def test_an_unusable_required_field_drops_the_review(self, field, mutate):
+    async def test_an_unusable_required_field_drops_the_review(
+        self, twin, field, mutate
+    ):
         """``id`` keys deduplication, ``rating`` and ``updated`` cannot be faked."""
-        page = self._one(mutate)
+        page = await self._one(twin, mutate)
 
         assert page.reviews == []
         assert page.error is None  # the page survives; only the entry is lost
         assert page.skipped_reviews == 1
 
-    def test_a_dropped_review_does_not_cost_its_neighbours(self):
+    async def test_a_dropped_review_does_not_cost_its_neighbours(self, twin):
         broken = _rss_entry("broken")
         broken["id"].update(label="")
 
@@ -566,7 +574,7 @@ class TestFieldLevelResilience:
                 200, text=_feed([_rss_entry("a"), broken, _rss_entry("b")])
             )
 
-        page = _provider(handler).fetch_page("12345", "us", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "us", None)
 
         assert [r.id for r in page.reviews] == ["a", "b"]
         assert page.skipped_reviews == 1
@@ -684,18 +692,20 @@ class TestAPageOfUnusableEntriesDoesNotEndTheWalk:
 
         return _provider(handler)
 
-    def test_the_page_still_offers_a_next_cursor(self):
-        page = self._walk().fetch_page("1", "us", None)
+    async def test_the_page_still_offers_a_next_cursor(self, twin):
+        page = await twin.call(self._walk(), "fetch_page", "1", "us", None)
 
         assert page.reviews == []
         assert page.next_cursor == "2"
 
-    def test_a_genuinely_empty_feed_still_ends_the_walk(self):
+    async def test_a_genuinely_empty_feed_still_ends_the_walk(self, twin):
         provider = _provider(
             lambda r: httpx.Response(200, text=json.dumps({"feed": {"entry": []}}))
         )
 
-        assert provider.fetch_page("1", "us", None).next_cursor is None
+        page = await twin.call(provider, "fetch_page", "1", "us", None)
+
+        assert page.next_cursor is None
 
 
 class TestTheTimestampIsTheOneApplesSent:

@@ -172,9 +172,11 @@ class TestFieldMapping:
 
         assert page.reviews[0].raw == entry
 
-    def test_unparseable_entry_is_skipped_not_fatal(self):
+    async def test_unparseable_entry_is_skipped_not_fatal(self, twin):
         body = _gp_body([["broken"], _gp_entry()])
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert len(page.reviews) == 1
         assert page.error is None
@@ -193,11 +195,13 @@ class TestFieldMapping:
             (10, False),
         ],
     )
-    def test_wrong_typed_present_scalar_skips_the_review(self, slot, value):
+    async def test_wrong_typed_present_scalar_skips_the_review(self, twin, slot, value):
         entry = _gp_entry()
         entry[slot] = value
 
-        page = _serving(_gp_body([entry])).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(_gp_body([entry])), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.reviews == []
         assert page.skipped_reviews == 1
@@ -216,9 +220,13 @@ class TestUnusableTimestamps:
             ("yesterday", "not a number at all"),
         ],
     )
-    def test_an_unusable_timestamp_costs_only_that_review(self, seconds, label):
+    async def test_an_unusable_timestamp_costs_only_that_review(
+        self, twin, seconds, label
+    ):
         body = _gp_body([_gp_entry(review_id="bad", created_ts=seconds), _gp_entry()])
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert [r.id for r in page.reviews] == ["abc123"], label
         assert page.error is None
@@ -249,34 +257,48 @@ class TestSkippedReviewLogging:
 
 
 class TestPagination:
-    def test_next_cursor_comes_from_the_token(self):
+    async def test_next_cursor_comes_from_the_token(self, twin):
         body = _gp_body([_gp_entry()], token="NEXT")
-        page = _serving(body).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.next_cursor == "NEXT"
 
-    def test_missing_token_ends_pagination(self):
-        page = _serving(_gp_body([_gp_entry()])).fetch_page(
-            "com.example.app", "us", None
+    async def test_missing_token_ends_pagination(self, twin):
+        page = await twin.call(
+            _serving(_gp_body([_gp_entry()])),
+            "fetch_page",
+            "com.example.app",
+            "us",
+            None,
         )
 
         assert page.next_cursor is None
 
     @pytest.mark.parametrize("container", ["reviews", {"review": []}, 42])
-    def test_present_non_list_reviews_container_is_a_parse_error(self, container):
+    async def test_present_non_list_reviews_container_is_a_parse_error(
+        self, twin, container
+    ):
         inner = json.dumps([container, None, [None]])
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
 
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None and page.error.kind == "parse"
 
     @pytest.mark.parametrize("pagination", ["next", {"token": "x"}, [None, 42]])
-    def test_present_malformed_pagination_is_a_parse_error(self, pagination):
+    async def test_present_malformed_pagination_is_a_parse_error(
+        self, twin, pagination
+    ):
         inner = json.dumps([[], pagination, [None]])
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", inner, None, "generic"]])
 
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None and page.error.kind == "parse"
 
@@ -292,8 +314,10 @@ class TestErrorClassification:
             (503, "server"),
         ],
     )
-    def test_status_maps_to_kind(self, status, kind):
-        page = _serving("", status=status).fetch_page("com.example.app", "us", None)
+    async def test_status_maps_to_kind(self, twin, status, kind):
+        page = await twin.call(
+            _serving("", status=status), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == kind
@@ -301,47 +325,59 @@ class TestErrorClassification:
         # official providers.
         assert page.error.country is None
 
-    def test_transport_failure_carries_the_real_message(self):
+    async def test_transport_failure_carries_the_real_message(self, twin):
         def handler(request):
             raise httpx.ReadTimeout("read timed out")
 
-        page = _provider(handler).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _provider(handler), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error.kind == "transport"
         assert "read timed out" in page.error.message
 
-    def test_missing_response_prefix_is_a_parse_error(self):
-        page = _serving("garbage without the prefix").fetch_page(
-            "com.example.app", "us", None
+    async def test_missing_response_prefix_is_a_parse_error(self, twin):
+        page = await twin.call(
+            _serving("garbage without the prefix"),
+            "fetch_page",
+            "com.example.app",
+            "us",
+            None,
         )
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_null_body_without_prefix_is_a_parse_error(self):
+    async def test_null_body_without_prefix_is_a_parse_error(self, twin):
         """A bare "null" body never matches the batchexecute prefix regex."""
-        page = _serving("null").fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving("null"), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_null_inner_payload_with_prefix_is_a_parse_error(self):
+    async def test_null_inner_payload_with_prefix_is_a_parse_error(self, twin):
         """The prefix and envelope wrapper are present, but the RPC payload
         itself parses to ``null`` instead of the expected array, so `len(data)`
         on that ``None`` must not escape as an uncaught TypeError."""
         raw = ")]}'\n\n" + json.dumps([["wrb.fr", "oCPfdb", "null", None, "generic"]])
-        page = _serving(raw).fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(raw), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_no_matching_envelope_is_a_parse_error(self):
+    async def test_no_matching_envelope_is_a_parse_error(self, twin):
         """The prefix is present and the outer array parses, but it contains
         no ``wrb.fr``/``oCPfdb`` item. This must surface as a parse error,
         not a silently empty page."""
-        page = _serving(")]}'\n\n[]").fetch_page("com.example.app", "us", None)
+        page = await twin.call(
+            _serving(")]}'\n\n[]"), "fetch_page", "com.example.app", "us", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"

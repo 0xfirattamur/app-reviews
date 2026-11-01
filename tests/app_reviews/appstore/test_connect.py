@@ -152,52 +152,52 @@ class TestErrorClassification:
             (500, "server"),
         ],
     )
-    def test_status_maps_to_kind(self, status, kind):
+    async def test_status_maps_to_kind(self, twin, status, kind):
         def handler(request):
             return httpx.Response(status, text="")
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is not None
         assert page.error.kind == kind
         assert page.error.country is None
 
-    def test_auth_failure_is_not_retryable(self):
+    async def test_auth_failure_is_not_retryable(self, twin):
         def handler(request):
             return httpx.Response(401, text="")
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error.retryable is False
 
-    def test_transport_failure_carries_the_real_message(self):
+    async def test_transport_failure_carries_the_real_message(self, twin):
         def handler(request):
             raise httpx.ConnectTimeout("timed out")
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error.kind == "transport"
         assert "timed out" in page.error.message
 
-    def test_malformed_json_is_a_parse_error(self):
+    async def test_malformed_json_is_a_parse_error(self, twin):
         def handler(request):
             return httpx.Response(200, text="<html>nope</html>")
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error.kind == "parse"
 
-    def test_null_body_is_a_parse_error(self):
+    async def test_null_body_is_a_parse_error(self, twin):
         def handler(request):
             return httpx.Response(200, text="null")
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_non_list_data_is_a_parse_error(self):
+    async def test_non_list_data_is_a_parse_error(self, twin):
         """Per-entry skipping must not soften the envelope contract: a ``data``
         that isn't a list is a malformed response, not a page of entries that
         each happen to be unparseable."""
@@ -205,12 +205,12 @@ class TestErrorClassification:
         def handler(request):
             return httpx.Response(200, text=json.dumps({"data": "abc"}))
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_non_dict_links_is_a_parse_error(self):
+    async def test_non_dict_links_is_a_parse_error(self, twin):
         """A ``links`` value that isn't a dict (e.g. `{"links": "next"}`) must
         yield FetchError(kind="parse"), not an uncaught AttributeError from
         `"next".get(...)`, so the cursor extraction must sit inside the parse
@@ -219,7 +219,7 @@ class TestErrorClassification:
         def handler(request):
             return httpx.Response(200, text=json.dumps({"data": [], "links": "next"}))
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is not None
         assert page.error.kind == "parse"
@@ -233,7 +233,7 @@ class TestEntryResilience:
     ends the walk in ``StopPolicy.evaluate`` and silently truncates the fetch.
     """
 
-    def test_bad_entry_is_skipped_and_good_ones_survive(self):
+    async def test_bad_entry_is_skipped_and_good_ones_survive(self, twin):
         broken = _connect_entry("broken")
         broken["attributes"] = "not-a-dict"
         entries = [_connect_entry("good-1"), broken, _connect_entry("good-2")]
@@ -241,13 +241,13 @@ class TestEntryResilience:
         def handler(request):
             return httpx.Response(200, text=_payload(entries))
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1", "good-2"]
         assert page.skipped_reviews == 1
 
-    def test_bad_entry_preserves_the_cursor(self):
+    async def test_bad_entry_preserves_the_cursor(self, twin):
         broken = _connect_entry("broken")
         del broken["attributes"]["rating"]
 
@@ -257,12 +257,12 @@ class TestEntryResilience:
                 text=_payload([broken, _connect_entry("good-1")], next_url="https://n"),
             )
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.next_cursor == "https://n"
         assert [r.id for r in page.reviews] == ["good-1"]
 
-    def test_unparseable_created_date_is_skipped_not_fatal(self):
+    async def test_unparseable_created_date_is_skipped_not_fatal(self, twin):
         broken = _connect_entry("broken")
         broken["attributes"]["createdDate"] = "not-a-date"
 
@@ -271,29 +271,29 @@ class TestEntryResilience:
                 200, text=_payload([broken, _connect_entry("good-1")])
             )
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1"]
 
-    def test_a_wholly_unparseable_page_still_carries_its_cursor(self):
+    async def test_a_wholly_unparseable_page_still_carries_its_cursor(self, twin):
         def handler(request):
             return httpx.Response(
                 200, text=_payload([{"id": "a"}], next_url="https://n")
             )
 
-        page = _provider(handler).fetch_page("12345", "", None)
+        page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert page.error is None
         assert not page.reviews
         assert page.next_cursor == "https://n"
 
-    def test_skipped_entry_is_logged(self, caplog):
+    async def test_skipped_entry_is_logged(self, twin, caplog):
         def handler(request):
             return httpx.Response(200, text=_payload([{"id": "broken"}]))
 
         with caplog.at_level(logging.WARNING):
-            _provider(handler).fetch_page("12345", "", None)
+            await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert "Skipped review" in caplog.text
 
@@ -397,10 +397,10 @@ class TestCursorIsNotAnOpenRedirect:
             "",
         ],
     )
-    def test_a_foreign_cursor_is_refused_without_a_request(self, cursor):
+    async def test_a_foreign_cursor_is_refused_without_a_request(self, twin, cursor):
         record, provider = self._requests()
 
-        page = provider.fetch_page("12345", "", cursor)
+        page = await twin.call(provider, "fetch_page", "12345", "", cursor)
 
         assert record.requests == [], "no request may be made"
         assert page.error is not None
@@ -440,10 +440,12 @@ class TestCursorIsNotAnOpenRedirect:
             "https://api.appstoreconnect.apple.com/v1/apps/12345/customerReviews#secret",
         ],
     )
-    def test_cursor_must_be_the_exact_collection_for_the_requested_app(self, cursor):
+    async def test_cursor_must_be_the_exact_collection_for_the_requested_app(
+        self, twin, cursor
+    ):
         record, provider = self._requests()
 
-        page = provider.fetch_page("12345", "", cursor)
+        page = await twin.call(provider, "fetch_page", "12345", "", cursor)
 
         assert record.requests == []
         assert page.error is not None and page.error.kind == "parse"
@@ -467,7 +469,9 @@ class TestCursorIsNotAnOpenRedirect:
         assert page.error is not None and page.error.kind == "parse"
 
     @pytest.mark.parametrize("port", ["abc", "70000"])
-    def test_malformed_port_is_a_parse_result_before_token_or_http(self, port):
+    async def test_malformed_port_is_a_parse_result_before_token_or_http(
+        self, twin, port
+    ):
         class ExplodingToken:
             def authorization_header(self):
                 raise AssertionError("token source must not be called")
@@ -481,7 +485,7 @@ class TestCursorIsNotAnOpenRedirect:
             "/v1/apps/12345/customerReviews"
         )
 
-        page = provider.fetch_page("12345", "", cursor)
+        page = await twin.call(provider, "fetch_page", "12345", "", cursor)
 
         assert page.error is not None and page.error.kind == "parse"
 
@@ -526,49 +530,49 @@ class TestCursorIsNotAnOpenRedirect:
 class TestConnectFieldResilience:
     """Only ``id``, ``rating`` and ``createdDate`` can cost a review."""
 
-    def _one(self, mutate):
+    async def _one(self, twin, mutate):
         entry = _connect_entry()
         mutate(entry)
 
         def handler(_r):
             return httpx.Response(200, text=_payload([entry]))
 
-        return _provider(handler).fetch_page("12345", "", None)
+        return await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
-    def test_an_empty_id_drops_the_review(self):
+    async def test_an_empty_id_drops_the_review(self, twin):
         """It keys the documented `(store, source, id)` deduplication."""
-        page = self._one(lambda e: e.update(id=""))
+        page = await self._one(twin, lambda e: e.update(id=""))
 
         assert page.reviews == []
         assert page.error is None
 
-    def test_an_empty_title_is_none_not_blank(self):
-        page = self._one(lambda e: e["attributes"].update(title=""))
+    async def test_an_empty_title_is_none_not_blank(self, twin):
+        page = await self._one(twin, lambda e: e["attributes"].update(title=""))
 
         assert page.reviews[0].title is None
 
-    def test_a_missing_body_keeps_the_review(self):
-        page = self._one(lambda e: e["attributes"].pop("body"))
+    async def test_a_missing_body_keeps_the_review(self, twin):
+        page = await self._one(twin, lambda e: e["attributes"].pop("body"))
 
         assert len(page.reviews) == 1
         assert page.reviews[0].body == ""
 
-    def test_a_missing_nickname_keeps_the_review(self):
-        page = self._one(lambda e: e["attributes"].pop("reviewerNickname"))
+    async def test_a_missing_nickname_keeps_the_review(self, twin):
+        page = await self._one(twin, lambda e: e["attributes"].pop("reviewerNickname"))
 
         assert len(page.reviews) == 1
         assert page.reviews[0].author_name == ""
 
     @pytest.mark.parametrize("rating", [True, 4.5, "5"])
-    def test_a_coercible_non_integer_rating_is_skipped(self, rating):
-        page = self._one(lambda e: e["attributes"].update(rating=rating))
+    async def test_a_coercible_non_integer_rating_is_skipped(self, twin, rating):
+        page = await self._one(twin, lambda e: e["attributes"].update(rating=rating))
 
         assert page.reviews == []
         assert page.skipped_reviews == 1
 
     @pytest.mark.parametrize("rating", [1, 3, 5])
-    def test_a_real_integer_rating_is_kept(self, rating):
-        page = self._one(lambda e: e["attributes"].update(rating=rating))
+    async def test_a_real_integer_rating_is_kept(self, twin, rating):
+        page = await self._one(twin, lambda e: e["attributes"].update(rating=rating))
 
         assert [review.rating for review in page.reviews] == [rating]
         assert page.skipped_reviews == 0
@@ -582,13 +586,15 @@ class TestConnectFieldResilience:
             lambda e: e["attributes"].update(createdDate="not-a-date"),
         ],
     )
-    def test_an_unusable_required_field_drops_only_that_review(self, mutate):
-        page = self._one(mutate)
+    async def test_an_unusable_required_field_drops_only_that_review(
+        self, twin, mutate
+    ):
+        page = await self._one(twin, mutate)
 
         assert page.reviews == []
         assert page.error is None
 
-    def test_a_dropped_review_does_not_cost_its_neighbours(self, caplog):
+    async def test_a_dropped_review_does_not_cost_its_neighbours(self, twin, caplog):
         import logging
 
         broken = _connect_entry("broken")
@@ -604,7 +610,7 @@ class TestConnectFieldResilience:
             )
 
         with caplog.at_level(logging.WARNING):
-            page = _provider(handler).fetch_page("12345", "", None)
+            page = await twin.call(_provider(handler), "fetch_page", "12345", "", None)
 
         assert [r.id for r in page.reviews] == ["a", "b"]
         assert page.next_cursor is not None
@@ -712,9 +718,13 @@ class TestAnUnusableCursorIsReportedNotRaised:
             ),
         ],
     )
-    def test_it_becomes_a_parse_error(self, cursor, why):
-        page = _provider(lambda r: httpx.Response(200, text="{}")).fetch_page(
-            "1", "", cursor
+    async def test_it_becomes_a_parse_error(self, twin, cursor, why):
+        page = await twin.call(
+            _provider(lambda r: httpx.Response(200, text="{}")),
+            "fetch_page",
+            "1",
+            "",
+            cursor,
         )
 
         assert page.error is not None, why
@@ -731,13 +741,13 @@ class TestAnUnusableCursorIsReportedNotRaised:
 
         assert pages[-1].error.kind == "parse"
 
-    def test_a_real_next_link_still_works(self):
+    async def test_a_real_next_link_still_works(self, twin):
         good = (
             "https://api.appstoreconnect.apple.com/v1/apps/1/customerReviews?cursor=abc"
         )
         record = Recorder(httpx.Response(200, text=json.dumps({"data": []})))
 
-        _provider(record).fetch_page("1", "", good)
+        await twin.call(_provider(record), "fetch_page", "1", "", good)
 
         assert str(record.last.url) == f"{good}&include=response"
 
@@ -750,19 +760,27 @@ class TestANonStringNextLinkIsAParseError:
     @pytest.mark.parametrize(
         "value", [{"href": "https://x/"}, ["https://x/"], 12345, True]
     )
-    def test_it_is_reported_rather_than_returned(self, value):
+    async def test_it_is_reported_rather_than_returned(self, twin, value):
         body = json.dumps({"data": [], "links": {"next": value}})
-        page = _provider(lambda r: httpx.Response(200, text=body)).fetch_page(
-            "1", "", None
+        page = await twin.call(
+            _provider(lambda r: httpx.Response(200, text=body)),
+            "fetch_page",
+            "1",
+            "",
+            None,
         )
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_a_null_next_link_is_simply_the_last_page(self):
+    async def test_a_null_next_link_is_simply_the_last_page(self, twin):
         body = json.dumps({"data": [], "links": {"next": None}})
-        page = _provider(lambda r: httpx.Response(200, text=body)).fetch_page(
-            "1", "", None
+        page = await twin.call(
+            _provider(lambda r: httpx.Response(200, text=body)),
+            "fetch_page",
+            "1",
+            "",
+            None,
         )
 
         assert page.error is None

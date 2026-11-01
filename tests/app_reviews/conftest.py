@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.app_reviews.transport import Twin
+
 
 @pytest.fixture
 def german_time_locale() -> Iterator[None]:
@@ -117,3 +119,12 @@ def fake_clock(monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]) -> FakeCl
     monkeypatch.setattr("app_reviews.core.ratelimit.asleep", clock.asleep)
     monkeypatch.setattr("app_reviews.appstore.auth.time.time", clock.time)
     return clock
+
+
+@pytest.fixture(params=["sync", "async"])
+def twin(request: pytest.FixtureRequest) -> Twin:
+    """Run the test once on the sync path and once on the async twin.
+
+    See ``Twin``: the test is ``async def`` and calls ``await twin.call(...)``.
+    """
+    return Twin(request.param)

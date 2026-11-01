@@ -162,14 +162,18 @@ class TestFetchPage:
             ("starRating", True),
         ],
     )
-    def test_wrong_typed_present_scalar_skips_the_review(self, field, value):
+    async def test_wrong_typed_present_scalar_skips_the_review(
+        self, twin, field, value
+    ):
         entry = _dev_entry(reviewer_language="en")
         if field in {"reviewId", "authorName"}:
             entry[field] = value
         else:
             entry["comments"][0]["userComment"][field] = value
 
-        page = _serving(_payload([entry])).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(_payload([entry])), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.reviews == []
         assert page.skipped_reviews == 1
@@ -205,43 +209,55 @@ class TestAppIdIsNotAPathInjection:
 
 
 class TestPagination:
-    def test_next_cursor_comes_from_token_pagination(self):
+    async def test_next_cursor_comes_from_token_pagination(self, twin):
         body = _payload([_dev_entry()], token="NXT")
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.next_cursor == "NXT"
 
-    def test_missing_pagination_ends_the_walk(self):
-        page = _serving(_payload([_dev_entry()])).fetch_page(
-            "com.example.app", "", None
+    async def test_missing_pagination_ends_the_walk(self, twin):
+        page = await twin.call(
+            _serving(_payload([_dev_entry()])),
+            "fetch_page",
+            "com.example.app",
+            "",
+            None,
         )
 
         assert page.next_cursor is None
 
-    def test_null_pagination_is_the_last_page_not_a_failure(self):
+    async def test_null_pagination_is_the_last_page_not_a_failure(self, twin):
         """``.get(key, default)`` only falls back when the key is *absent*, so a
         present-but-null ``tokenPagination`` turned the last page into an error."""
         body = json.dumps({"reviews": [_dev_entry()], "tokenPagination": None})
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is None
         assert page.next_cursor is None
         assert len(page.reviews) == 1
 
-    def test_null_next_page_token_is_the_last_page(self):
+    async def test_null_next_page_token_is_the_last_page(self, twin):
         body = json.dumps(
             {"reviews": [_dev_entry()], "tokenPagination": {"nextPageToken": None}}
         )
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is None
         assert page.next_cursor is None
 
-    def test_a_non_string_token_is_a_parse_error(self):
+    async def test_a_non_string_token_is_a_parse_error(self, twin):
         """``next_cursor`` is declared ``str | None`` and is sent back on the
         next request, so a number here is a malformed envelope, not a cursor."""
         body = json.dumps({"reviews": [], "tokenPagination": {"nextPageToken": 12345}})
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
@@ -258,53 +274,67 @@ class TestErrorClassification:
             (500, "server"),
         ],
     )
-    def test_status_maps_to_kind(self, status, kind):
-        page = _serving("", status=status).fetch_page("com.example.app", "", None)
+    async def test_status_maps_to_kind(self, twin, status, kind):
+        page = await twin.call(
+            _serving("", status=status), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is not None
         assert page.error.kind == kind
         assert page.error.country is None
 
-    def test_transport_failure_carries_the_real_message(self):
+    async def test_transport_failure_carries_the_real_message(self, twin):
         def handler(request):
             raise httpx.ConnectError("no route to host")
 
-        page = _provider(handler).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _provider(handler), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error.kind == "transport"
         assert "no route to host" in page.error.message
 
-    def test_malformed_json_is_a_parse_error(self):
-        page = _serving("}{").fetch_page("com.example.app", "", None)
+    async def test_malformed_json_is_a_parse_error(self, twin):
+        page = await twin.call(
+            _serving("}{"), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error.kind == "parse"
 
-    def test_null_body_is_a_parse_error(self):
+    async def test_null_body_is_a_parse_error(self, twin):
         """`json.loads("null")` yields None; `.get()` on it must not escape
         as an uncaught AttributeError."""
-        page = _serving("null").fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving("null"), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
         assert page.error.retryable is False
 
-    def test_non_list_reviews_is_a_parse_error(self):
+    async def test_non_list_reviews_is_a_parse_error(self, twin):
         """Per-entry skipping must not soften the envelope contract: a
         ``reviews`` that isn't a list is a malformed response, not a page of
         entries that each happen to be unparseable."""
-        page = _serving(json.dumps({"reviews": "abc"})).fetch_page(
-            "com.example.app", "", None
+        page = await twin.call(
+            _serving(json.dumps({"reviews": "abc"})),
+            "fetch_page",
+            "com.example.app",
+            "",
+            None,
         )
 
         assert page.error is not None
         assert page.error.kind == "parse"
 
-    def test_non_dict_token_pagination_is_a_parse_error(self):
+    async def test_non_dict_token_pagination_is_a_parse_error(self, twin):
         """A ``tokenPagination`` value that isn't a dict (e.g.
         `{"tokenPagination": "next"}`) must yield FetchError(kind="parse"),
         not an uncaught AttributeError from `"next".get(...)`."""
         body = json.dumps({"reviews": [], "tokenPagination": "next"})
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is not None
         assert page.error.kind == "parse"
@@ -318,35 +348,43 @@ class TestEntryResilience:
     ends the walk in ``StopPolicy.evaluate`` and silently truncates the fetch.
     """
 
-    def test_bad_entry_is_skipped_and_good_ones_survive(self):
+    async def test_bad_entry_is_skipped_and_good_ones_survive(self, twin):
         entries = [_dev_entry("good-1"), {"reviewId": "broken"}, _dev_entry("good-2")]
-        page = _serving(_payload(entries)).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(_payload(entries)), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1", "good-2"]
         assert page.skipped_reviews == 1
 
-    def test_bad_entry_preserves_the_cursor(self):
+    async def test_bad_entry_preserves_the_cursor(self, twin):
         entries = [{"reviewId": "broken"}, _dev_entry("good-1")]
         body = _payload(entries, token="NXT")
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.next_cursor == "NXT"
 
-    def test_missing_star_rating_is_skipped_not_fatal(self):
+    async def test_missing_star_rating_is_skipped_not_fatal(self, twin):
         """``starRating`` absent defaulted to 0, which ``Review.__post_init__``
         rejects: a default that can never produce a valid Review."""
         entry = _dev_entry("no-rating")
         del entry["comments"][0]["userComment"]["starRating"]
         body = _payload([entry, _dev_entry("good-1")])
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is None
         assert [r.id for r in page.reviews] == ["good-1"]
 
-    def test_a_wholly_unparseable_page_still_carries_its_cursor(self):
+    async def test_a_wholly_unparseable_page_still_carries_its_cursor(self, twin):
         body = _payload([{"reviewId": "a"}], token="NXT")
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert page.error is None
         assert not page.reviews
@@ -360,22 +398,26 @@ class TestUnusableTimestamps:
     and ``until`` all read it. A wrong one is worse than a missing review.
     """
 
-    def test_a_review_with_no_last_modified_is_skipped(self):
+    async def test_a_review_with_no_last_modified_is_skipped(self, twin):
         """``.get("lastModified", {})`` defaulted to seconds=0, dating an
         undated review to 1970-01-01 rather than dropping it."""
         entry = _dev_entry("undated")
         del entry["comments"][0]["userComment"]["lastModified"]
         body = _payload([entry, _dev_entry("good-1")])
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert [r.id for r in page.reviews] == ["good-1"]
         assert page.error is None
 
-    def test_an_empty_last_modified_is_skipped(self):
+    async def test_an_empty_last_modified_is_skipped(self, twin):
         entry = _dev_entry("undated")
         entry["comments"][0]["userComment"]["lastModified"] = {}
         body = _payload([entry, _dev_entry("good-1")])
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert [r.id for r in page.reviews] == ["good-1"]
 
@@ -383,11 +425,15 @@ class TestUnusableTimestamps:
         "seconds",
         [10**20, -(10**20), float("inf"), float("nan"), "yesterday", None],
     )
-    def test_an_unusable_seconds_value_costs_only_that_review(self, seconds):
+    async def test_an_unusable_seconds_value_costs_only_that_review(
+        self, twin, seconds
+    ):
         """``fetch_page`` never raises; ``iter_pages`` is documented on that,
         and ``OverflowError`` from ``fromtimestamp`` is not a ``ValueError``."""
         body = _payload([_dev_entry("bad", seconds=seconds), _dev_entry("good-1")])
-        page = _serving(body).fetch_page("com.example.app", "", None)
+        page = await twin.call(
+            _serving(body), "fetch_page", "com.example.app", "", None
+        )
 
         assert [r.id for r in page.reviews] == ["good-1"]
         assert page.error is None

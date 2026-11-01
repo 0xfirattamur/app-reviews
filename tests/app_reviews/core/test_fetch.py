@@ -1,9 +1,9 @@
 """Tests for the full fetch: rung 3 of the client ladder."""
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event, Lock
+from typing import Literal
 
 import pytest
 
@@ -21,21 +21,79 @@ from tests.app_reviews.factories import (
 )
 
 
+class _Signal:
+    """A flag a worker thread or a task can set and either one can wait on.
+
+    The async wait polls, so one signal serves a provider that is driven from
+    threads (sync ``fetch``) and from the event loop (``afetch``) alike.
+    """
+
+    _POLL_SECONDS: float = 0.005
+
+    def __init__(self) -> None:
+        self._flag: Event = Event()
+
+    def set(self) -> None:
+        self._flag.set()
+
+    def wait(self, timeout: float) -> bool:
+        return self._flag.wait(timeout)
+
+    async def wait_async(self, timeout: float) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not self._flag.is_set():
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(self._POLL_SECONDS)
+        return True
+
+
 class BlockingInFlightProvider:
-    """Hold sync requests open so a public fetch's real fan-out is observable."""
+    """Hold requests open so a public fetch's real fan-out is observable.
+
+    One provider serves both entry points. ``path`` names the one the test
+    drives (``"sync"`` or ``"async"``); the other raises, so a walk that
+    silently fell back to the wrong twin fails the test.
+    """
 
     source = "appstore_scraper"
+    _BLOCK_SECONDS: float = 2
 
-    def __init__(self, expected: int):
+    def __init__(self, expected: int, path: Literal["sync", "async"]):
         self.expected = expected
+        self.path: Literal["sync", "async"] = path
         self.active = 0
         self.maximum = 0
-        self.lock = Lock()
-        self.reached = Event()
-        self.exceeded = Event()
-        self.release = Event()
+        self.lock: Lock = Lock()
+        self.reached: _Signal = _Signal()
+        self.exceeded: _Signal = _Signal()
+        self.release: _Signal = _Signal()
 
     def fetch_page(self, app_id, country, cursor):
+        self._require_path("sync")
+        self._enter()
+        try:
+            if not self.release.wait(self._BLOCK_SECONDS):
+                raise AssertionError("fetch did not release blocked provider calls")
+        finally:
+            self._leave()
+        return PageResult()
+
+    async def afetch_page(self, app_id, country, cursor):
+        self._require_path("async")
+        self._enter()
+        try:
+            if not await self.release.wait_async(self._BLOCK_SECONDS):
+                raise AssertionError("afetch did not release blocked provider calls")
+        finally:
+            self._leave()
+        return PageResult()
+
+    def _require_path(self, entry: str) -> None:
+        if entry != self.path:
+            raise AssertionError(f"{self.path} concurrency test used the {entry} path")
+
+    def _enter(self) -> None:
         with self.lock:
             self.active += 1
             self.maximum = max(self.maximum, self.active)
@@ -43,44 +101,10 @@ class BlockingInFlightProvider:
                 self.reached.set()
             if self.active > self.expected:
                 self.exceeded.set()
-        if not self.release.wait(timeout=2):
-            raise AssertionError("fetch did not release blocked provider calls")
+
+    def _leave(self) -> None:
         with self.lock:
             self.active -= 1
-        return PageResult()
-
-    async def afetch_page(self, app_id, country, cursor):
-        raise AssertionError("sync concurrency test used the async provider path")
-
-
-class AsyncBlockingInFlightProvider:
-    """Async twin of BlockingInFlightProvider."""
-
-    source = "appstore_scraper"
-
-    def __init__(self, expected: int):
-        self.expected = expected
-        self.active = 0
-        self.maximum = 0
-        self.reached = asyncio.Event()
-        self.exceeded = asyncio.Event()
-        self.release = asyncio.Event()
-
-    def fetch_page(self, app_id, country, cursor):
-        raise AssertionError("async concurrency test used the sync provider path")
-
-    async def afetch_page(self, app_id, country, cursor):
-        self.active += 1
-        self.maximum = max(self.maximum, self.active)
-        if self.active >= self.expected:
-            self.reached.set()
-        if self.active > self.expected:
-            self.exceeded.set()
-        try:
-            await asyncio.wait_for(self.release.wait(), timeout=2)
-        finally:
-            self.active -= 1
-        return PageResult()
 
 
 class TestSingleCountry:
@@ -827,44 +851,23 @@ class TestRequestBounds:
         assert client._workers([str(i) for i in range(20)], 12) == 12
 
     @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
-    def test_fetch_enforces_real_cross_country_concurrency(self, concurrency, expected):
-        provider = BlockingInFlightProvider(expected)
-        client = FakeClient(provider)
-
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            future = caller.submit(
-                client.fetch,
-                "123",
-                countries=Country.ALL,
-                concurrency=concurrency,
-            )
-            try:
-                assert provider.reached.wait(timeout=2)
-                assert not provider.exceeded.wait(timeout=0.1)
-            finally:
-                provider.release.set()
-            result = future.result(timeout=2)
-
-        assert provider.maximum == expected
-        assert len(result.outcomes) == len(Country.ALL)
-
-    @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
-    async def test_afetch_enforces_real_cross_country_concurrency(
-        self, concurrency, expected
+    async def test_fetch_enforces_real_cross_country_concurrency(
+        self, twin, concurrency, expected
     ):
-        provider = AsyncBlockingInFlightProvider(expected)
-        task = asyncio.create_task(
-            FakeClient(provider).afetch(
-                "123", countries=Country.ALL, concurrency=concurrency
-            )
+        provider = BlockingInFlightProvider(expected, path=twin.mode)
+        walk = twin.start(
+            FakeClient(provider),
+            "fetch",
+            "123",
+            countries=Country.ALL,
+            concurrency=concurrency,
         )
         try:
-            await asyncio.wait_for(provider.reached.wait(), timeout=2)
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(provider.exceeded.wait(), timeout=0.1)
+            assert await provider.reached.wait_async(timeout=2)
+            assert not await provider.exceeded.wait_async(timeout=0.1)
         finally:
             provider.release.set()
-        result = await asyncio.wait_for(task, timeout=2)
+        result = await asyncio.wait_for(walk, timeout=2)
 
         assert provider.maximum == expected
         assert len(result.outcomes) == len(Country.ALL)

@@ -70,15 +70,15 @@ class TestUnusableKeyFile:
             ("an RSA key rather than EC", lambda write_file: _rsa_p8(write_file)),
         ],
     )
-    def test_it_raises_auth_error(self, label, path_factory, write_file):
+    async def test_it_raises_auth_error(self, twin, label, path_factory, write_file):
         with pytest.raises(AuthError):
-            _client(path_factory(write_file)).fetch("123")
+            await twin.call(_client(path_factory(write_file)), "fetch", "123")
 
-    def test_the_wrong_key_algorithm_says_so(self, write_file):
+    async def test_the_wrong_key_algorithm_says_so(self, twin, write_file):
         """``load_ec_private_key_from_pem`` raises ``TypeError`` for a non-EC key,
         which is not a ``ValueError``, so it escaped the error hierarchy."""
         with pytest.raises(AuthError, match="EC"):
-            _client(_rsa_p8(write_file)).fetch("123")
+            await twin.call(_client(_rsa_p8(write_file)), "fetch", "123")
 
     def test_auth_error_is_catchable_as_the_base(self):
         with pytest.raises(AppReviewsError):
