@@ -9,6 +9,7 @@ import pytest
 
 from app_reviews.errors import HttpError, ParseError, RequestError
 from app_reviews.googleplay.search import GooglePlaySearch
+from app_reviews.googleplay.store_page import extract_datasets
 from app_reviews.models.country import Country
 from app_reviews.models.metadata import AppMetadata
 from tests.app_reviews.transport import Recorder, client_for, query_of
@@ -126,7 +127,7 @@ def _serving(text: str, status: int = 200):
 
 class TestDatasets:
     def test_extracts_keyed_datasets(self) -> None:
-        assert "ds:4" in GooglePlaySearch()._extract_datasets(_search_page())
+        assert "ds:4" in extract_datasets(_search_page())
 
     def test_multiple_datasets(self) -> None:
         html = (
@@ -135,23 +136,21 @@ class TestDatasets:
             "<script>AF_initDataCallback({key: 'ds:5', "
             "data:[2], sideChannel: {}});</script>"
         )
-        assert GooglePlaySearch()._extract_datasets(html) == {"ds:3": [1], "ds:5": [2]}
+        assert extract_datasets(html) == {"ds:3": [1], "ds:5": [2]}
 
     def test_no_callbacks_returns_empty(self) -> None:
-        assert GooglePlaySearch()._extract_datasets("<html>no data</html>") == {}
+        assert extract_datasets("<html>no data</html>") == {}
 
     def test_malformed_json_skipped(self) -> None:
         html = (
             "<script>AF_initDataCallback({key: 'ds:0', "
             "data:INVALID, sideChannel: {}});</script>"
         )
-        assert GooglePlaySearch()._extract_datasets(html) == {}
+        assert extract_datasets(html) == {}
 
     def test_stops_at_the_end_of_the_json_value(self) -> None:
         """raw_decode must ignore the sideChannel trailer after the array."""
-        assert GooglePlaySearch()._extract_datasets(_page("ds:9", [1, [2, 3]])) == {
-            "ds:9": [1, [2, 3]]
-        }
+        assert extract_datasets(_page("ds:9", [1, [2, 3]])) == {"ds:9": [1, [2, 3]]}
 
 
 class TestSearch:
