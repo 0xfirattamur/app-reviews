@@ -36,6 +36,9 @@ recent versions are also kept in
   rejected credential.
 - `HttpClient(retry=RetryConfig(timeout=...))` now uses `RetryConfig.timeout`
   for requests; an explicit `HttpClient(timeout=...)` still wins.
+- `RetryConfig` now rejects `bool` counts, `nan` or infinite `timeout`,
+  `backoff_factor` and `max_backoff`, and `retry_on` entries that are not HTTP
+  status codes.
 
 ## [1.3.0] - 2026-10-25
 

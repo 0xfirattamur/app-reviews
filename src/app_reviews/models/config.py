@@ -8,6 +8,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from app_reviews.models._validate import (
+    require_count,
+    require_finite_non_negative,
+    require_finite_positive,
+    require_http_statuses,
+)
+
 GOOGLE_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "sts.googleapis.com"})
 """The only hosts a signed assertion may be POSTed to.
 
@@ -37,14 +44,11 @@ class RetryConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "retry_on", tuple(self.retry_on))
-        if self.max_retries < 0:
-            raise ValueError("max_retries must be >= 0")
-        if self.backoff_factor < 0:
-            raise ValueError("backoff_factor must be >= 0")
-        if self.timeout <= 0:
-            raise ValueError("timeout must be > 0")
-        if self.max_backoff <= 0:
-            raise ValueError("max_backoff must be > 0")
+        require_count(self.max_retries, "max_retries")
+        require_finite_non_negative(self.backoff_factor, "backoff_factor")
+        require_finite_positive(self.timeout, "timeout")
+        require_finite_positive(self.max_backoff, "max_backoff")
+        require_http_statuses(self.retry_on, "retry_on")
 
 
 @dataclass(frozen=True, slots=True, init=False)
