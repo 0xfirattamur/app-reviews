@@ -840,16 +840,6 @@ class TestEmptyCountries:
 
 
 class TestRequestBounds:
-    def test_default_concurrency_is_capped_at_eight(self):
-        client = FakeClient(FakeProvider([]))
-
-        assert client._workers([str(i) for i in range(155)], None) == 8
-
-    def test_explicit_concurrency_override_is_honoured(self):
-        client = FakeClient(FakeProvider([]))
-
-        assert client._workers([str(i) for i in range(20)], 12) == 12
-
     @pytest.mark.parametrize(("concurrency", "expected"), [(None, 8), (3, 3)])
     async def test_fetch_enforces_real_cross_country_concurrency(
         self, twin, concurrency, expected

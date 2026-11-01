@@ -326,17 +326,6 @@ class TestGooglePlayThreadsItsPoolToAuth:
             "sa.json", service_account_info=None, http=client._http
         )
 
-    def test_the_pool_carries_the_configured_proxy_and_retry(self):
-        retry = RetryConfig(max_retries=6)
-        client = GooglePlayReviews(
-            auth=GooglePlayAuth(service_account_path="sa.json"),
-            proxy="http://proxy.example.com:8080",
-            retry=retry,
-        )
-
-        assert client._http._proxy == "http://proxy.example.com:8080"
-        assert client._http._retry is retry
-
 
 def _rss_feed(entries=1):
     entry = {
@@ -380,13 +369,6 @@ class TestClientOwnsOnePool:
 
         assert result.outcomes[0].pages == 10  # the RSS depth cap
         assert spy.call_count == 1
-
-    def test_proxy_and_retry_configure_the_pool(self):
-        retry = RetryConfig(max_retries=7)
-        client = AppStoreReviews(proxy="http://proxy.test:8080", retry=retry)
-
-        assert client._http._proxy == "http://proxy.test:8080"
-        assert client._http._retry is retry
 
     def test_close_is_safe_and_repeatable(self):
         client = AppStoreReviews()

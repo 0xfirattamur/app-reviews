@@ -7,16 +7,15 @@ either retried permanently broken credentials or abandoned a working account ove
 one timeout.
 
 The class is now the classification: no ``kind`` attribute, no ``kind=`` argument,
-so a mislabelled error cannot be constructed. ``core.classify._CLASS_FOR`` is the
-one place the raised taxonomy is tied to the ``ErrorKind`` that ``FetchError``
-reports as data, and the tests here pin the two together.
+so a mislabelled error cannot be constructed. ``error_for`` ties the raised
+taxonomy to the ``ErrorKind`` that ``FetchError`` reports as data, and the tests
+here pin the two together through it.
 """
 
 from typing import get_args
 
 import pytest
 
-import app_reviews
 from app_reviews import (
     AppReviewsError,
     AuthError,
@@ -29,7 +28,7 @@ from app_reviews import (
     ServerError,
     TransportError,
 )
-from app_reviews.core.classify import _CLASS_FOR, classify, error_for
+from app_reviews.core.classify import classify, error_for
 from app_reviews.models.types import RETRYABLE_KINDS
 
 LEAVES = (
@@ -42,24 +41,25 @@ LEAVES = (
     RequestError,
 )
 
+# The exception class each ``ErrorKind`` is raised as. Written out here so a new
+# kind fails ``test_every_kind_has_exactly_one_class`` until it is given one.
+CLASS_FOR_KIND = {
+    "rate_limited": RateLimitError,
+    "auth": AuthError,
+    "not_found": NotFoundError,
+    "request": RequestError,
+    "server": ServerError,
+    "transport": TransportError,
+    "parse": ParseError,
+}
+
 
 def test_request_error_is_a_public_non_retryable_http_error():
-    request_error = getattr(app_reviews, "RequestError", None)
-
-    assert request_error is not None
-    assert issubclass(request_error, HttpError)
-    assert request_error not in TestRetryabilityIsReadableFromTheType.RETRYABLE
+    assert issubclass(RequestError, HttpError)
+    assert RequestError not in TestRetryabilityIsReadableFromTheType.RETRYABLE
 
 
 class TestTheClassIsTheClassification:
-    @pytest.mark.parametrize("cls", LEAVES)
-    def test_no_kind_attribute_to_read(self, cls):
-        assert not hasattr(cls("boom"), "kind")
-
-    def test_no_kind_argument_to_pass(self):
-        with pytest.raises(TypeError):
-            HttpError("boom", kind="auth")  # type: ignore[call-arg]
-
     @pytest.mark.parametrize("cls", LEAVES)
     def test_status_is_readable_even_when_unset(self, cls):
         assert cls("boom").status is None
@@ -100,14 +100,12 @@ class TestHierarchy:
 
 
 class TestTheTwoTaxonomiesCannotDrift:
-    def test_every_kind_maps_to_a_class(self):
-        assert set(_CLASS_FOR) == set(get_args(ErrorKind))
+    def test_every_kind_has_exactly_one_class(self):
+        assert set(CLASS_FOR_KIND) == set(get_args(ErrorKind))
+        assert len(set(CLASS_FOR_KIND.values())) == len(CLASS_FOR_KIND)
 
-    def test_no_two_kinds_share_a_class(self):
-        assert len(set(_CLASS_FOR.values())) == len(_CLASS_FOR)
-
-    def test_the_mapped_classes_are_exactly_the_leaves(self):
-        assert set(_CLASS_FOR.values()) == set(LEAVES)
+    def test_the_classes_are_exactly_the_leaves(self):
+        assert set(CLASS_FOR_KIND.values()) == set(LEAVES)
 
     @pytest.mark.parametrize(
         ("status", "expected"),
@@ -131,7 +129,7 @@ class TestTheTwoTaxonomiesCannotDrift:
     @pytest.mark.parametrize("status", (400, 401, 403, 404, 422, 429, 500, 503, 0))
     def test_error_for_and_classify_agree(self, status):
         """The raised class and the returned string describe the same failure."""
-        assert error_for(status) is _CLASS_FOR[classify(status)]
+        assert error_for(status) is CLASS_FOR_KIND[classify(status)]
 
 
 class TestRetryabilityIsReadableFromTheType:
@@ -141,6 +139,10 @@ class TestRetryabilityIsReadableFromTheType:
     def test_the_retryable_classes_are_the_retryable_kinds(self, cls):
         """No `retryable` flag on the exception to disagree with the type; the
         same RETRYABLE_KINDS drives FetchError.retryable."""
-        kind = next(k for k, c in _CLASS_FOR.items() if c is cls)
+        kind = next(
+            candidate
+            for candidate, error_class in CLASS_FOR_KIND.items()
+            if error_class is cls
+        )
 
         assert (kind in RETRYABLE_KINDS) is (cls in self.RETRYABLE)

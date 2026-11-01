@@ -38,16 +38,6 @@ def _client(handler):
     return client_for(AppStoreSearch, handler)
 
 
-class TestConstruction:
-    def test_default(self):
-        client = AppStoreSearch()
-        assert client is not None
-
-    def test_with_proxy(self):
-        client = AppStoreSearch(proxy="http://proxy:8080")
-        assert client._http._proxy == "http://proxy:8080"
-
-
 class TestSearch:
     def test_zero_limit_returns_without_io(self):
         calls = 0

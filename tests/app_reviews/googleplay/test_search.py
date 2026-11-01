@@ -124,15 +124,6 @@ def _serving(text: str, status: int = 200):
     return _client(lambda request: httpx.Response(status, text=text))
 
 
-class TestConstruction:
-    def test_default(self) -> None:
-        assert GooglePlaySearch() is not None
-
-    def test_with_proxy(self) -> None:
-        client = GooglePlaySearch(proxy="http://proxy:8080")
-        assert client._http._proxy == "http://proxy:8080"
-
-
 class TestDatasets:
     def test_extracts_keyed_datasets(self) -> None:
         assert "ds:4" in GooglePlaySearch()._extract_datasets(_search_page())

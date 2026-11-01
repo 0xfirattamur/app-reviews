@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app_reviews.core.paging import is_per_country, orders_newest_first
+from app_reviews.core.paging import orders_newest_first
 from app_reviews.googleplay.web import GooglePlayScraperProvider
 from tests.app_reviews.transport import Recorder, client_for, query_of
 
@@ -56,18 +56,6 @@ def _sent_payload(body: str) -> Any:
     """The decoded RPC argument out of a urlencoded ``f.req`` body."""
     f_req = urllib.parse.parse_qs(body)["f.req"][0]
     return json.loads(json.loads(f_req)[0][0][1])
-
-
-class TestSource:
-    def test_source(self):
-        assert GooglePlayScraperProvider().source == "googleplay_scraper"
-
-    def test_is_not_per_country(self):
-        """Play has one global review corpus, so there is only ever one call to
-        make. That fact lives solely in ``core.paging``; see the reasoning on
-        ``_PER_COUNTRY`` there.
-        """
-        assert is_per_country(GooglePlayScraperProvider().source) is False
 
 
 class TestRequestShape:

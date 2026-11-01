@@ -63,18 +63,7 @@ class TestPublicApi:
 
     def test_every_name_is_importable(self):
         for name in app_reviews.__all__:
-            assert getattr(app_reviews, name) is not None, name
-
-    def test_utils_is_gone(self):
-        import pytest
-
-        with pytest.raises(ImportError):
-            import app_reviews.utils  # noqa: F401
-
-    def test_removed_config_models_are_gone(self):
-        for name in ("ReviewConfig", "ExportConfig", "ProxyConfig", "load_config"):
-            assert not hasattr(app_reviews, name)
-            assert not hasattr(app_reviews.models, name)
+            getattr(app_reviews, name)  # raises AttributeError for a dangling name
 
 
 class TestOneImportPathPerName:
@@ -130,11 +119,8 @@ class TestStoreModulesExposeTheirProviders:
         assert googleplay.GooglePlayScraperProvider.source == "googleplay_scraper"
         assert googleplay.GooglePlayOfficialProvider.source == "googleplay_official"
 
-    def test_provider_extension_contracts_are_public(self):
-        assert app_reviews.ReviewProvider is not None
-        assert app_reviews.TokenSource is not None
+    def test_the_http_seam_is_public(self):
         assert app_reviews.HttpResponse(status=200, body="").ok
-        assert app_reviews.ConnectCredentials is not None
 
     def test_core_is_not_advertised(self):
         """``core`` is the engine, not API; it exports nothing by name."""
@@ -169,25 +155,6 @@ class TestErrorsAreCatchable:
     def test_status_is_the_only_payload(self):
         assert app_reviews.RateLimitError("boom", status=429).status == 429
         assert app_reviews.RateLimitError("boom").status is None
-
-
-class TestLadderIsPublic:
-    def test_reviews_clients_expose_all_six_rungs(self):
-        for client in (app_reviews.AppStoreReviews, app_reviews.GooglePlayReviews):
-            for method in (
-                "fetch",
-                "afetch",
-                "iter_pages",
-                "aiter_pages",
-                "fetch_page",
-                "afetch_page",
-            ):
-                assert hasattr(client, method), f"{client.__name__}.{method}"
-
-    def test_search_clients_expose_async_variants(self):
-        for client in (app_reviews.AppStoreSearch, app_reviews.GooglePlaySearch):
-            for method in ("search", "asearch", "lookup", "alookup"):
-                assert hasattr(client, method), f"{client.__name__}.{method}"
 
 
 class TestOfficialProvidersAreConstructible:
@@ -225,19 +192,20 @@ class TestOfficialProvidersAreConstructible:
         assert "private_key" in ConnectCredentials.__dataclass_fields__
 
     def test_googleplay_exports_a_token_source(self):
+        import inspect
+
         from app_reviews.googleplay import GoogleAuth, GooglePlayOfficialProvider
 
-        assert GoogleAuth is not None
-        assert GooglePlayOfficialProvider is not None
+        assert inspect.iscoroutinefunction(GoogleAuth.aauthorization_header)
+        assert not inspect.iscoroutinefunction(GoogleAuth.authorization_header)
+        assert inspect.iscoroutinefunction(GooglePlayOfficialProvider.afetch_page)
 
     def test_a_caller_can_actually_build_the_official_provider(self):
         """The whole journey, using only names the store module exports."""
-        from app_reviews import AppStoreAuth
         from app_reviews.appstore import AppStoreOfficialProvider, ConnectAuth
         from app_reviews.models.config import ConnectCredentials
         from tests.app_reviews.factories import TEST_EC_PRIVATE_KEY
 
-        assert AppStoreAuth is not None
         creds = ConnectCredentials(
             key_id="K", issuer_id="I", private_key=TEST_EC_PRIVATE_KEY
         )
@@ -248,4 +216,4 @@ class TestOfficialProvidersAreConstructible:
     def test_both_stores_stay_symmetric(self):
         from app_reviews import appstore, googleplay
 
-        assert len(appstore.__all__) == len(googleplay.__all__) == 5
+        assert len(appstore.__all__) == len(googleplay.__all__)

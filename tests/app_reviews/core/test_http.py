@@ -8,12 +8,20 @@ ever assigned purely so tests had somewhere to push a ``MockTransport``.
 """
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import patch
 
 import httpx
 import pytest
 
+from app_reviews import (
+    AppReviewsError,
+    AppStoreReviews,
+    AppStoreSearch,
+    GooglePlayReviews,
+    GooglePlaySearch,
+)
 from app_reviews.core.http import HttpClient
 from app_reviews.models.config import RetryConfig
 from tests.app_reviews.transport import Recorder, query_of
@@ -243,12 +251,6 @@ class TestConfiguration:
 
         assert http._pool().timeout.read == pytest.approx(1.5)
 
-    def test_proxy_is_accepted(self):
-        """A proxy is threaded into the pool rather than each request."""
-        http = HttpClient(proxy="http://proxy.test:8080")
-
-        assert http._proxy == "http://proxy.test:8080"
-
 
 class TestPoolConfigConflict:
     """``http=`` supplies a configured pool, so ``proxy=``/``retry=`` alongside it
@@ -290,14 +292,37 @@ class TestPoolConfigConflict:
         pool = HttpClient()
         assert AppStoreReviews(http=pool)._http is pool
 
-    def test_proxy_and_retry_without_http_are_fine(self):
+    def test_proxy_without_http_reaches_the_pool(self):
+        """A proxy only changes how httpx dials, so no recording transport can see
+        it without a real proxy; this attribute is the one observable."""
         from app_reviews import AppStoreReviews
 
-        retry = RetryConfig(max_retries=9)
-        client = AppStoreReviews(proxy="http://p:8080", retry=retry)
+        client = AppStoreReviews(proxy="http://p:8080")
 
         assert client._http._proxy == "http://p:8080"
-        assert client._http._retry is retry
+
+    @pytest.mark.parametrize(
+        "client_class",
+        [AppStoreReviews, GooglePlayReviews, AppStoreSearch, GooglePlaySearch],
+    )
+    def test_retry_without_http_governs_every_request(
+        self, monkeypatch, no_sleep, client_class
+    ):
+        max_retries = 2
+        attempts: list[httpx.Request] = []
+
+        def unavailable(_transport, request):
+            attempts.append(request)
+            return httpx.Response(503, text="", request=request)
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", unavailable)
+        retry = RetryConfig(max_retries=max_retries, backoff_factor=0)
+        client = client_class(retry=retry)
+
+        with contextlib.suppress(AppReviewsError):
+            _make_one_request(client)
+
+        assert len(attempts) == 1 + max_retries
 
 
 class TestCredentialsDoNotFollowRedirectsOffOrigin:
@@ -862,3 +887,12 @@ class TestAttemptHasAWallClockDeadline:
 
         with pytest.raises(asyncio.CancelledError):
             await request
+
+
+def _make_one_request(client):
+    """The cheapest network call each kind of client offers."""
+    if isinstance(client, AppStoreReviews):
+        return client.fetch_page("123", country="us")
+    if isinstance(client, GooglePlayReviews):
+        return client.fetch_page("com.example.app")
+    return client.search("chat")
