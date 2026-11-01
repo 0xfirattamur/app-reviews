@@ -26,6 +26,9 @@ recent versions are also kept in
 - `HttpClient` rebuilds its async pool when the running event loop changes, so
   one client reused across separate `asyncio.run()` calls no longer fails with
   `Event loop is closed`.
+- `GooglePlayReviews` token exchange now raises `AuthError` when Google answers
+  400 with `invalid_grant`, `invalid_client` or `unauthorized_client`, instead
+  of a request error.
 
 ## [1.3.0] - 2026-10-25
 

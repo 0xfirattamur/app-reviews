@@ -277,6 +277,45 @@ class TestTokenExchangeFailuresAreClassified:
             _auth_on(handler).authorization_header()
 
 
+class TestGoogleRejectingTheKeyIsAnAuthError:
+    """Google refuses a revoked or disabled key with HTTP 400, not 401."""
+
+    @staticmethod
+    def _provider(status, body):
+        def handler(request):
+            if "oauth2" in str(request.url):
+                return httpx.Response(status, text=body)
+            return httpx.Response(200, text=json.dumps({"reviews": []}))
+
+        return GooglePlayReviews(
+            auth=GooglePlayAuth(service_account_info=dict(service_account_json())),
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+        )
+
+    @pytest.mark.parametrize(
+        "code", ["invalid_grant", "invalid_client", "unauthorized_client"]
+    )
+    async def test_a_rejected_credential_raises_auth_error(self, twin, code):
+        provider = self._provider(400, json.dumps({"error": code}))
+
+        with pytest.raises(AuthError, match=code) as caught:
+            await twin.call(provider, "fetch", "com.example.app")
+
+        assert caught.value.status == 400
+
+    @pytest.mark.parametrize(
+        "body", ['{"error":"invalid_request"}', "not json", "[1]", '{"error":["x"]}']
+    )
+    async def test_any_other_400_stays_a_request_error(self, twin, body):
+        """Not raised: only ``AuthError`` escapes a walk; the rest lands on
+        ``.errors`` classified as ``request``."""
+        provider = self._provider(400, body)
+
+        result = await twin.call(provider, "fetch", "com.example.app")
+
+        assert [error.kind for error in result.errors] == ["request"]
+
+
 class TestAsyncTokenExchange:
     async def test_aauthorization_header_returns_bearer_token(self):
         auth = _auth_on(_token("at-123"))

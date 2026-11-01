@@ -24,6 +24,34 @@ from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
 from app_reviews.errors import AuthError, ParseError
 from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
 
+REJECTED_CREDENTIAL_ERRORS = frozenset(
+    {"invalid_grant", "invalid_client", "unauthorized_client"}
+)
+"""The OAuth ``error`` codes with which Google refuses a key, rather than a request.
+
+Google answers these with HTTP 400, not 401, so the status alone would class a
+revoked or disabled service account as a ``RequestError`` that no caller knows to
+treat as configuration.
+"""
+
+
+def _is_rejected_credential(response: HttpResponse) -> bool:
+    """Whether a 400 from the token endpoint says Google refused the credential.
+
+    Any other 400 (``invalid_request``, an unreadable body) stays a plain request
+    failure: the key may be fine and the request malformed.
+    """
+    if response.status != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    code = body.get("error")
+    return isinstance(code, str) and code in REJECTED_CREDENTIAL_ERRORS
+
 
 class GoogleAuth(PooledClient):
     """Exchanges a service-account key for Google OAuth bearer tokens.
@@ -317,11 +345,13 @@ class GoogleAuth(PooledClient):
         if not response.ok:
             # Truncated: the body is remote content and ends up in an exception
             # message that the walk logs at WARNING.
-            raise http_error(
-                response,
+            message = (
                 f"Google token exchange failed (HTTP {response.status}): "
-                f"{response.body[: self.ERROR_BODY_CHARS]}",
+                f"{response.body[: self.ERROR_BODY_CHARS]}"
             )
+            if _is_rejected_credential(response):
+                raise AuthError(message, status=response.status)
+            raise http_error(response, message)
 
         try:
             body = response.json()
