@@ -282,6 +282,31 @@ class TestConfiguration:
         assert http._pool().timeout.read == pytest.approx(1.5)
 
 
+class TestAsyncPoolFollowsTheEventLoop:
+    """``asyncio.run`` builds a fresh loop each call. A pooled connection belongs to
+    the loop that opened it, so reusing it from the next loop raised
+    ``RuntimeError: Event loop is closed``."""
+
+    def test_two_event_loops_can_share_one_client(self, keep_alive_server):
+        http = HttpClient()
+
+        first = asyncio.run(http.aget(keep_alive_server))
+        second = asyncio.run(http.aget(keep_alive_server))
+
+        assert (first.status, first.body) == (200, "ok")
+        assert (second.status, second.body) == (200, "ok")
+
+    async def test_one_loop_still_shares_one_pool(self):
+        with patch(
+            "app_reviews.core.http.httpx.AsyncClient", wraps=httpx.AsyncClient
+        ) as spy:
+            http = _client()
+            await http.aget("https://example.test/x")
+            await http.aget("https://example.test/x")
+
+        assert spy.call_count == 1
+
+
 class TestPoolConfigConflict:
     """``http=`` supplies a configured pool, so ``proxy=``/``retry=`` alongside it
     were silently discarded, so a caller could ask for ``max_retries=9`` and get a

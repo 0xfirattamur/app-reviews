@@ -23,6 +23,9 @@ recent versions are also kept in
 - Store responses nested deeper than Python can parse are now reported as
   `ParseError`, or as a page `error` of kind `"parse"`, instead of raising
   `RecursionError`.
+- `HttpClient` rebuilds its async pool when the running event loop changes, so
+  one client reused across separate `asyncio.run()` calls no longer fails with
+  `Event loop is closed`.
 
 ## [1.3.0] - 2026-10-25
 

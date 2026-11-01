@@ -169,6 +169,7 @@ class HttpClient:
         self._transport = transport
         self._sync_pool: httpx.Client | None = None
         self._async_pool: httpx.AsyncClient | None = None
+        self._async_pool_loop: asyncio.AbstractEventLoop | None = None
         self._pool_lock = threading.Lock()
 
     def get(
@@ -323,15 +324,37 @@ class HttpClient:
         return self._sync_pool
 
     def _apool(self) -> httpx.AsyncClient:
-        if self._async_pool is None:
-            with self._pool_lock:
-                if self._async_pool is None:
-                    self._async_pool = httpx.AsyncClient(
-                        timeout=self._socket_timeout,
-                        proxy=self._proxy,
-                        transport=self._transport,
-                        follow_redirects=True,
-                    )
+        """The async pool for the running loop, rebuilt when the loop changed.
+
+        Pooled connections belong to the loop that opened them, so a pool built
+        under a loop that has since closed (a second ``asyncio.run``) fails every
+        request. The stale pool cannot be closed from here, its loop is gone, so
+        it is dropped and a new one built under the same lock as first use. A
+        client serves one event loop at a time.
+        """
+        loop = _running_loop()
+        pool = self._async_pool_for(loop)
+        if pool is not None:
+            return pool
+        with self._pool_lock:
+            pool = self._async_pool_for(loop)
+            if pool is None:
+                pool = httpx.AsyncClient(
+                    timeout=self._socket_timeout,
+                    proxy=self._proxy,
+                    transport=self._transport,
+                    follow_redirects=True,
+                )
+                self._async_pool = pool
+                self._async_pool_loop = loop
+        return pool
+
+    def _async_pool_for(
+        self, loop: asyncio.AbstractEventLoop | None
+    ) -> httpx.AsyncClient | None:
+        """The current async pool if it was built under ``loop``, else None."""
+        if self._async_pool_loop is not loop:
+            return None
         return self._async_pool
 
     def _headers(self, extra: dict[str, str] | None) -> dict[str, str]:
@@ -622,6 +645,14 @@ class HttpClient:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The running event loop, or None when called outside one."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _carries_credential(headers: dict[str, str] | None) -> bool:
