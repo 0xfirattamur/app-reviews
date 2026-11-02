@@ -285,6 +285,7 @@ class TestStructuredSerialization:
         serialised = result.to_dict()
 
         assert serialised == {
+            "schema_version": 1,
             "reviews": [make_review().to_dict()],
             "outcomes": [outcome.to_dict()],
             "errors": [error.to_dict()],
@@ -468,3 +469,39 @@ class TestElapsedIsRequired:
         outcome = CountryCollector("us").outcome()
 
         assert outcome.elapsed > 0
+
+
+def _us_outcome(*, error=None, xml_fallback_error=None):
+    return CountryOutcome(
+        country="us",
+        pages=1,
+        reviews_fetched=0,
+        stopped_because="error" if error else "exhausted",
+        elapsed=0.1,
+        error=error,
+        xml_fallback_error=xml_fallback_error,
+    )
+
+
+class TestFetchResultOk:
+    def test_ok_without_outcomes(self):
+        assert FetchResult().ok is True
+
+    def test_ok_when_every_country_succeeded(self):
+        assert FetchResult(outcomes=[_us_outcome(), _us_outcome()]).ok is True
+
+    def test_not_ok_when_one_country_failed(self):
+        failure = FetchError(country="us", message="boom", kind="server")
+        result = FetchResult(outcomes=[_us_outcome(), _us_outcome(error=failure)])
+        assert result.ok is False
+
+    def test_xml_fallback_diagnostics_do_not_fail_the_result(self):
+        diagnostic = FetchError(country="us", message="unconfirmed", kind="parse")
+        result = FetchResult(outcomes=[_us_outcome(xml_fallback_error=diagnostic)])
+        assert result.ok is True
+
+    def test_ok_survives_filter_and_limit(self):
+        failure = FetchError(country="us", message="boom", kind="server")
+        result = FetchResult(outcomes=[_us_outcome(error=failure)])
+        narrowed = result.filter(ratings=[5]).limit(0)
+        assert narrowed.ok is False

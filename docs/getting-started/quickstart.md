@@ -20,10 +20,16 @@ for review in result:
     print(f"{review.rating}* {review.title}")
     print(f"  {review.body[:100]}")
     print(f"  by {review.author_name}, {review.country}")
+
+if not result.ok:
+    print(result.errors)
 ```
 
 Replace `"324684580"` with a numeric App Store ID (the number after `/id` in
-the app's URL).
+the app's URL). `fetch()` does not raise when a request fails; it records the
+failure in `result.errors`, and an empty loop can mean either "no reviews" or
+"failed". Check `result.ok` (true when no country failed) before trusting an
+empty result.
 
 ---
 
@@ -38,6 +44,9 @@ with GooglePlayReviews() as client:
 for review in result:
     print(f"{review.rating}* {review.body[:100]}")
     print(f"  by {review.author_name}")
+
+if not result.ok:
+    print(result.errors)
 ```
 
 Replace `"com.spotify.music"` with a package name (the `id` parameter in the
@@ -123,8 +132,9 @@ Every `client.fetch()` call returns a `FetchResult`. It is iterable and supports
 |-------------------|-------------|
 | `for r in result` | Iterate over `Review` objects. |
 | `len(result)` | Number of reviews. |
-| `bool(result)` | `True` if there is at least one review. |
+| `bool(result)` | `True` if there is at least one review. It says nothing about failures: use `result.ok`. |
 | `result.reviews` | The list of `Review` objects. |
+| `result.ok` | `True` when no country failed (`not result.errors`). |
 | `result.errors` | List of `FetchError` objects for countries that failed. |
 | `result.filter(...)` | Returns a new filtered `FetchResult`. |
 | `result.sort(...)` | Returns a new sorted `FetchResult`. |
@@ -140,7 +150,7 @@ with AppStoreReviews() as client:
 
 print(f"Reviews: {len(result)}")
 
-if result.errors:
+if not result.ok:
     for err in result.errors:
         print(f"Failed: {err.country} ({err.message})")
 ```

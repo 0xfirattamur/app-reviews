@@ -31,7 +31,7 @@ with AppStoreReviews() as client:
 for review in result:
     print(review.country, review.rating, review.body[:80])
 
-if result.errors:
+if not result.ok:
     print(result.errors)
 ```
 
@@ -213,7 +213,8 @@ exceptions such as `RateLimitError`, `RequestError`, `NotFoundError`, and
 ## JSON, JSONL, and CSV
 
 Use `result.to_dict()` when diagnostics matter. It returns the full JSON-safe
-envelope: `reviews`, `outcomes`, `errors`, and `skipped_reviews`. Use
+envelope: `schema_version`, `reviews`, `outcomes`, `errors`,
+`xml_fallback_errors`, and `skipped_reviews`. Use
 `result.to_dicts()` only when review rows are all you need. Provider `raw`
 payloads are omitted unless `include_raw=True`.
 
@@ -384,13 +385,13 @@ review. Both need credentials that are allowed to answer reviews:
 ```python
 from app_reviews import AppStoreReplies, GooglePlayAuth, GooglePlayReplies
 
-with AppStoreReplies(auth) as apple:
+with AppStoreReplies(auth=auth) as apple:
     if apple.get_reply(review.id) is None:
         reply = apple.reply(review.id, "Thanks, fixed in 4.2.")
         print(reply.state)  # "pending": Apple can take up to 24 hours to show it
 
 play_auth = GooglePlayAuth(service_account_path="/path/to/service-account.json")
-with GooglePlayReplies(play_auth) as play:
+with GooglePlayReplies(auth=play_auth) as play:
     play.reply("gp:AOqpTO...", "Thanks for the report!", package_name="com.example.app")
 ```
 
@@ -419,14 +420,14 @@ Reads (`get_reply()`) follow the normal retry policy.
 
 ### App Store versions from App Store Connect
 
-`AppStoreVersions(auth).versions(app_id)` lists an owned app's versions from the
+`AppStoreVersions(auth=auth).versions(app_id)` lists an owned app's versions from the
 official API, newest `created_at` first, each with its "What's New" text per
 locale:
 
 ```python
 from app_reviews import AppStoreVersions
 
-with AppStoreVersions(auth) as client:
+with AppStoreVersions(auth=auth) as client:
     for version in client.versions("6741066976"):
         print(version.version, version.state, version.release_notes.get("en-US"))
 ```

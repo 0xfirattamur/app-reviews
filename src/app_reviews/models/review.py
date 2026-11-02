@@ -43,6 +43,13 @@ class Review:
     pair and **not** comparable across sources. Key deduplication on
     ``(store, source, id)``.
 
+    ``source`` must belong to ``store`` (``appstore_*`` with ``"appstore"``,
+    ``googleplay_*`` with ``"googleplay"``); a contradiction raises
+    ``ValueError``.
+
+    Equality and hashing ignore ``raw`` and ``fetched_at``: two fetches of the
+    same review are equal, so ``set(reviews)`` deduplicates re-fetched reviews.
+
     ``country`` is the storefront that was queried, not the reviewer's
     location. ``None`` means the source does not report it.
 
@@ -67,8 +74,8 @@ class Review:
     updated_at: datetime | None = None
     app_version: str | None = None
     language: str | None = None
-    fetched_at: datetime | None = None
-    raw: dict[str, Any] | list[Any] | None = None
+    fetched_at: datetime | None = field(default=None, compare=False)
+    raw: dict[str, Any] | list[Any] | None = field(default=None, compare=False)
     """The provider's own payload, exactly as it arrived.
 
     A list as well as an object because the sources disagree: Apple and the
@@ -107,6 +114,10 @@ class Review:
     def __post_init__(self) -> None:
         if not self.id.strip():
             raise ValueError("id must not be empty")
+        if not self.source.startswith(f"{self.store}_"):
+            raise ValueError(
+                f"source {self.source!r} does not belong to store {self.store!r}"
+            )
         if isinstance(self.rating, bool) or not isinstance(self.rating, int):
             raise ValueError("rating must be an integer")
         if not 1 <= self.rating <= 5:
@@ -117,6 +128,15 @@ class Review:
             value = getattr(self, name)
             if value is not None and value.tzinfo is None:
                 object.__setattr__(self, name, value.replace(tzinfo=UTC))
+
+    @property
+    def key(self) -> tuple[Store, Source, str]:
+        """``(store, source, id)``: the key to deduplicate reviews on.
+
+        ``id`` is unique only within a ``(store, source)`` pair, so the same
+        real-world review fetched through two sources has two different keys.
+        """
+        return (self.store, self.source, self.id)
 
     @property
     def dated_at(self) -> datetime:

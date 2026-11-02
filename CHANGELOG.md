@@ -6,6 +6,32 @@ recent versions are also kept in
 
 ## Unreleased
 
+### Added
+
+- `FetchResult.ok` is `True` when no country failed, the same test as `not
+  result.errors`.
+- `Review.key` is the `(store, source, id)` tuple to deduplicate reviews on.
+- `AppVersionEntry.to_dict()` and `AppStoreVersion.to_dict()` return JSON-safe
+  dicts with ISO 8601 dates.
+- `Country.AFRICA` groups the Sub-Saharan African storefronts, and
+  `Country.MIDDLE_EAST` is documented as including only `DZ`, `EG` and `TN` from
+  North Africa.
+- Cursors from `fetch_page` and `iter_pages` now record their app, country and
+  client settings, and resuming one under different settings raises `ValueError`
+  before any request is sent; cursors saved by 1.3 still work.
+- `FetchResult.to_dict()` now starts with `"schema_version": 1`, so a stored
+  envelope can be told apart if its shape changes.
+- `GooglePlayReplies.reply()` and `areply()` accept a `Review` from
+  `GooglePlayReviews(auth=...)` in place of a review id, and `package_name` is
+  optional when one is given.
+
+### Changed
+
+- `Review` equality and hash now ignore `raw` and `fetched_at`, so
+  `set(reviews)` deduplicates re-fetched reviews.
+- `AppStoreVersion` is now hashable; its `release_notes` still count for
+  equality.
+
 ### Fixed
 
 - A non-string App Store `private_key`, or a non-string `client_email`,
@@ -70,6 +96,8 @@ recent versions are also kept in
 - `AppStoreVersions` refuses a `links.next` carrying control characters, a
   fragment or user-info, the same way `AppStoreReviews` does, instead of
   following it with the JWT.
+- `Review` now raises `ValueError` when its `source` does not belong to its
+  `store`.
 
 ## [1.3.0] - 2026-10-25
 

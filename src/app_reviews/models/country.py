@@ -177,6 +177,7 @@ class Country(StrEnum):
     AMERICAS: ClassVar[frozenset[Country]]
     ASIA_PACIFIC: ClassVar[frozenset[Country]]
     MIDDLE_EAST: ClassVar[frozenset[Country]]
+    AFRICA: ClassVar[frozenset[Country]]
     ENGLISH_SPEAKING: ClassVar[frozenset[Country]]
 
 
@@ -324,6 +325,44 @@ Country.MIDDLE_EAST = frozenset(
         Country.SA,
         Country.TN,
         Country.YE,
+    }
+)
+
+# Sub-Saharan Africa and its island states. The North African storefronts (DZ,
+# EG, TN) stay in MIDDLE_EAST. AM and AZ stay in no group, and so does MS
+# (Montserrat, a Caribbean territory), until a 2.0 membership change.
+Country.AFRICA = frozenset(
+    {
+        Country.AO,
+        Country.BF,
+        Country.BJ,
+        Country.BW,
+        Country.CG,
+        Country.CV,
+        Country.GH,
+        Country.GM,
+        Country.GW,
+        Country.KE,
+        Country.LR,
+        Country.MG,
+        Country.ML,
+        Country.MR,
+        Country.MU,
+        Country.MW,
+        Country.MZ,
+        Country.NA,
+        Country.NE,
+        Country.NG,
+        Country.SC,
+        Country.SL,
+        Country.SN,
+        Country.ST,
+        Country.SZ,
+        Country.TD,
+        Country.TZ,
+        Country.UG,
+        Country.ZA,
+        Country.ZW,
     }
 )
 

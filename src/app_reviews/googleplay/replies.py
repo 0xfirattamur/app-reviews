@@ -27,6 +27,7 @@ from app_reviews.errors import ParseError, ReplyRejectedError
 from app_reviews.googleplay.api import PlayAPIClient
 from app_reviews.googleplay.timestamps import parse_protobuf_timestamp
 from app_reviews.models.reply import ReviewReply
+from app_reviews.models.review import Review
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
 _API = "the Google Play Developer API"
@@ -41,41 +42,60 @@ class GooglePlayReplies(PlayAPIClient):
     """Reads and writes the developer reply to a Google Play review.
 
     ``review_id`` is ``Review.id`` from ``GooglePlayReviews(auth=...)``; Play
-    keys reviews by app, so every call takes ``package_name`` too. ``reply`` is
+    keys reviews by app, so every call needs the package too: ``package_name``,
+    or, for ``reply``, a ``Review`` that carries it. ``reply`` is
     sent once (see ``HttpClient.send_once``); reads and the token exchange retry
     as configured. Raises ``AuthError`` for a key without the permission,
     ``RateLimitError`` for a 429.
     """
 
-    def reply(self, review_id: str, text: str, *, package_name: str) -> ReviewReply:
-        """Publish ``text`` as the reply to ``review_id``, replacing any existing one.
+    def reply(
+        self,
+        review_id: str | Review,
+        text: str,
+        *,
+        package_name: str | None = None,
+    ) -> ReviewReply:
+        """Publish ``text`` as the reply to a review, replacing any existing one.
+
+        ``review_id`` is a review id (then ``package_name`` is required) or a
+        ``Review`` fetched with ``GooglePlayReviews(auth=...)``, which carries
+        its own id and package. Raises ``ValueError``, before sending, for a
+        ``Review`` from another source, a ``package_name`` that disagrees with
+        the review's ``app_id``, or an id with no ``package_name``.
 
         Raises ``ReplyRejectedError(reason="too_long")`` without sending when
         ``text`` is over 350 characters, ``ReplyRejectedError`` when Google
         refuses it, ``ReplyOutcomeUnknownError`` when it may or may not have
         applied.
         """
+        resolved_id, package = _resolve_target(review_id, package_name)
         _check_length(text)
         response = self._http.send_once(
             "POST",
-            self._review_url(package_name, review_id) + ":reply",
+            self._review_url(package, resolved_id) + ":reply",
             body=json.dumps({"replyText": text}),
             headers=self._headers() | _JSON_HEADERS,
         )
-        return self._written(response, review_id)
+        return self._written(response, resolved_id)
 
     async def areply(
-        self, review_id: str, text: str, *, package_name: str
+        self,
+        review_id: str | Review,
+        text: str,
+        *,
+        package_name: str | None = None,
     ) -> ReviewReply:
         """Async equivalent of ``reply``."""
+        resolved_id, package = _resolve_target(review_id, package_name)
         _check_length(text)
         response = await self._http.asend_once(
             "POST",
-            self._review_url(package_name, review_id) + ":reply",
+            self._review_url(package, resolved_id) + ":reply",
             body=json.dumps({"replyText": text}),
             headers=await self._aheaders() | _JSON_HEADERS,
         )
-        return self._written(response, review_id)
+        return self._written(response, resolved_id)
 
     def get_reply(self, review_id: str, *, package_name: str) -> ReviewReply | None:
         """The reply to ``review_id``, or None. ``NotFoundError`` for no such review."""
@@ -126,6 +146,31 @@ class GooglePlayReplies(PlayAPIClient):
             raise ParseError(
                 f"Malformed review from {_API}: {exc}", status=response.status
             ) from exc
+
+
+def _resolve_target(review: str | Review, package_name: str | None) -> tuple[str, str]:
+    """The ``(review id, package name)`` a reply is addressed to.
+
+    Raises ``ValueError`` for a ``Review`` that is not from the Developer API
+    (the scraper's ids are not the ones the API accepts), a ``package_name``
+    that contradicts the review's ``app_id``, or an id with no ``package_name``.
+    """
+    if isinstance(review, str):
+        if package_name is None:
+            raise ValueError("package_name is required when replying by review id")
+        return review, package_name
+    if review.source != "googleplay_official":
+        raise ValueError(
+            f"Only a review fetched with GooglePlayReviews(auth=...) can be replied "
+            f"to; this one is from {review.source!r}, whose ids the Developer API "
+            f"does not accept."
+        )
+    if package_name is not None and package_name != review.app_id:
+        raise ValueError(
+            f"package_name {package_name!r} does not match the review's "
+            f"app_id {review.app_id!r}"
+        )
+    return review.id, review.app_id
 
 
 def _check_length(text: str) -> None:

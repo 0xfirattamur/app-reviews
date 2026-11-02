@@ -463,6 +463,7 @@ PAGE_RESULT_WITH_RAW = {
 
 
 FETCH_RESULT = {
+    "schema_version": 1,
     "reviews": [
         {
             "store": "appstore",
@@ -555,6 +556,7 @@ FETCH_RESULT = {
 
 
 FETCH_RESULT_WITH_RAW = {
+    "schema_version": 1,
     "reviews": [
         {
             "store": "appstore",
@@ -645,3 +647,8 @@ FETCH_RESULT_WITH_RAW = {
     ],
     "skipped_reviews": 1,
 }
+
+
+def test_fetch_result_envelope_starts_with_its_schema_version() -> None:
+    assert next(iter(FetchResult().to_dict())) == "schema_version"
+    assert FetchResult().to_dict()["schema_version"] == 1

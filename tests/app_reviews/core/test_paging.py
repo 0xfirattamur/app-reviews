@@ -32,6 +32,7 @@ from tests.app_reviews.factories import (
     FakeProvider,
     make_page,
     make_review,
+    raw_cursor,
 )
 
 
@@ -58,7 +59,7 @@ class TestFetchPage:
         page = client.fetch_page("123", country="us")
 
         assert len(page.reviews) == 1
-        assert page.next_cursor == "1"
+        assert raw_cursor(page.next_cursor) == "1"
         assert len(provider.calls) == 1
 
     def test_passes_the_cursor_through(self):
@@ -369,7 +370,7 @@ class TestAsyncParity:
 
         page = await FakeClient(provider).afetch_page("123", country="us")
 
-        assert page.next_cursor == "1"
+        assert raw_cursor(page.next_cursor) == "1"
         assert len(provider.calls) == 1
 
 
@@ -1261,7 +1262,7 @@ class TestResumingFromAPersistedCursor:
         provider = FakeProvider(self._pages())
         pages = list(FakeClient(provider).iter_pages("123", limit=1))
 
-        assert pages[-1].next_cursor == "1"
+        assert raw_cursor(pages[-1].next_cursor) == "1"
         assert pages[-1].stopped_because == "limit"
 
     def test_a_yielded_page_keeps_its_skipped_review_count(self):

@@ -22,6 +22,7 @@ from tests.app_reviews.factories import (
     MultiCountryProvider,
     make_page,
     make_review,
+    raw_cursor,
 )
 
 
@@ -333,7 +334,7 @@ class TestOnPage:
         stream = FakeClient(provider).iter_reviews(
             "123",
             countries=["us"],
-            on_page=lambda country, page: seen.append(page.next_cursor),
+            on_page=lambda country, page: seen.append(raw_cursor(page.next_cursor)),
         )
         next(stream)
 
@@ -438,7 +439,7 @@ class TestOnPage:
                 "123",
                 countries=["us"],
                 on_page=lambda country, page: sync_seen.append(
-                    (country, page.next_cursor)
+                    (country, raw_cursor(page.next_cursor))
                 ),
             )
         )
@@ -448,7 +449,7 @@ class TestOnPage:
                 "123",
                 countries=["us"],
                 on_page=lambda country, page: async_seen.append(
-                    (country, page.next_cursor)
+                    (country, raw_cursor(page.next_cursor))
                 ),
             )
         ]

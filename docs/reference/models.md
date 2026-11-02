@@ -33,7 +33,7 @@ from app_reviews import Review
 | `title` | `str \| None` | Required | Review title. Google Play web has none; the official API may expose a legacy title. |
 | `body` | `str` | Required | Review body text. |
 | `author_name` | `str` | Required | Author display name. |
-| `source` | `Source` | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`. |
+| `source` | `Source` | Required | Data source: `appstore_scraper`, `appstore_official`, `googleplay_scraper`, or `googleplay_official`. Must belong to `store`: a `googleplay_*` source with `store="appstore"` raises `ValueError`. |
 | `id` | `str` | Required | Non-empty raw identifier assigned by the source. See below. |
 | `created_at` | `datetime` or `None` | `None` | When the review was posted. `None` where the source reports no creation date. |
 | `updated_at` | `datetime` or `None` | `None` | Last edit time. `None` where the source reports no modification date. |
@@ -69,6 +69,12 @@ optional: `product_name`, `manufacturer`, `device_class`, `screen_width_px`,
 from app_reviews import DeviceMetadata
 ```
 
+### Equality and hashing
+
+`Review` is hashable, and two reviews are equal when every field matches except `raw` and `fetched_at`. A review fetched twice is therefore the same review, so `set(reviews)` removes re-fetched duplicates. Use `review.key` when you need the identity alone. `AppStoreVersion` is hashable too; its `release_notes` dict still counts for equality.
+
+Models that hold a list are not hashable in practice: `hash(FetchResult(...))` and `hash(PageResult(...))` raise `TypeError`, even though the frozen dataclass advertises `__hash__`. Hash the `Review` objects inside them, or their `key`s.
+
 ### Review IDs
 
 `id` is the identifier the source assigned, passed through unchanged: the App Store RSS `id` or Connect `customerReviews.id`, the Google Play `batchexecute` review id or `androidpublisher` `reviewId`.
@@ -80,7 +86,7 @@ from app_reviews import DeviceMetadata
     real-world App Store review fetched via `appstore_scraper` and via
     `appstore_official` carries two different ids.
 
-    Key deduplication on `(store, source, id)`, and use `source` to tell provenance apart.
+    Key deduplication on `(store, source, id)`, which is `review.key`, and use `source` to tell provenance apart.
 
 For App Store Connect, `customerReviewResponses` requires a Connect `customerReviews.id`. RSS ids are numeric (`14357217033`) and Connect ids are opaque, and Apple exposes no mapping between them: the `customerReviews` endpoint has no id filter and no legacy-id attribute. So an `appstore_scraper` id cannot be used to reply.
 
@@ -103,6 +109,7 @@ from app_reviews import FetchResult
 | `reviews` | `list[Review]` | The fetched reviews, merged across countries, filtered and sorted. |
 | `errors` | `list[FetchError]` | Per-country fetch failures. Derived from `outcomes`, so it can never disagree with them or be lost by a transform. |
 | `xml_fallback_errors` | `list[FetchError]` | App Store RSS pages whose empty JSON answer the XML feed could not confirm. Diagnostics, not failures, so they are not in `errors`. Derived from `outcomes`. |
+| `ok` | `bool` | `True` when no country failed, that is `not result.errors`. `xml_fallback_errors` do not count: those pages still succeeded. An empty result with `ok` is a genuine "no reviews". |
 | `outcomes` | `list[CountryOutcome]` | One entry per country actually walked. See [CountryOutcome](#countryoutcome). |
 | `skipped_reviews` | `int` | Total malformed or unusable review rows skipped across all outcomes. Derived from `outcomes`. |
 
@@ -117,7 +124,7 @@ from app_reviews import FetchResult
 | `sort(order)` | `FetchResult` | Return a new sorted `FetchResult`. |
 | `limit(n)` | `FetchResult` | Return a new `FetchResult` truncated to `n` reviews. |
 | `to_dicts(include_raw=False)` | `list[dict]` | JSON-serialisable plain dicts: ISO 8601 timestamps, `raw` omitted unless asked. |
-| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `reviews`, `outcomes`, `errors`, `xml_fallback_errors`, and `skipped_reviews`. |
+| `to_dict(include_raw=False)` | `dict` | Complete JSON-safe envelope containing `schema_version` (currently `1`; it changes only when a key is removed or changes meaning), `reviews`, `outcomes`, `errors`, `xml_fallback_errors`, and `skipped_reviews`. |
 
 Use `FetchResult.to_dict(include_raw=False)` for automation and persistence when
 the difference between an empty success and a failed fetch matters. Use
@@ -360,7 +367,8 @@ from app_reviews import Country
 | `Country.EUROPE` | European countries. |
 | `Country.AMERICAS` | North and South America. |
 | `Country.ASIA_PACIFIC` | Asia-Pacific region. |
-| `Country.MIDDLE_EAST` | Middle East and North Africa. |
+| `Country.MIDDLE_EAST` | Middle East, plus the North African storefronts `DZ`, `EG` and `TN`. |
+| `Country.AFRICA` | Sub-Saharan Africa and its island states. The North African storefronts are in `MIDDLE_EAST`. |
 | `Country.ENGLISH_SPEAKING` | English-speaking countries. |
 
 Plain strings also work for Apple review storefronts:
@@ -403,7 +411,7 @@ Unlike `Sort`, this orders the pages Connect sends, not the final result. Only
 
 ## RetryConfig
 
-HTTP retry and timeout settings.
+HTTP retry and timeout settings. `timeout` is honoured wherever the config goes: `AppStoreReviews(retry=...)` and `HttpClient(retry=...)` both use it, and an explicit `HttpClient(timeout=...)` wins over it.
 
 ```python
 from app_reviews import RetryConfig
@@ -530,12 +538,14 @@ with AppStoreSearch() as client:
 | `released_at` | `datetime` | When that version shipped: timezone-aware UTC, to the second. |
 | `release_notes` | `str \| None` | That version's "What's New" text, or `None` when the store shows none. Same name as `AppMetadata.release_notes`. |
 
+`to_dict()` returns a JSON-safe plain dict of the three fields, with `released_at` as an ISO 8601 string.
+
 ---
 
 ## AppStoreVersion
 
 One version of an app as App Store Connect records it, returned newest
-`created_at` first by `AppStoreVersions(auth).versions()` / `aversions()`.
+`created_at` first by `AppStoreVersions(auth=auth).versions()` / `aversions()`.
 
 The official API has no release date. For when versions reached the store, use
 [`AppVersionEntry`](#appversionentry) from `version_history()`.
@@ -550,6 +560,8 @@ The official API has no release date. For when versions reached the store, use
 | `created_at` | `datetime \| None` | `createdDate`: when the version was created in App Store Connect, not when it shipped. |
 | `earliest_release_date` | `datetime \| None` | `earliestReleaseDate`: the earliest moment a `SCHEDULED` release may go out. |
 | `release_notes` | `dict[str, str]` | `whatsNew` per locale, such as `{"en-US": "..."}`; locales without text are omitted. |
+
+`to_dict()` returns a JSON-safe plain dict of every field, with the two dates as ISO 8601 strings.
 
 ---
 

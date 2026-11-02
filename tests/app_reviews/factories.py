@@ -183,6 +183,14 @@ class MultiCountryProvider:
         return pages[index]
 
 
+def raw_cursor(cursor: str | None) -> str | None:
+    """The provider's own cursor inside a caller-facing ``ar1~<fingerprint>~<raw>``."""
+    if cursor is None:
+        return None
+    _format, _fingerprint, raw = cursor.split("~", 2)
+    return raw
+
+
 class FakeClient(BaseReviews):
     """A review client that walks a fake provider instead of a store."""
 
