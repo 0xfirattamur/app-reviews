@@ -4,63 +4,38 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from app_reviews.appstore.api import CONNECT_HOST, refuse_foreign_url
+from app_reviews.appstore.replies import parse_review_response
 from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
-from app_reviews.core.classify import malformed_page, page_failure_from_response
+from app_reviews.core.classify import (
+    malformed_page,
+    page_failure_from_response,
+    refused_cursor_page,
+)
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.untyped import (
+    UNREADABLE_PAYLOAD,
+    expect_int,
+    log_safe_id,
+    page_from_entries,
+)
 from app_reviews.core.validation import require_path_segment
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
-from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
-from app_reviews.models.types import ConnectSort, ReplyState, Source
+from app_reviews.models.types import ConnectSort, Source
 
 _LOG = logging.getLogger(__name__)
 
-_REPLY_STATES: dict[str, ReplyState] = {
-    "PUBLISHED": "published",
-    "PENDING_PUBLISH": "pending",
-}
-"""Apple's documented ``CustomerReviewResponseV1.state`` values."""
-
-
-def parse_review_response(resource: Any, review_id: str) -> ReviewReply:
-    """A ``customerReviewResponses`` resource as the reply to ``review_id``.
-
-    Raises on an unknown state rather than guessing it is published.
-    """
-    attributes = resource["attributes"]
-    state = _REPLY_STATES.get(attributes["state"])
-    if state is None:
-        raise ValueError(f"unknown reply state {attributes['state']!r}")
-    text = attributes["responseBody"]
-    if not isinstance(text, str):
-        raise TypeError(f"responseBody is {type(text).__name__}, expected a string")
-    return ReviewReply(
-        review_id=review_id,
-        reply_id=str(resource["id"]),
-        text=text,
-        state=state,
-        updated_at=_reply_timestamp(attributes.get("lastModifiedDate")),
-    )
-
-
-def _reply_timestamp(last_modified: Any) -> datetime | None:
-    """``last_modified`` as an aware datetime; an offset-less one is read as UTC.
-
-    The same rule ``Review`` applies to its timestamps, so a reply and its review
-    always compare.
-    """
-    if not last_modified:
-        return None
-    modified_at = datetime.fromisoformat(last_modified)
-    is_naive = modified_at.tzinfo is None
-    return modified_at.replace(tzinfo=UTC) if is_naive else modified_at
+_SOURCE_NAME = "the App Store Connect API"
+"""How both a failed status and a malformed body name this source."""
 
 
 class AppStoreOfficialProvider(PooledClient):
@@ -72,7 +47,7 @@ class AppStoreOfficialProvider(PooledClient):
 
     source: Source = "appstore_official"
 
-    API_HOST = "api.appstoreconnect.apple.com"
+    API_HOST = CONNECT_HOST
     CURSOR_PATH_PREFIX = "/v1/apps/"
     """A ``links.next`` may only point back at the app-reviews endpoints.
 
@@ -136,15 +111,16 @@ class AppStoreOfficialProvider(PooledClient):
         if cursor is None:
             return self._first_page_url(app_id)
 
-        if (refusal := self._cursor_refusal(app_id, cursor)) is not None:
-            return PageResult(
-                error=FetchError(
-                    country=None,
-                    message=f"Refusing cursor {cursor!r}: {refusal}",
-                    kind="parse",
-                )
-            )
+        refusal = refuse_foreign_url(
+            cursor, host=self.API_HOST, exact_path=self._reviews_path(app_id)
+        )
+        if refusal is not None:
+            return refused_cursor_page(country=None, cursor=cursor, reason=refusal)
         return self._with_responses_included(cursor)
+
+    def _reviews_path(self, app_id: str) -> str:
+        """The one path a request, and so a cursor, may name for ``app_id``."""
+        return f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
 
     def _first_page_url(self, app_id: str) -> str:
         """The first page, with replies included and any server-side filters.
@@ -162,7 +138,7 @@ class AppStoreOfficialProvider(PooledClient):
             query["filter[rating]"] = ",".join(map(str, self._server_ratings))
         if self._server_territories:
             query["filter[territory]"] = ",".join(self._server_territories)
-        path = f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
+        path = self._reviews_path(app_id)
         return f"https://{self.API_HOST}{path}?{urlencode(query, safe=',[]')}"
 
     def _with_responses_included(self, url: str) -> str:
@@ -173,44 +149,6 @@ class AppStoreOfficialProvider(PooledClient):
         separator = "&" if query else "?"
         return f"{url}{separator}include=response"
 
-    def _cursor_refusal(self, app_id: str, cursor: str) -> str | None:
-        """Why this cursor cannot be requested, or None if it can.
-
-        ``urlsplit`` raises on a malformed IPv6 literal, so even parsing the
-        cursor has to be guarded: the validator exists to *report* a bad cursor,
-        and raising out of it defeats the point.
-
-        Control characters are refused before anything else: ``urlsplit`` strips
-        them, so a cursor could pass this check and still forge a record in a log
-        line that renders the URL.
-        """
-        if any(ch in cursor for ch in "\r\n\t"):
-            return "it contains control characters"
-        try:
-            parsed = urlsplit(cursor)
-        except ValueError as exc:
-            return f"it cannot be parsed as a URL ({exc})"
-        if parsed.scheme != "https":
-            return "expected an https URL"
-        if parsed.username is not None or parsed.password is not None:
-            return "user-info is not allowed"
-        if parsed.hostname != self.API_HOST:
-            return f"expected a URL on {self.API_HOST}"
-        try:
-            port = parsed.port
-        except ValueError as exc:
-            return f"it has an invalid port ({exc})"
-        if port not in (None, 443):
-            return f"expected the default port, got {port}"
-        expected_path = (
-            f"{self.CURSOR_PATH_PREFIX}{quote(app_id, safe='')}/customerReviews"
-        )
-        if parsed.path != expected_path:
-            return f"expected the exact path {expected_path}"
-        if parsed.fragment:
-            return "fragments are not allowed"
-        return None
-
     def _to_page(self, response: HttpResponse, app_id: str) -> PageResult:
         """Turn one HTTP outcome into a ``PageResult``.
 
@@ -220,7 +158,7 @@ class AppStoreOfficialProvider(PooledClient):
         failure = page_failure_from_response(
             response,
             country=None,
-            source_name="the App Store Connect API",
+            source_name=_SOURCE_NAME,
             credentialed=True,
         )
         if failure is not None:
@@ -229,15 +167,18 @@ class AppStoreOfficialProvider(PooledClient):
             payload = safe_json.loads(response.body)
             entries = self._read_review_entries(payload)
             next_cursor = self._read_next_cursor(payload)
-        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+        except UNREADABLE_PAYLOAD as exc:
             return malformed_page(
                 country=None,
-                source_name="App Store Connect",
+                source_name=_SOURCE_NAME,
                 status=response.status,
                 exc=exc,
             )
         responses_by_id = self._index_included_responses(payload)
-        return self._map_reviews(entries, responses_by_id, next_cursor, app_id)
+        parse_entry = partial(
+            self._parse_review, responses_by_id=responses_by_id, app_id=app_id
+        )
+        return page_from_entries(entries, parse_entry, next_cursor)
 
     def _read_review_entries(self, payload: Any) -> list[Any]:
         """The review entries; raises on a malformed envelope."""
@@ -260,25 +201,6 @@ class AppStoreOfficialProvider(PooledClient):
             if isinstance(resource.get("id"), str):
                 responses_by_id[resource["id"]] = resource
         return responses_by_id
-
-    def _map_reviews(
-        self,
-        entries: list[Any],
-        responses_by_id: dict[str, Any],
-        next_cursor: str | None,
-        app_id: str,
-    ) -> PageResult:
-        """The page's reviews; an unusable entry is skipped, not fatal."""
-        reviews: list[Review] = []
-        for entry in entries:
-            review = self._parse_review(entry, responses_by_id, app_id)
-            if review is not None:
-                reviews.append(review)
-        return PageResult(
-            reviews=reviews,
-            next_cursor=next_cursor,
-            skipped_reviews=len(entries) - len(reviews),
-        )
 
     def _read_next_cursor(self, payload: dict[str, Any]) -> str | None:
         """The ``links.next`` URL, or None on the last page.
@@ -310,21 +232,15 @@ class AppStoreOfficialProvider(PooledClient):
         invented, so an unusable one costs the review. Everything else degrades.
         """
         try:
-            review_id = entry["id"]
-            attributes = entry["attributes"]
-            if not review_id:
-                raise ValueError("no id, which deduplication keys on")
-            if not attributes.get("createdDate"):
-                raise ValueError("no createdDate")
-
+            review_id, attributes = _read_required_fields(entry)
             return Review(
                 store="appstore",
                 app_id=app_id,
                 country=normalise_country(attributes.get("territory")),
-                rating=self._rating(attributes["rating"]),
-                title=self._text(attributes.get("title")),
-                body=self._text(attributes.get("body")) or "",
-                author_name=self._text(attributes.get("reviewerNickname")) or "",
+                rating=expect_int(attributes["rating"], "rating"),
+                title=_trim_text(attributes.get("title")),
+                body=_trim_text(attributes.get("body")) or "",
+                author_name=_trim_text(attributes.get("reviewerNickname")) or "",
                 # Connect reports `createdDate` and nothing about edits.
                 created_at=datetime.fromisoformat(attributes["createdDate"]),
                 source="appstore_official",
@@ -335,12 +251,8 @@ class AppStoreOfficialProvider(PooledClient):
                     entry, review_id, responses_by_id
                 ),
             )
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
-            # The id, never the entry: an entry carries reviewerNickname, title
-            # and body, which do not belong in a log line.
-            _LOG.warning(
-                "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
-            )
+        except UNREADABLE_PAYLOAD as exc:
+            _log_skipped_review(entry, app_id, exc)
             return None
 
     def _read_developer_reply(
@@ -356,34 +268,13 @@ class AppStoreOfficialProvider(PooledClient):
             return None
         try:
             return parse_review_response(responses_by_id[response_id], review_id)
-        except (KeyError, TypeError, ValueError) as exc:
+        except UNREADABLE_PAYLOAD as exc:
             _LOG.warning(
                 "Ignored an unreadable developer reply on review %r: %s",
                 review_id,
                 exc,
             )
             return None
-
-    def _rating(self, value: Any) -> int:
-        """Accept only the integer 1..5 domain documented by Connect."""
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError("rating must be an integer")
-        if not 1 <= value <= 5:
-            raise ValueError(f"rating must be 1-5, got {value}")
-        return value
-
-    def _id(self, entry: Any) -> Any:
-        """This entry's review id, for a warning that names it and nothing else."""
-        return entry.get("id") if isinstance(entry, dict) else None
-
-    def _text(self, value: Any) -> str | None:
-        """Trimmed text, or None for anything absent, blank, or not a string.
-
-        Stricter than ``core.scraped.scraped_text``, which stringifies a number: a
-        version of ``1.5`` is worth reporting as ``"1.5"``, but a review title
-        that arrives as a number is nonsense and is better dropped than shown.
-        """
-        return (value.strip() or None) if isinstance(value, str) else None
 
 
 def _related_response_id(entry: dict[str, Any]) -> str | None:
@@ -399,3 +290,41 @@ def _related_response_id(entry: dict[str, Any]) -> str | None:
         return None
     response_id = response_data.get("id")
     return response_id if isinstance(response_id, str) else None
+
+
+def _trim_text(value: Any) -> str | None:
+    """Trimmed text, or None for anything absent, blank, or not a string.
+
+    Stricter than ``core.scraped.scraped_text``, which stringifies a number: a
+    version of ``1.5`` is worth reporting as ``"1.5"``, but a review title
+    that arrives as a number is nonsense and is better dropped than shown.
+    """
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def _read_required_fields(entry: Any) -> tuple[str, dict[str, Any]]:
+    """The review id and attributes, if the entry has the ones it cannot do without.
+
+    ``id`` keys deduplication and ``createdDate`` cannot be invented, so an entry
+    lacking either raises rather than being given a stand-in.
+    """
+    review_id = entry["id"]
+    attributes = entry["attributes"]
+    if not review_id:
+        raise ValueError("no id, which deduplication keys on")
+    if not attributes.get("createdDate"):
+        raise ValueError("no createdDate")
+    return review_id, attributes
+
+
+def _log_skipped_review(entry: Any, app_id: str, exc: Exception) -> None:
+    """Warn that a review was dropped, naming its id and never the entry.
+
+    An entry carries reviewerNickname, title and body, which do not belong in a
+    log line.
+    """
+    _LOG.warning(
+        "Skipped review %r for app %s: %s", log_safe_id(entry, "id"), app_id, exc
+    )

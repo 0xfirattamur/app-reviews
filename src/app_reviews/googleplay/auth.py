@@ -11,18 +11,87 @@ import json
 import time
 import urllib.parse
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
+from app_reviews.core.auth import BearerCache
 from app_reviews.core.classify import describe_failure, error_for, http_error
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
 from app_reviews.errors import AuthError, ParseError
-from app_reviews.models.config import GooglePlayAuth, ServiceAccountCredentials
+from app_reviews.models.config import GooglePlayAuth
+
+GOOGLE_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "sts.googleapis.com"})
+"""The only hosts a signed assertion may be POSTed to.
+
+An exact set, not a ``.googleapis.com`` suffix: that domain is a shared
+multi-tenant namespace, so a suffix match accepts ``storage.googleapis.com`` and
+any other Google-hosted endpoint as a destination for the caller's credential.
+``sts`` is here for workload identity federation.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceAccountCredentials:
+    """Validated credentials for Google Play service account authentication."""
+
+    client_email: str
+    private_key_pem: str = field(repr=False)
+    """Kept out of ``repr``; see ``ConnectCredentials.private_key``."""
+
+    token_uri: str
+
+    def __post_init__(self) -> None:
+        self._check_field_types()
+        if not self.client_email:
+            raise ValueError("client_email must not be empty.")
+        if not self.private_key_pem:
+            raise ValueError("private_key_pem must not be empty.")
+        if "-----BEGIN" not in self.private_key_pem:
+            raise ValueError("private_key_pem must be a PEM-encoded key.")
+        if not self.token_uri:
+            raise ValueError("token_uri must not be empty.")
+        self._check_token_uri()
+
+    def _check_field_types(self) -> None:
+        """Require every field to be a ``str`` before any check reads it.
+
+        On another type the checks below would raise a stdlib ``TypeError``
+        (``"-----BEGIN" in b"..."``, ``urlsplit(1)``) whose text may carry the
+        value. Only the field name and the expected type are reported.
+        """
+        for field_name in ("client_email", "private_key_pem", "token_uri"):
+            if not isinstance(getattr(self, field_name), str):
+                raise TypeError(f"{field_name} must be a str.")
+
+    def _check_token_uri(self) -> None:
+        """The token endpoint is checked, not trusted.
+
+        It arrives in the service-account file rather than from this package, and
+        it is where a JWT signed with ``private_key_pem`` gets POSTed, so it has
+        to be HTTPS, and it has to be Google.
+        """
+        parsed = urlsplit(self.token_uri)
+        if parsed.scheme != "https":
+            raise ValueError(
+                f"token_uri must be https, got a non-HTTPS URL "
+                f"({self.token_uri!r}); the signed assertion would travel in "
+                f"plaintext."
+            )
+        host = parsed.hostname or ""
+        if host not in GOOGLE_TOKEN_HOSTS:
+            raise ValueError(
+                f"token_uri host {host!r} is not a Google token endpoint; the "
+                f"assertion is a bearer credential and must not be sent "
+                f"elsewhere. Expected one of {sorted(GOOGLE_TOKEN_HOSTS)}."
+            )
+
 
 REJECTED_CREDENTIAL_ERRORS = frozenset(
     {"invalid_grant", "invalid_client", "unauthorized_client"}
@@ -87,10 +156,6 @@ class GoogleAuth(PooledClient):
     ERROR_BODY_CHARS = 200
     """How much of a failed exchange's body reaches the exception message."""
 
-    REFRESH_MARGIN_SECONDS = 60
-    """Re-exchange this long before expiry, so a request that starts just under
-    the wire does not arrive with a token that has already expired."""
-
     _FORM_HEADERS: ClassVar[dict[str, str]] = {
         "Content-Type": "application/x-www-form-urlencoded"
     }
@@ -117,21 +182,18 @@ class GoogleAuth(PooledClient):
         self._credentials = self._load(auth)
         super().__init__(http=http)
         self._key: RSAPrivateKey | None = None
-        self._bearer_header: str | None = None
-        self._expires_at = 0.0
+        self._bearer = BearerCache()
 
     def close(self) -> None:
         """Clear cached credentials and close only a pool created here."""
         self._key = None
-        self._bearer_header = None
-        self._expires_at = 0.0
+        self._bearer.clear()
         super().close()
 
     async def aclose(self) -> None:
         """Async equivalent of :meth:`close`."""
         self._key = None
-        self._bearer_header = None
-        self._expires_at = 0.0
+        self._bearer.clear()
         await super().aclose()
 
     def authorization_header(self) -> str:
@@ -142,7 +204,7 @@ class GoogleAuth(PooledClient):
         ``ParseError`` when a success carried no token. All of them
         ``AppReviewsError``.
         """
-        if (cached := self._cached_header()) is not None:
+        if (cached := self._bearer.get(time.time())) is not None:
             return cached
         url, body = self._build_token_request()
         response = self._http.post(
@@ -157,7 +219,7 @@ class GoogleAuth(PooledClient):
         CPU work with nothing to await, so it runs off the loop rather than
         blocking it on an RSA signature.
         """
-        if (cached := self._cached_header()) is not None:
+        if (cached := self._bearer.get(time.time())) is not None:
             return cached
         url, body = await asyncio.to_thread(self._build_token_request)
         response = await self._http.apost(
@@ -312,26 +374,8 @@ class GoogleAuth(PooledClient):
         )
         return self._credentials.token_uri, body
 
-    def _cached_header(self) -> str | None:
-        """The held token while it is still worth reusing, else None.
-
-        Returns the value rather than answering yes/no. A boolean ``_fresh()``
-        could not narrow ``self._bearer_header`` for the caller, so both entry points
-        needed a ``type: ignore`` on their return, silencing the checker on a
-        public method to work around a private one's shape.
-
-        The header is read once into a local so a concurrent ``close()`` cannot
-        turn the check's ``True`` into a returned ``None``.
-        """
-        header = self._bearer_header
-        if header is not None and time.time() < self._expires_at:
-            return header
-        return None
-
     def _store_token(self, token: str, expires_in: int) -> str:
-        self._bearer_header = f"Bearer {token}"
-        self._expires_at = time.time() + expires_in - self.REFRESH_MARGIN_SECONDS
-        return self._bearer_header
+        return self._bearer.store(token, expires_in, time.time())
 
     def _read_token(self, response: HttpResponse) -> tuple[str, int]:
         """The access token and its lifetime, or the error that explains why not.

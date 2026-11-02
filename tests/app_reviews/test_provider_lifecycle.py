@@ -80,13 +80,13 @@ class TestGoogleAuthLifecycle:
     def test_context_manager_closes_owned_http_and_clears_cached_secrets(self):
         auth = self._auth()
         auth._http.close = Mock()
-        auth._bearer_header = "Bearer cached"
+        auth._bearer.store("cached", 3600, 0.0)
 
         with auth as entered:
             assert entered is auth
 
         auth._http.close.assert_called_once_with()
-        assert auth._bearer_header is None
+        assert auth._bearer.get(0.0) is None
         assert auth._key is None
 
     async def test_injected_http_client_remains_caller_owned(self):
@@ -108,12 +108,12 @@ class TestConnectAuthLifecycle:
         with auth as entered:
             assert entered is auth
 
-        assert auth._token is None
+        assert auth._bearer.get(0.0) is None
         assert auth._key is None
 
         auth.authorization_header()
         async with auth as entered:
             assert entered is auth
 
-        assert auth._token is None
+        assert auth._bearer.get(0.0) is None
         assert auth._key is None

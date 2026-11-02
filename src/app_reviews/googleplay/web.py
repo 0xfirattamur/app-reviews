@@ -7,18 +7,30 @@ import logging
 import re
 import urllib.parse
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, ClassVar
 
 from app_reviews.core import safe_json
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.untyped import (
+    UNREADABLE_PAYLOAD,
+    UnreadablePayload,
+    expect_int,
+    expect_str,
+    log_safe_id,
+    page_from_entries,
+)
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import Source
 
 _LOG = logging.getLogger(__name__)
+
+_SOURCE_NAME = "the Google Play web endpoint"
+"""How both a failed status and a malformed body name this source."""
 
 
 class _ParseFailed(Exception):
@@ -31,24 +43,6 @@ class _RpcRejected(Exception):
     def __init__(self, rpc_status: object) -> None:
         super().__init__(f"RPC status {rpc_status}")
         self.rpc_status = rpc_status
-
-
-_UNUSABLE = (
-    AttributeError,
-    IndexError,
-    KeyError,
-    OSError,
-    OverflowError,
-    TypeError,
-    ValueError,
-)
-"""What reading an untyped payload can raise.
-
-``OverflowError`` and ``OSError`` are in here because ``datetime.fromtimestamp``
-raises them for a seconds value outside the platform's range, and neither is a
-``ValueError``, so a single absurd timestamp escaped all the way out of
-``fetch_page``, which ``iter_pages`` promises never happens.
-"""
 
 
 class GooglePlayScraperProvider(PooledClient):
@@ -161,7 +155,7 @@ class GooglePlayScraperProvider(PooledClient):
         failure = page_failure_from_response(
             response,
             country=None,
-            source_name="the Google Play web endpoint",
+            source_name=_SOURCE_NAME,
             credentialed=False,
         )
         if failure is not None:
@@ -170,14 +164,15 @@ class GooglePlayScraperProvider(PooledClient):
             entries, next_cursor = self._parse_envelope(response.body)
         except _RpcRejected as exc:
             return _rejected_page(exc, response.status)
-        except (_ParseFailed, *_UNUSABLE) as exc:
+        except (_ParseFailed, *UNREADABLE_PAYLOAD) as exc:
             return malformed_page(
                 country=None,
-                source_name="Google Play",
+                source_name=_SOURCE_NAME,
                 status=response.status,
                 exc=exc,
             )
-        return self._map_reviews(entries, next_cursor, app_id)
+        parse_entry = partial(self._parse_review, app_id=app_id)
+        return page_from_entries(entries, parse_entry, next_cursor)
 
     def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token in one batchexecute body.
@@ -195,7 +190,7 @@ class GooglePlayScraperProvider(PooledClient):
             if payload is None:
                 return [], None
             return self._read_review_entries(payload), self._read_next_cursor(payload)
-        except _UNUSABLE as exc:
+        except UNREADABLE_PAYLOAD as exc:
             raise _ParseFailed(f"Google Play response is malformed: {exc}") from exc
 
     def _find_rpc_payload(self, rows: Any) -> list[Any] | None:
@@ -225,21 +220,6 @@ class GooglePlayScraperProvider(PooledClient):
                 f"RPC payload is {type(payload).__name__}, expected an array"
             )
         return payload
-
-    def _map_reviews(
-        self, entries: list[Any], next_cursor: str | None, app_id: str
-    ) -> PageResult:
-        """The page's reviews; an unusable entry is skipped, not fatal."""
-        reviews: list[Review] = []
-        for entry in entries:
-            review = self._parse_review(entry, app_id)
-            if review is not None:
-                reviews.append(review)
-        return PageResult(
-            reviews=reviews,
-            next_cursor=next_cursor,
-            skipped_reviews=len(entries) - len(reviews),
-        )
 
     def _read_review_entries(self, payload: list[Any]) -> list[Any]:
         """The review entries; absent/null is empty, wrong present types fail."""
@@ -285,7 +265,7 @@ class GooglePlayScraperProvider(PooledClient):
                 store="googleplay",
                 app_id=app_id,
                 country=None,
-                rating=self._rating(entry[self._RATING]),
+                rating=expect_int(entry[self._RATING], "rating"),
                 title=None,  # Play reviews have no title
                 body=self._body(entry[self._BODY]),
                 author_name=self._author_name(entry[self._AUTHOR]),
@@ -296,43 +276,26 @@ class GooglePlayScraperProvider(PooledClient):
                 source="googleplay_scraper",
                 raw=entry,
                 fetched_at=datetime.now(tz=UTC),
-                id=self._string(entry[self._ID], "review id"),
+                id=expect_str(entry[self._ID], "review id"),
             )
-        except _UNUSABLE as exc:
+        except UNREADABLE_PAYLOAD as exc:
             _LOG.warning(
-                "Skipped review %r for app %s: %s", self._id(entry), app_id, exc
+                "Skipped review %r for app %s: %s",
+                log_safe_id(entry, self._ID),
+                app_id,
+                exc,
             )
             return None
-
-    def _rating(self, value: Any) -> int:
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError("rating must be an integer")
-        return value
-
-    def _string(self, value: Any, field: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError(f"{field} is {type(value).__name__}, expected a string")
-        return value
 
     def _body(self, value: Any) -> str:
         if value is None:
             return ""
-        return self._string(value, "review body")
+        return expect_str(value, "review body")
 
     def _author_name(self, value: Any) -> str:
         if not isinstance(value, list):
-            raise TypeError(
-                f"author container is {type(value).__name__}, expected an array"
-            )
-        return self._string(value[self._AUTHOR_NAME], "author name")
-
-    def _id(self, entry: Any) -> Any:
-        """This entry's review id, so a warning can name it and nothing else.
-
-        Logging the entry itself put the reviewer's name and the URL of their
-        profile photo into a warning line.
-        """
-        return entry[self._ID] if isinstance(entry, list) and entry else None
+            raise UnreadablePayload("author container", "an array", value)
+        return expect_str(value[self._AUTHOR_NAME], "author name")
 
     def _parse_created_at(self, timestamp: Any) -> datetime:
         """Read ``[seconds, nanos]`` as one instant, keeping sub-second precision."""
@@ -346,7 +309,7 @@ class GooglePlayScraperProvider(PooledClient):
         """The version the reviewer was running, where the entry reports one."""
         if len(entry) <= self._APP_VERSION or entry[self._APP_VERSION] in (None, ""):
             return None
-        return self._string(entry[self._APP_VERSION], "app version")
+        return expect_str(entry[self._APP_VERSION], "app version")
 
 
 _RPC_STATUS_SLOT = 5

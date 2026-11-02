@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
 from typing import Any
 
+from app_reviews.models._json import fields_to_dict
 from app_reviews.models.types import Store
 
 
@@ -88,13 +89,7 @@ class AppMetadata:
 
     def to_dict(self) -> dict[str, Any]:
         """Return every metadata field as a JSON-safe plain dictionary."""
-        values: dict[str, Any] = {}
-        for model_field in fields(self):
-            value = getattr(self, model_field.name)
-            values[model_field.name] = (
-                value.isoformat() if isinstance(value, datetime) else value
-            )
-        return values
+        return fields_to_dict(self)
 
 
 @dataclass(frozen=True, slots=True)

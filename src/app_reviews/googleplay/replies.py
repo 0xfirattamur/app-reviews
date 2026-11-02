@@ -16,14 +16,16 @@ Play has no API to delete a reply. The service account needs the Play Console
 from __future__ import annotations
 
 import json
+from typing import Any
 from urllib.parse import quote
 
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
+from app_reviews.core.untyped import UNREADABLE_PAYLOAD
 from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError, ReplyRejectedError
 from app_reviews.googleplay.api import PlayAPIClient
-from app_reviews.googleplay.developer_api import parse_developer_reply
+from app_reviews.googleplay.timestamps import parse_protobuf_timestamp
 from app_reviews.models.reply import ReviewReply
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
 
@@ -113,24 +115,17 @@ class GooglePlayReplies(PlayAPIClient):
         """The review's ``developerComment``, if it has one."""
         raise_for_http_failure(response, _API, credentialed=True)
         try:
-            for comment in response.json().get("comments", []):
-                developer = comment.get("developerComment")
-                if developer is not None:
-                    return parse_developer_reply(
-                        review_id, developer["text"], developer.get("lastModified")
-                    )
-        except (
-            AttributeError,
-            KeyError,
-            OverflowError,
-            OSError,
-            TypeError,
-            ValueError,
-        ) as exc:
+            reply_comment = find_developer_comment(response.json().get("comments", []))
+            if reply_comment is None:
+                return None
+            developer = reply_comment["developerComment"]
+            return parse_developer_reply(
+                review_id, developer["text"], developer.get("lastModified")
+            )
+        except UNREADABLE_PAYLOAD as exc:
             raise ParseError(
                 f"Malformed review from {_API}: {exc}", status=response.status
             ) from exc
-        return None
 
 
 def _check_length(text: str) -> None:
@@ -148,3 +143,36 @@ def _store_error(body: str) -> StoreError:
     if not isinstance(entry, dict):
         return StoreError()
     return StoreError.of(entry.get("status"), entry.get("message"))
+
+
+def find_developer_comment(comments: Any) -> dict[str, Any] | None:
+    """The first ``comments`` entry whose ``developerComment`` is an object, or None.
+
+    A stray non-object entry, and an entry whose ``developerComment`` is null or
+    not an object, hold no reply, so both are skipped rather than raised on.
+    """
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        if isinstance(comment.get("developerComment"), dict):
+            return comment
+    return None
+
+
+def parse_developer_reply(review_id: str, text: Any, last_modified: Any) -> ReviewReply:
+    """A Play ``developerComment`` (or a reply write's ``result``) as a reply.
+
+    Play applies a reply immediately and gives it no id of its own, so it is
+    always ``"published"`` with ``reply_id=None``.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"reply text is {type(text).__name__}, expected a string")
+    return ReviewReply(
+        review_id=review_id,
+        reply_id=None,
+        text=text,
+        state="published",
+        updated_at=(
+            None if last_modified is None else parse_protobuf_timestamp(last_modified)
+        ),
+    )

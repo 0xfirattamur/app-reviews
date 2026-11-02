@@ -252,6 +252,39 @@ class TestGetReply:
         with pytest.raises(ParseError):
             _replies(api).get_reply("gp-1", package_name="com.example.app")
 
+    @pytest.mark.parametrize("stray", [None, "text", 7, ["developerComment"]])
+    async def test_a_stray_non_object_comment_is_skipped(self, twin, stray):
+        developer = {"developerComment": {"text": "Thanks!"}}
+        api = _Api(httpx.Response(200, json=_review(stray, _USER, developer)))
+
+        reply = await twin.call(
+            _replies(api), "get_reply", "gp-1", package_name="com.example.app"
+        )
+
+        assert reply is not None
+        assert reply.text == "Thanks!"
+
+    async def test_a_null_developer_comment_is_no_reply(self, twin):
+        api = _Api(httpx.Response(200, json=_review(_USER, {"developerComment": None})))
+
+        reply = await twin.call(
+            _replies(api), "get_reply", "gp-1", package_name="com.example.app"
+        )
+
+        assert reply is None
+
+    async def test_a_null_developer_comment_is_skipped_for_a_later_real_one(self, twin):
+        real = {"developerComment": {"text": "Thanks!"}}
+        body = _review(_USER, {"developerComment": None}, real)
+        api = _Api(httpx.Response(200, json=body))
+
+        reply = await twin.call(
+            _replies(api), "get_reply", "gp-1", package_name="com.example.app"
+        )
+
+        assert reply is not None
+        assert reply.text == "Thanks!"
+
     async def test_async_get_reply_matches(self):
         developer = {"developerComment": {"text": "Hi"}}
         api = _Api(httpx.Response(200, json=_review(_USER, developer)))

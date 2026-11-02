@@ -547,7 +547,7 @@ class TestAReviewWithADeveloperReply:
 
         assert page.reviews[0].developer_reply is None
 
-    @pytest.mark.parametrize("reply", [{"text": 5}, {}, "not-an-object"])
+    @pytest.mark.parametrize("reply", [{"text": 5}, {}, "not-an-object", None])
     def test_an_unreadable_reply_costs_only_the_reply(self, reply):
         entry = self._replied()
         entry["comments"][0]["developerComment"] = reply

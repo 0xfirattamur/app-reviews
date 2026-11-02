@@ -1,9 +1,10 @@
 """Canonical normalized review model."""
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from app_reviews.models._json import fields_to_dict
 from app_reviews.models.reply import ReviewReply
 from app_reviews.models.types import Source, Store
 
@@ -31,10 +32,7 @@ class DeviceMetadata:
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-safe plain dict of every field."""
-        return {name: getattr(self, name) for name in _DEVICE_FIELD_NAMES}
-
-
-_DEVICE_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(DeviceMetadata))
+        return fields_to_dict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,21 +151,6 @@ class Review:
         with ``str()`` yields a space where ISO wants a ``T``, which strict
         parsers downstream reject.
         """
-        out: dict[str, Any] = {}
-        for name in _FIELD_NAMES:
-            if name == "raw" and not include_raw:
-                continue
-            out[name] = _to_json_value(getattr(self, name))
-        return out
-
-
-def _to_json_value(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, ReviewReply | DeviceMetadata):
-        return value.to_dict()
-    return value
-
-
-_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Review))
-"""Resolved once at import rather than per conversion."""
+        return fields_to_dict(
+            self, exclude=() if include_raw else ("raw",), by_reference=("raw",)
+        )

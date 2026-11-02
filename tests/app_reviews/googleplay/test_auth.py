@@ -328,7 +328,7 @@ class TestTheAccessTokenIsChecked:
             await _auth_on(_token(bad)).aauthorization_header()
 
     def test_a_concurrent_close_cannot_produce_a_bearer_none(self, monkeypatch):
-        """``close()`` lands between the freshness check and the return."""
+        """``close()`` lands as the clock is read, before the cache is consulted."""
         auth = _auth_on(_token())
         held = auth.authorization_header()
 
@@ -341,7 +341,7 @@ class TestTheAccessTokenIsChecked:
             close_then_report_a_time_before_expiry,
         )
 
-        assert auth._cached_header() == held
+        assert auth.authorization_header() == held
 
 
 class TestTheTokenLifetimeIsClamped:
@@ -637,7 +637,7 @@ class TestTheKeyIsParsedOnce:
             "app_reviews.googleplay.auth.serialization.load_pem_private_key", counting
         ):
             for _ in range(3):
-                auth._expires_at = 0.0
+                auth._bearer.clear()
                 auth.authorization_header()
 
         assert parses["n"] == 1
@@ -658,14 +658,14 @@ class TestExpiresIn:
         auth = self._header_with({"access_token": "T", "expires_in": value})
 
         assert auth.authorization_header() == "Bearer T"
-        assert auth._expires_at > 0
+        assert auth._bearer._expires_at > 0
 
     def test_a_numeric_string_is_accepted(self):
         auth = self._header_with({"access_token": "T", "expires_in": "120"})
         auth.authorization_header()
 
         # 120s minus the refresh margin, so well under the 3600 default.
-        assert auth._expires_at < __import__("time").time() + 200
+        assert auth._bearer._expires_at < __import__("time").time() + 200
 
 
 class TestAsyncSigningStaysOffTheLoop:

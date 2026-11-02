@@ -6,15 +6,21 @@ import logging
 import threading
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from urllib.parse import quote
 from xml.etree import ElementTree
 
 from app_reviews.appstore.atom import atom_entries
 from app_reviews.core import safe_json
-from app_reviews.core.classify import page_failure_from_response
+from app_reviews.core.classify import (
+    malformed_page,
+    page_failure_from_response,
+    refused_cursor_page,
+)
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.untyped import UNREADABLE_PAYLOAD, page_from_entries
 from app_reviews.core.validation import require_path_segment
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
@@ -26,6 +32,9 @@ _LOG = logging.getLogger(__name__)
 
 _THROTTLE_STATUSES = frozenset({403})
 """The feed answers 403 while it throttles an address."""
+
+_SOURCE_NAME = "the App Store RSS feed"
+"""How both a failed status and a malformed body name this source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,12 +159,8 @@ class AppStoreScraperProvider(PooledClient):
         except (TypeError, ValueError):
             page = 0
         if page < 1:
-            return PageResult(
-                error=FetchError(
-                    country=country,
-                    message=f"Unusable RSS cursor {cursor!r}: expected a page number",
-                    kind="parse",
-                )
+            return refused_cursor_page(
+                country=country, cursor=cursor, reason="expected a page number"
             )
         if page > self.MAX_PAGES:
             return PageResult()
@@ -167,16 +172,14 @@ class AppStoreScraperProvider(PooledClient):
             return failure
         try:
             entries = self._read_review_entries(safe_json.loads(response.body))
-        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
-            return PageResult(
-                error=FetchError(
-                    country=ref.country,
-                    message=f"Malformed App Store RSS response: {exc}",
-                    kind="parse",
-                    status=response.status,
-                )
+        except UNREADABLE_PAYLOAD as exc:
+            return malformed_page(
+                country=ref.country,
+                source_name=_SOURCE_NAME,
+                status=response.status,
+                exc=exc,
             )
-        return self._build_page(entries, ref, "json")
+        return self._build_feed_page(entries, ref, "json")
 
     def _xml_page(
         self, response: HttpResponse, ref: _PageRef, *, fallback: PageResult
@@ -203,35 +206,31 @@ class AppStoreScraperProvider(PooledClient):
         if not entries and fallback.error is None:
             return fallback
         _LOG.info("App Store RSS XML answered %d entries for %s", len(entries), ref)
-        return self._build_page(entries, ref, "xml")
+        return self._build_feed_page(entries, ref, "xml")
 
     def _failure(self, response: HttpResponse, country: str) -> PageResult | None:
         """The failed page for an exchange that got no usable answer, else None."""
         return page_failure_from_response(
             response,
             country=country,
-            source_name="the App Store RSS feed",
+            source_name=_SOURCE_NAME,
             credentialed=False,
             rate_limited_statuses=_THROTTLE_STATUSES,
         )
 
-    def _build_page(
+    def _build_feed_page(
         self, entries: list[Any], ref: _PageRef, feed_format: FeedFormat
     ) -> PageResult:
-        reviews: list[Review] = []
-        for entry in entries:
-            review = self._parse_review(entry, ref.app_id, ref.country)
-            if review is not None:
-                reviews.append(review)
+        """The page ``entries`` map to, stamped with the feed that sent them."""
         # Gated on what the feed sent, not on what survived mapping: entries that
         # all fail to map still mean Apple has more.
         has_more_pages = bool(entries) and ref.page < self.MAX_PAGES
-        return PageResult(
-            reviews=reviews,
-            next_cursor=str(ref.page + 1) if has_more_pages else None,
-            skipped_reviews=len(entries) - len(reviews),
-            feed_format=feed_format,
+        next_cursor = str(ref.page + 1) if has_more_pages else None
+        parse_entry = partial(
+            self._parse_review, app_id=ref.app_id, country=ref.country
         )
+        page = page_from_entries(entries, parse_entry, next_cursor)
+        return replace(page, feed_format=feed_format)
 
     def _needs_xml(self, response: HttpResponse, result: PageResult) -> bool:
         """The JSON feed answered 2xx, but with no entries or an unreadable body."""

@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, time
 from math import isfinite
 from typing import Any
 
+from app_reviews.models._json import fields_to_dict
 from app_reviews.models._validate import require_count
 from app_reviews.models.review import Review
 from app_reviews.models.types import (
@@ -39,13 +40,21 @@ class FetchError:
 
     def to_dict(self) -> dict[str, Any]:
         """Return the complete JSON-safe error contract."""
-        return {
-            "country": self.country,
-            "message": self.message,
-            "kind": self.kind,
-            "status": self.status,
-            "retryable": self.retryable,
-        }
+        return {**fields_to_dict(self), "retryable": self.retryable}
+
+
+_OUTCOME_KEY_ORDER = (
+    "country",
+    "pages",
+    "reviews_fetched",
+    "skipped_reviews",
+    "stopped_because",
+    "elapsed",
+    "error",
+    "feed_format",
+    "xml_fallback_error",
+)
+"""The key order ``to_dict`` has always emitted, which consumers write out as is."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,21 +92,7 @@ class CountryOutcome:
 
     def to_dict(self) -> dict[str, Any]:
         """Return the complete JSON-safe per-country outcome."""
-        return {
-            "country": self.country,
-            "pages": self.pages,
-            "reviews_fetched": self.reviews_fetched,
-            "skipped_reviews": self.skipped_reviews,
-            "stopped_because": self.stopped_because,
-            "elapsed": self.elapsed,
-            "error": self.error.to_dict() if self.error is not None else None,
-            "feed_format": self.feed_format,
-            "xml_fallback_error": (
-                self.xml_fallback_error.to_dict()
-                if self.xml_fallback_error is not None
-                else None
-            ),
-        }
+        return fields_to_dict(self, key_order=_OUTCOME_KEY_ORDER)
 
 
 @dataclass(frozen=True, slots=True)

@@ -242,12 +242,12 @@ class TestTheClockIsReadOnce:
         payload += "=" * (-len(payload) % 4)
         signed_exp = json.loads(base64.urlsafe_b64decode(payload))["exp"]
 
-        from app_reviews.appstore.auth import REFRESH_MARGIN_SECONDS
+        from app_reviews.core.auth import REFRESH_MARGIN_SECONDS
 
-        assert auth._expires_at == signed_exp - REFRESH_MARGIN_SECONDS
+        assert auth._bearer._expires_at == signed_exp - REFRESH_MARGIN_SECONDS
 
     def test_it_stops_using_the_token_before_apple_would_reject_it(self, fake_clock):
-        from app_reviews.appstore.auth import REFRESH_MARGIN_SECONDS
+        from app_reviews.core.auth import REFRESH_MARGIN_SECONDS
 
         auth = ConnectAuth(_creds())
         first = auth.authorization_header()
@@ -257,3 +257,24 @@ class TestTheClockIsReadOnce:
 
         fake_clock.advance(2)
         assert auth.authorization_header() != first  # margin crossed
+
+
+class TestBearerCache:
+    def test_it_holds_a_header_until_the_refresh_margin(self):
+        from app_reviews.core.auth import REFRESH_MARGIN_SECONDS, BearerCache
+
+        cache = BearerCache()
+        assert cache.get(0.0) is None
+
+        assert cache.store("T", 600, 100.0) == "Bearer T"
+        assert cache.get(100.0 + 600 - REFRESH_MARGIN_SECONDS - 1) == "Bearer T"
+        assert cache.get(100.0 + 600 - REFRESH_MARGIN_SECONDS) is None
+
+    def test_clear_forgets_the_header(self):
+        from app_reviews.core.auth import BearerCache
+
+        cache = BearerCache()
+        cache.store("T", 600, 0.0)
+        cache.clear()
+
+        assert cache.get(0.0) is None

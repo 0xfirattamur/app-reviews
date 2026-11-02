@@ -121,7 +121,7 @@ class TestTheTokenLifetimeMatchesApplesCap:
     def test_a_concurrent_close_cannot_produce_a_bearer_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``close()`` lands between the freshness check and the return."""
+        """``close()`` lands as the clock is read, before the cache is consulted."""
         auth = ConnectAuth(connect_credentials())
         held = auth.authorization_header()
 
@@ -134,4 +134,7 @@ class TestTheTokenLifetimeMatchesApplesCap:
             close_then_report_a_time_before_expiry,
         )
 
-        assert auth.authorization_header() == held
+        header = auth.authorization_header()
+
+        assert header.startswith("Bearer eyJ")
+        assert header != held

@@ -197,12 +197,26 @@ def page_failure_from_response(
 def malformed_page(
     *, country: str | None, source_name: str, status: int, exc: Exception
 ) -> PageResult:
-    """The failed page for a 2xx body whose envelope could not be read."""
+    """The failed page for a 2xx body whose envelope could not be read.
+
+    ``source_name`` is the same phrase ``page_failure_from_response`` completes
+    its status message with, so one source reads the same in both.
+    """
     error = FetchError(
         country=country,
-        message=f"Malformed {source_name} response: {exc}",
+        message=f"Malformed response from {source_name}: {exc}",
         kind="parse",
         status=status,
+    )
+    return PageResult(error=error)
+
+
+def refused_cursor_page(*, country: str | None, cursor: str, reason: str) -> PageResult:
+    """The failed page for a cursor that is refused without sending a request."""
+    error = FetchError(
+        country=country,
+        message=f"Refusing cursor {cursor!r}: {reason}",
+        kind="parse",
     )
     return PageResult(error=error)
 
