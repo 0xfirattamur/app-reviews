@@ -119,7 +119,7 @@ class AppStoreVersions(ConnectAPIClient):
     def _parse_versions_page(
         self, response: HttpResponse, app_id: str
     ) -> tuple[list[AppStoreVersion], str | None]:
-        raise_for_http_failure(response, _API)
+        raise_for_http_failure(response, _API, credentialed=True)
         try:
             body = response.json()
             notes = self._notes_by_localization(body.get("included") or [])

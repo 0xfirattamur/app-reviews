@@ -12,6 +12,7 @@ from datetime import timedelta
 
 import pytest
 
+from app_reviews.core.reviews import _split_at_room
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
 from tests.app_reviews.factories import (
@@ -22,6 +23,21 @@ from tests.app_reviews.factories import (
     make_page,
     make_review,
 )
+
+
+@pytest.mark.parametrize(
+    ("batch", "room", "expected"),
+    [
+        pytest.param([1, 2, 3], None, ([1, 2, 3], False), id="no-limit"),
+        pytest.param([1, 2, 3], 5, ([1, 2, 3], False), id="room-to-spare"),
+        pytest.param([1, 2, 3], 3, ([1, 2, 3], False), id="exactly-full"),
+        pytest.param([1, 2, 3], 2, ([1, 2], True), id="one-left-over"),
+        pytest.param([1, 2, 3], 0, ([], True), id="no-room-left"),
+        pytest.param([], 0, ([], False), id="empty-page-with-no-room"),
+    ],
+)
+def test_split_at_room_cuts_a_page_at_the_callers_limit(batch, room, expected):
+    assert _split_at_room(batch, room) == expected
 
 
 class TestIterReviews:

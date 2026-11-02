@@ -128,7 +128,7 @@ class AppStoreReplies(ConnectAPIClient):
 
     def _read(self, response: HttpResponse, review_id: str) -> ReviewReply | None:
         """``data: null`` is a review without a reply."""
-        raise_for_http_failure(response, _API)
+        raise_for_http_failure(response, _API, credentialed=True)
         try:
             data = response.json()["data"]
             return None if data is None else parse_review_response(data, review_id)

@@ -166,7 +166,10 @@ class GooglePlayOfficialProvider(PooledClient):
         per review, so there is no country to attribute a failure to.
         """
         failure = page_failure_from_response(
-            response, country=None, source_name="the Google Play Developer API"
+            response,
+            country=None,
+            source_name="the Google Play Developer API",
+            credentialed=True,
         )
         if failure is not None:
             return failure

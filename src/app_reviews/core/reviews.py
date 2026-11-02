@@ -28,6 +28,7 @@ from app_reviews.core.paging import (
     StopPolicy,
     is_per_country,
     orders_newest_first,
+    plan_limits,
     prefer_stop_reason,
     with_stop_reason,
 )
@@ -73,12 +74,179 @@ class _FetchPlan:
     worker_count: int
 
 
+def _failed_page(country: str, exc: AppReviewsError) -> PageResult:
+    """A page carrying a raised package error, for the rungs that report errors.
+
+    The sync and async page fetches both convert here, so the error a caller
+    sees does not depend on which twin raised it. ``country`` is the provider
+    argument, where ``""`` means a global source and reports as no country.
+    """
+    return PageResult(
+        error=fetch_error_from_exception(country=country or None, exc=exc)
+    )
+
+
 def _first_failure(futures: list[Future[Any]]) -> BaseException | None:
     """The exception of the first finished future that failed, in submit order."""
     for future in futures:
         if future.done() and not future.cancelled() and future.exception():
             return future.exception()
     return None
+
+
+def _country_arg(
+    source: Source, country: Country | str | None, default_country: str
+) -> str:
+    """Resolve the country argument for a single-country provider call.
+
+    Global sources ignore it, so pass the ``""`` sentinel they expect.
+    """
+    if not is_per_country(source):
+        return ""
+    return normalise_country(country) or default_country
+
+
+def _country_list(
+    source: Source,
+    countries: Collection[Country | str] | None,
+    default_country: str,
+) -> list[str]:
+    """The fan-out ``_country_arg`` is the singular of: which countries to walk.
+
+    Global sources collapse to a single ``[""]`` call. Same convention and
+    same source of truth as ``_country_arg`` and ``_outcome_country``.
+
+    Entries are normalised and deduped first. Every entry costs a full walk,
+    so ``["us", "US", "USA"]`` left as-is would fetch one storefront three
+    times and report it under three names in ``outcomes``. First-appearance
+    order is kept, which matters because a frozenset region group has none
+    of its own and callers do read ``outcomes`` positionally.
+    """
+    if not is_per_country(source):
+        if countries is not None:
+            _LOG.warning(
+                "%s has no country dimension, so countries=%r is ignored; "
+                "one request already covers every territory",
+                source,
+                list(countries),
+            )
+        return [""]
+    if countries is None:
+        return [default_country]
+    return list(dict.fromkeys(countries))
+
+
+def _normalised_selection(
+    countries: Collection[Country | str] | None,
+) -> list[str] | None:
+    """Normalise an explicit selection while preserving omission vs empty."""
+    if countries is None:
+        return None
+    resolved = (normalise_country(country) for country in countries)
+    return list(dict.fromkeys(country for country in resolved if country))
+
+
+def _outcome_country(source: Source, country: str) -> str | None:
+    """None for global sources, which have no country to report.
+
+    Keyed off ``core.paging.is_per_country``, the same canonical convention
+    ``_country_arg`` uses and ``resolve_countries`` documents, rather than
+    off the ``""`` sentinel value in hand.
+    """
+    return country if is_per_country(source) else None
+
+
+def _log_stream_error(page: PageResult, country: str) -> None:
+    """Report a failed page on a streaming walk, which cannot return errors."""
+    if page.error is not None:
+        _LOG.warning(
+            "iter_reviews: %s walk for %r failed: %s",
+            page.error.kind,
+            country or "global",
+            page.error.message,
+        )
+
+
+def _report_and_select_reviews(
+    page: PageResult,
+    country: str,
+    matches_since: Callable[[Review], bool] | None,
+    on_page: Callable[[PageResult], None] | None,
+) -> list[Review]:
+    """One streamed page's side effects, then the reviews of it that pass ``since``.
+
+    The error is logged and ``on_page`` called before any review of the page is
+    yielded, whether or not the page has reviews.
+    """
+    _log_stream_error(page, country)
+    if on_page is not None:
+        on_page(page)
+    if matches_since is None:
+        return page.reviews
+    return [review for review in page.reviews if matches_since(review)]
+
+
+def _split_at_room(batch: list[Review], room: int | None) -> tuple[list[Review], bool]:
+    """The reviews of ``batch`` that fit in ``room``, and whether any were left over."""
+    if room is None:
+        return batch, False
+    return batch[:room], len(batch) > room
+
+
+class _CountryWalk:
+    """One country's pages as ``fetch`` sees them: filtered, then collected.
+
+    The clock starts at construction, so build this immediately before draining
+    the pages.
+    """
+
+    def __init__(self, country: str | None, plan: _FetchPlan) -> None:
+        self._collector = CountryCollector(country)
+        self._plan = plan
+        self._matching_review_count = 0
+
+    def drain(self, pages: Iterator[PageResult]) -> None:
+        """Take pages until one ends the walk."""
+        for page in pages:
+            if self._step(page):
+                return
+
+    async def adrain(self, pages: AsyncIterator[PageResult]) -> None:
+        """Async twin of ``drain``."""
+        async for page in pages:
+            if self._step(page):
+                return
+
+    def _step(self, page: PageResult) -> bool:
+        """Fold one page in; True once it is the walk's last."""
+        fetched_review_count = len(page.reviews)
+        page = self._retain_matching_reviews(page)
+        self._collector.add(page, reviews_fetched=fetched_review_count)
+        return page.stopped_because is not None
+
+    def reviews_and_outcome(self) -> tuple[list[Review], CountryOutcome]:
+        """The collected reviews and the outcome summarising the walk."""
+        return self._collector.reviews, self._collector.outcome()
+
+    def _retain_matching_reviews(self, page: PageResult) -> PageResult:
+        """Keep only matching reviews, and stamp ``limit`` once enough matched."""
+        plan = self._plan
+        if plan.matches_filters is None:
+            return page
+        matching_reviews = [
+            review for review in page.reviews if plan.matches_filters(review)
+        ]
+        self._matching_review_count += len(matching_reviews)
+        page = dataclasses.replace(page, reviews=matching_reviews)
+        has_enough_matches = (
+            plan.matching_limit is not None
+            and self._matching_review_count >= plan.matching_limit
+        )
+        if has_enough_matches:
+            page = with_stop_reason(
+                page, prefer_stop_reason(page.stopped_because, "limit")
+            )
+        return page
 
 
 class BaseReviews(PooledClient, abc.ABC):
@@ -117,6 +285,28 @@ class BaseReviews(PooledClient, abc.ABC):
     ``AuthError`` is the carve-out at every rung: it is raised, not reported. An
     unusable credential is configuration, identical for every country and page,
     so reporting it N times would bury the one fact that matters.
+
+    **Subclass hooks.** A store's client supplies its providers and the few facts
+    the ladder cannot derive from ``provider.source``:
+
+    - ``_build_provider`` (abstract): return the ``ReviewProvider`` for this
+      client's configuration, passing ``http=self._http`` so every request shares
+      the client's pool, retry policy and rate limiter. May read credentials and
+      block; ``source`` and the ladder call it at most once and cache the result.
+    - ``_abuild_provider``: same contract from an async context. Defaults to
+      ``_build_provider``; override when construction does blocking I/O (a key
+      file read, a token exchange) so the event loop is not held.
+    - ``_is_newest_first(provider)``: whether this client's pages arrive
+      newest-first. Defaults to ``orders_newest_first(provider.source)``;
+      override when the caller can change the order, since every early stop
+      (``since``, a newest-first ``limit``) trusts the answer.
+    - ``_validate_country_argument(country)`` and
+      ``_validate_countries_argument(countries)``: raise ``ValueError`` for a
+      country the store cannot honour, before any provider is built or I/O
+      done. Default to accepting everything; override for stores with no
+      country axis.
+    - ``DEFAULT_COUNTRY``: the storefront walked when a per-country source is
+      given none.
     """
 
     DEFAULT_COUNTRY = "us"
@@ -143,10 +333,6 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> None:
         super().__init__(proxy=proxy, retry=retry, http=http, rate_limiter=rate_limiter)
         self._cached_provider: ReviewProvider | None = None
-
-    @property
-    def _provider_kwargs(self) -> dict[str, Any]:
-        return {"http": self._http}
 
     @abc.abstractmethod
     def _build_provider(self) -> ReviewProvider: ...
@@ -200,10 +386,12 @@ class BaseReviews(PooledClient, abc.ABC):
         only home for that fact.
         """
         self._validate_countries_argument(countries)
-        selection = self._normalised_selection(countries)
+        selection = _normalised_selection(countries)
         if selection == []:
             return []
-        return self._country_list(self._ensure_provider(), selection)
+        return _country_list(
+            self._ensure_provider().source, selection, self.DEFAULT_COUNTRY
+        )
 
     # ---- rung 1: one provider page ------------------------------------------
 
@@ -226,7 +414,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """
         self._validate_country_argument(country)
         provider = self._ensure_provider()
-        country_arg = self._country_arg(provider, country)
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
         return self._page(provider, app_id, country_arg, cursor)
 
     async def afetch_page(
@@ -239,7 +427,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """Async equivalent of ``fetch_page``."""
         self._validate_country_argument(country)
         provider = await self._aensure_provider()
-        country_arg = self._country_arg(provider, country)
+        country_arg = _country_arg(provider.source, country, self.DEFAULT_COUNTRY)
         return await self._apage(provider, app_id, country_arg, cursor)
 
     # ---- rung 2: one country, paginated ------------------------------------
@@ -274,16 +462,14 @@ class BaseReviews(PooledClient, abc.ABC):
         ``max_pages`` is the maximum number of provider pages in this country walk,
         not HTTP attempts. Zero performs no I/O; omission uses the safety ceiling.
         """
-        self._validate_country_argument(country)
-        require_non_negative(limit, "limit")
-        page_budget = self._page_budget(max_pages)
-        if limit == 0 or page_budget == 0:
+        page_budget = self._validate_page_walk(country, limit, max_pages)
+        if page_budget is None:
             return
         provider = self._ensure_provider()
         yield from self._walk(
             provider,
             app_id,
-            self._country_arg(provider, country),
+            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
             cursor,
             since,
             limit,
@@ -301,16 +487,14 @@ class BaseReviews(PooledClient, abc.ABC):
         max_pages: int | None = None,
     ) -> AsyncIterator[PageResult]:
         """Async equivalent of ``iter_pages``, with identical semantics."""
-        self._validate_country_argument(country)
-        require_non_negative(limit, "limit")
-        page_budget = self._page_budget(max_pages)
-        if limit == 0 or page_budget == 0:
+        page_budget = self._validate_page_walk(country, limit, max_pages)
+        if page_budget is None:
             return
         provider = await self._aensure_provider()
         walk = self._awalk(
             provider,
             app_id,
-            self._country_arg(provider, country),
+            _country_arg(provider.source, country, self.DEFAULT_COUNTRY),
             cursor,
             since,
             limit,
@@ -319,6 +503,39 @@ class BaseReviews(PooledClient, abc.ABC):
         async with contextlib.aclosing(walk):
             async for page in walk:
                 yield page
+
+    def _validate_page_walk(
+        self, country: Country | str | None, limit: int | None, max_pages: int | None
+    ) -> int | None:
+        """Validate ``iter_pages`` arguments; the page budget, or None for no I/O.
+
+        A zero ``limit`` or a zero page budget returns before a provider is
+        built, so it never authenticates.
+        """
+        self._validate_country_argument(country)
+        require_non_negative(limit, "limit")
+        page_budget = self._page_budget(max_pages)
+        if limit == 0 or page_budget == 0:
+            return None
+        return page_budget
+
+    def _new_stop_policy(
+        self,
+        provider: ReviewProvider,
+        since: date | datetime | None,
+        limit: int | None,
+        cursor: str | None,
+        max_pages: int,
+    ) -> StopPolicy:
+        """The stop policy of one country walk. It keeps count, so none is shared."""
+        return StopPolicy(
+            provider.source,
+            since,
+            limit,
+            max_pages=max_pages,
+            initial_cursor=cursor,
+            is_newest_first=self._is_newest_first(provider),
+        )
 
     def _walk(
         self,
@@ -336,14 +553,7 @@ class BaseReviews(PooledClient, abc.ABC):
         holds one and delegates here too. Rebuilding it per country would
         re-sign credentials on every call.
         """
-        policy = StopPolicy(
-            provider.source,
-            since,
-            limit,
-            max_pages=max_pages,
-            initial_cursor=cursor,
-            is_newest_first=self._is_newest_first(provider),
-        )
+        policy = self._new_stop_policy(provider, since, limit, cursor, max_pages)
 
         while True:
             page = self._page(provider, app_id, country, cursor)
@@ -369,14 +579,7 @@ class BaseReviews(PooledClient, abc.ABC):
         one with a sync generator. The stop *policy* is not duplicated; both
         delegate to ``StopPolicy``.
         """
-        policy = StopPolicy(
-            provider.source,
-            since,
-            limit,
-            max_pages=max_pages,
-            initial_cursor=cursor,
-            is_newest_first=self._is_newest_first(provider),
-        )
+        policy = self._new_stop_policy(provider, since, limit, cursor, max_pages)
 
         while True:
             page = await self._apage(provider, app_id, country, cursor)
@@ -438,25 +641,24 @@ class BaseReviews(PooledClient, abc.ABC):
         matches_since = build_review_predicate(since=since)
         yielded_count = 0
 
-        for country in self._country_list(provider, request.selection):
+        for country in _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        ):
             if limit is not None and yielded_count >= limit:
                 return
-            walk_limit = self._stream_walk_limit(provider, since, limit, yielded_count)
-            pages = self._walk(
+            pages, room = self._open_stream_walk(
                 provider,
                 app_id,
                 country,
-                cursor=None,
-                since=since,
-                limit=walk_limit,
-                max_pages=request.page_budget,
+                request.page_budget,
+                since,
+                limit,
+                yielded_count,
             )
             country_on_page = self._bind_page_callback(on_page, provider, country)
             for review in self._iter_country_reviews(
-                pages, country, matches_since, country_on_page
+                pages, country, matches_since, country_on_page, room
             ):
-                if limit is not None and yielded_count >= limit:
-                    return
                 yield review
                 yielded_count += 1
 
@@ -470,7 +672,12 @@ class BaseReviews(PooledClient, abc.ABC):
         max_pages: int | None = None,
         on_page: Callable[[str | None, PageResult], None] | None = None,
     ) -> AsyncIterator[Review]:
-        """Async equivalent of ``iter_reviews``, with identical semantics."""
+        """Async equivalent of ``iter_reviews``, with identical semantics.
+
+        Each country's ``country_reviews`` and the ``pages`` it reads from are
+        closed explicitly, ``country_reviews`` first: an early exit leaves both
+        suspended, and the event loop would only close them at some later point.
+        """
         request = self._validate_walk_request(countries, limit, max_pages)
         if request is None:
             return
@@ -478,30 +685,26 @@ class BaseReviews(PooledClient, abc.ABC):
         matches_since = build_review_predicate(since=since)
         yielded_count = 0
 
-        for country in self._country_list(provider, request.selection):
+        for country in _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        ):
             if limit is not None and yielded_count >= limit:
                 return
-            walk_limit = self._stream_walk_limit(provider, since, limit, yielded_count)
-            pages = self._awalk(
+            pages, room = await self._aopen_stream_walk(
                 provider,
                 app_id,
                 country,
-                cursor=None,
-                since=since,
-                limit=walk_limit,
-                max_pages=request.page_budget,
+                request.page_budget,
+                since,
+                limit,
+                yielded_count,
             )
             country_on_page = self._bind_page_callback(on_page, provider, country)
             country_reviews = self._aiter_country_reviews(
-                pages, country, matches_since, country_on_page
+                pages, country, matches_since, country_on_page, room
             )
-            # Closed explicitly, ``country_reviews`` before the ``pages`` it reads
-            # from: an early return leaves both suspended, and the event loop
-            # would only close them at some later point.
             async with contextlib.aclosing(pages), contextlib.aclosing(country_reviews):
                 async for review in country_reviews:
-                    if limit is not None and yielded_count >= limit:
-                        return
                     yield review
                     yielded_count += 1
 
@@ -533,9 +736,7 @@ class BaseReviews(PooledClient, abc.ABC):
         except AuthError:
             raise
         except AppReviewsError as exc:
-            return PageResult(
-                error=fetch_error_from_exception(country=country or None, exc=exc)
-            )
+            return _failed_page(country, exc)
 
     async def _apage(
         self,
@@ -550,32 +751,85 @@ class BaseReviews(PooledClient, abc.ABC):
         except AuthError:
             raise
         except AppReviewsError as exc:
-            return PageResult(
-                error=fetch_error_from_exception(country=country or None, exc=exc)
-            )
+            return _failed_page(country, exc)
 
-    def _stream_walk_limit(
+    def _open_stream_walk(
+        self,
+        provider: ReviewProvider,
+        app_id: str,
+        country: str,
+        page_budget: int,
+        since: date | datetime | None,
+        limit: int | None,
+        yielded_count: int,
+    ) -> tuple[Iterator[PageResult], int | None]:
+        """Start the walk of the next stream country: ``(pages, room)``.
+
+        ``room`` is the reviews the caller still wants, counted in reviews
+        yielded; None means no ``limit``. The walk's own limit counts reviews
+        fetched, which is ``plan_limits``' stream limit.
+        """
+        walk_limit, room = self._stream_budget(provider, since, limit, yielded_count)
+        pages = self._walk(
+            provider,
+            app_id,
+            country,
+            cursor=None,
+            since=since,
+            limit=walk_limit,
+            max_pages=page_budget,
+        )
+        return pages, room
+
+    async def _aopen_stream_walk(
+        self,
+        provider: ReviewProvider,
+        app_id: str,
+        country: str,
+        page_budget: int,
+        since: date | datetime | None,
+        limit: int | None,
+        yielded_count: int,
+    ) -> tuple[AsyncGenerator[PageResult, None], int | None]:
+        """Async twin of ``_open_stream_walk``."""
+        walk_limit, room = self._stream_budget(provider, since, limit, yielded_count)
+        pages = self._awalk(
+            provider,
+            app_id,
+            country,
+            cursor=None,
+            since=since,
+            limit=walk_limit,
+            max_pages=page_budget,
+        )
+        return pages, room
+
+    def _stream_budget(
         self,
         provider: ReviewProvider,
         since: date | datetime | None,
         limit: int | None,
-        yielded: int,
-    ) -> int | None:
-        """How many reviews the walk may stop at, for one country of a stream.
+        yielded_count: int,
+    ) -> tuple[int | None, int | None]:
+        """What the next stream country may fetch and yield, as ``(walk_limit, room)``.
 
-        ``limit`` counts reviews *yielded*; ``StopPolicy`` counts reviews
-        *fetched*. The two only agree when nothing between them drops a review.
-        A ``since`` filter does exactly that, and on a source without a
-        newest-first guarantee there is no early stop to make the boundary page
-        the last one, so the walk would stop on fetched count with matching
-        reviews still unfetched. Left unbounded there; the stream's own counter
-        ends it.
+        ``walk_limit`` is ``plan_limits``' stream limit, which ``StopPolicy``
+        counts in reviews fetched. ``room`` is the reviews the caller still
+        wants, counted in reviews yielded; None means no ``limit``.
         """
-        if limit is None:
-            return None
-        if since is not None and not self._is_newest_first(provider):
-            return None
-        return limit - yielded
+        # Only ``stream_limit`` is read, and it depends on neither the sort nor
+        # the row filters, so those take their no-op values.
+        walk_limit = plan_limits(
+            is_newest_first=self._is_newest_first(provider),
+            sort=Sort.NEWEST,
+            limit=limit,
+            ratings=None,
+            until=None,
+            since=since,
+            yielded=yielded_count,
+        ).stream_limit
+        room = None if limit is None else limit - yielded_count
+        return walk_limit, room
 
     def _bind_page_callback(
         self,
@@ -586,7 +840,7 @@ class BaseReviews(PooledClient, abc.ABC):
         """``on_page`` with this walk's reported country already filled in."""
         if on_page is None:
             return None
-        return functools.partial(on_page, self._outcome_country(provider, country))
+        return functools.partial(on_page, _outcome_country(provider.source, country))
 
     def _iter_country_reviews(
         self,
@@ -594,6 +848,7 @@ class BaseReviews(PooledClient, abc.ABC):
         country: str,
         matches_since: Callable[[Review], bool] | None,
         on_page: Callable[[PageResult], None] | None,
+        room: int | None,
     ) -> Iterator[Review]:
         """One country's reviews, page by page, dropping those before ``since``.
 
@@ -603,14 +858,19 @@ class BaseReviews(PooledClient, abc.ABC):
         alongside the older ones below. ``fetch`` drops those through
         ``FetchResult.filter`` afterwards; a stream has nothing downstream to do
         it, so it filters as it yields.
+
+        ``room`` is how many reviews the caller still wants, None for no limit.
+        The stream ends on the first review past it, which is not yielded.
         """
         for page in pages:
-            self._log_stream_error(page, country)
-            if on_page is not None:
-                on_page(page)
-            for review in page.reviews:
-                if matches_since is None or matches_since(review):
-                    yield review
+            page_reviews = _report_and_select_reviews(
+                page, country, matches_since, on_page
+            )
+            fitting_reviews, has_leftover = _split_at_room(page_reviews, room)
+            yield from fitting_reviews
+            if has_leftover:
+                return
+            room = None if room is None else room - len(fitting_reviews)
 
     async def _aiter_country_reviews(
         self,
@@ -618,25 +878,19 @@ class BaseReviews(PooledClient, abc.ABC):
         country: str,
         matches_since: Callable[[Review], bool] | None,
         on_page: Callable[[PageResult], None] | None,
+        room: int | None,
     ) -> AsyncGenerator[Review, None]:
         """Async twin of ``_iter_country_reviews``."""
         async for page in pages:
-            self._log_stream_error(page, country)
-            if on_page is not None:
-                on_page(page)
-            for review in page.reviews:
-                if matches_since is None or matches_since(review):
-                    yield review
-
-    def _log_stream_error(self, page: PageResult, country: str) -> None:
-        """Report a failed page on a streaming walk, which cannot return errors."""
-        if page.error is not None:
-            _LOG.warning(
-                "iter_reviews: %s walk for %r failed: %s",
-                page.error.kind,
-                country or "global",
-                page.error.message,
+            page_reviews = _report_and_select_reviews(
+                page, country, matches_since, on_page
             )
+            fitting_reviews, has_leftover = _split_at_room(page_reviews, room)
+            for review in fitting_reviews:
+                yield review
+            if has_leftover:
+                return
+            room = None if room is None else room - len(fitting_reviews)
 
     # ---- rung 3: all countries, concurrent, filtered and sorted -----------
 
@@ -731,20 +985,27 @@ class BaseReviews(PooledClient, abc.ABC):
         concurrency: int | None,
     ) -> _FetchPlan:
         """Resolve the countries, limits, filter and fan-out width for one fetch."""
-        countries = self._country_list(provider, request.selection)
+        countries = _country_list(
+            provider.source, request.selection, self.DEFAULT_COUNTRY
+        )
+        limits = plan_limits(
+            is_newest_first=self._is_newest_first(provider),
+            sort=sort,
+            limit=limit,
+            ratings=ratings,
+            until=until,
+            since=since,
+        )
+        self._log_exhaustive_walk(provider, sort, limit, ratings=ratings, until=until)
         return _FetchPlan(
             countries=countries,
             since=since,
             page_budget=request.page_budget,
-            walk_limit=self._walk_limit(
-                provider, sort, limit, ratings=ratings, until=until
-            ),
+            walk_limit=limits.walk_limit,
             matches_filters=build_review_predicate(
                 ratings=ratings, since=since, until=until
             ),
-            matching_limit=self._matching_limit(
-                provider, sort, limit, ratings=ratings, until=until
-            ),
+            matching_limit=limits.matching_limit,
             worker_count=self._workers(countries, concurrency),
         )
 
@@ -831,7 +1092,7 @@ class BaseReviews(PooledClient, abc.ABC):
                 failures.append(error)
                 raise
 
-    def _walk_limit(
+    def _log_exhaustive_walk(
         self,
         provider: ReviewProvider,
         sort: Sort,
@@ -839,26 +1100,15 @@ class BaseReviews(PooledClient, abc.ABC):
         *,
         ratings: list[int] | None,
         until: date | datetime | None,
-    ) -> int | None:
-        """How many reviews the page walk may stop at, if any.
+    ) -> None:
+        """Say why an unfiltered ``limit`` cannot stop the walk early.
 
-        Bounding the walk is only sound when the fetch order matches the
-        requested order (newest-first source, newest-first sort), and when
-        nothing downstream can drop reviews before the limit is applied.
-
-        ``sort`` is coerced because ``Sort`` is a ``StrEnum`` and the equivalent
-        plain string is accepted everywhere else: compared with ``is``, ``"newest"``
-        took the slow path and then died reading ``.value`` off a ``str``.
-
-        With ``ratings``/``until``, a raw-review limit would be unsound because
-        some fetched rows are later discarded. ``build_review_predicate`` handles
-        that case by counting matches instead; this method therefore leaves the
-        raw walk unbounded by review count.
+        The decision is ``plan_limits``'; this only reports it. With
+        ``ratings``/``until`` the walk is bounded by matches instead, so
+        nothing is reported.
         """
-        if limit is None:
-            return None
-        if ratings is not None or until is not None:
-            return None
+        if limit is None or ratings is not None or until is not None:
+            return
         order = Sort(sort)
         if order is not Sort.NEWEST:
             _LOG.info(
@@ -867,32 +1117,13 @@ class BaseReviews(PooledClient, abc.ABC):
                 order.value,
                 limit,
             )
-            return None
-        if not self._is_newest_first(provider):
+        elif not self._is_newest_first(provider):
             _LOG.info(
                 "%s does not guarantee newest-first ordering, so limit=%d "
                 "cannot stop the walk early",
                 provider.source,
                 limit,
             )
-            return None
-        return limit
-
-    def _matching_limit(
-        self,
-        provider: ReviewProvider,
-        sort: Sort,
-        limit: int | None,
-        *,
-        ratings: list[int] | None,
-        until: date | datetime | None,
-    ) -> int | None:
-        """Limit that may stop a walk by counting filtered matches."""
-        if limit is None or (ratings is None and until is None):
-            return None
-        if Sort(sort) is not Sort.NEWEST or not self._is_newest_first(provider):
-            return None
-        return limit
 
     def _is_newest_first(self, provider: ReviewProvider) -> bool:
         """Whether this client's pages arrive newest-first.
@@ -920,10 +1151,9 @@ class BaseReviews(PooledClient, abc.ABC):
 
         Consumes ``_walk`` rather than re-implementing the page loop, so the
         stop conditions exist in exactly one place, and hands each page to a
-        ``CountryCollector`` so the accounting does too.
+        ``_CountryWalk`` so the accounting does too.
         """
-        collector = CountryCollector(self._outcome_country(provider, country))
-        matching_review_count = 0
+        walk = _CountryWalk(_outcome_country(provider.source, country), plan)
         pages = self._walk(
             provider,
             app_id,
@@ -933,15 +1163,8 @@ class BaseReviews(PooledClient, abc.ABC):
             limit=plan.walk_limit,
             max_pages=plan.page_budget,
         )
-        for page in pages:
-            fetched_review_count = len(page.reviews)
-            page, matching_review_count = self._retain_matching_reviews(
-                page, plan, matching_review_count
-            )
-            collector.add(page, reviews_fetched=fetched_review_count)
-            if page.stopped_because is not None:
-                break
-        return collector.reviews, collector.outcome()
+        walk.drain(pages)
+        return walk.reviews_and_outcome()
 
     async def _awalk_country(
         self,
@@ -951,8 +1174,7 @@ class BaseReviews(PooledClient, abc.ABC):
         plan: _FetchPlan,
     ) -> tuple[list[Review], CountryOutcome]:
         """Async equivalent of ``_walk_country``."""
-        collector = CountryCollector(self._outcome_country(provider, country))
-        matching_review_count = 0
+        walk = _CountryWalk(_outcome_country(provider.source, country), plan)
         pages = self._awalk(
             provider,
             app_id,
@@ -963,45 +1185,8 @@ class BaseReviews(PooledClient, abc.ABC):
             max_pages=plan.page_budget,
         )
         async with contextlib.aclosing(pages):
-            async for page in pages:
-                fetched_review_count = len(page.reviews)
-                page, matching_review_count = self._retain_matching_reviews(
-                    page, plan, matching_review_count
-                )
-                collector.add(page, reviews_fetched=fetched_review_count)
-                if page.stopped_because is not None:
-                    break
-        return collector.reviews, collector.outcome()
-
-    def _retain_matching_reviews(
-        self, page: PageResult, plan: _FetchPlan, matching_review_count: int
-    ) -> tuple[PageResult, int]:
-        """Keep only matching reviews, and stamp ``limit`` once enough matched."""
-        if plan.matches_filters is None:
-            return page, matching_review_count
-        matching_reviews = [
-            review for review in page.reviews if plan.matches_filters(review)
-        ]
-        matching_review_count += len(matching_reviews)
-        page = dataclasses.replace(page, reviews=matching_reviews)
-        has_enough_matches = (
-            plan.matching_limit is not None
-            and matching_review_count >= plan.matching_limit
-        )
-        if has_enough_matches:
-            page = with_stop_reason(
-                page, prefer_stop_reason(page.stopped_because, "limit")
-            )
-        return page, matching_review_count
-
-    def _outcome_country(self, provider: ReviewProvider, country: str) -> str | None:
-        """None for global providers, which have no country to report.
-
-        Keyed off ``core.paging.is_per_country``, the same
-        canonical convention ``_country_arg`` uses and ``resolve_countries``
-        documents, rather than off the ``""`` sentinel value in hand.
-        """
-        return country if is_per_country(provider.source) else None
+            await walk.adrain(pages)
+        return walk.reviews_and_outcome()
 
     def _assemble(
         self,
@@ -1018,17 +1203,6 @@ class BaseReviews(PooledClient, abc.ABC):
 
         return FetchResult(reviews=reviews, outcomes=outcomes).sort(sort).limit(limit)
 
-    def _country_arg(
-        self, provider: ReviewProvider, country: Country | str | None
-    ) -> str:
-        """Resolve the country argument for a single-country provider call.
-
-        Global providers ignore it, so pass the ``""`` sentinel they expect.
-        """
-        if not is_per_country(provider.source):
-            return ""
-        return normalise_country(country) or self.DEFAULT_COUNTRY
-
     def _validate_country_argument(self, country: Country | str | None) -> None:
         """Subclass hook for stores whose review corpus has no country axis."""
 
@@ -1036,42 +1210,6 @@ class BaseReviews(PooledClient, abc.ABC):
         self, countries: Collection[Country | str] | None
     ) -> None:
         """Plural twin of ``_validate_country_argument``."""
-
-    def _country_list(
-        self, provider: ReviewProvider, countries: Collection[Country | str] | None
-    ) -> list[str]:
-        """The fan-out ``_country_arg`` is the singular of: which countries to walk.
-
-        Global sources collapse to a single ``[""]`` call. Same convention and
-        same source of truth as ``_country_arg`` and ``_outcome_country``.
-
-        Entries are normalised and deduped first. Every entry costs a full walk,
-        so ``["us", "US", "USA"]`` left as-is would fetch one storefront three
-        times and report it under three names in ``outcomes``. First-appearance
-        order is kept, which matters because a frozenset region group has none
-        of its own and callers do read ``outcomes`` positionally.
-        """
-        if not is_per_country(provider.source):
-            if countries is not None:
-                _LOG.warning(
-                    "%s has no country dimension, so countries=%r is ignored; "
-                    "one request already covers every territory",
-                    provider.source,
-                    list(countries),
-                )
-            return [""]
-        if countries is None:
-            return [self.DEFAULT_COUNTRY]
-        return list(dict.fromkeys(countries))
-
-    def _normalised_selection(
-        self, countries: Collection[Country | str] | None
-    ) -> list[str] | None:
-        """Normalise an explicit selection while preserving omission vs empty."""
-        if countries is None:
-            return None
-        resolved = (normalise_country(country) for country in countries)
-        return list(dict.fromkeys(country for country in resolved if country))
 
     def _validate_walk_request(
         self,
@@ -1091,7 +1229,7 @@ class BaseReviews(PooledClient, abc.ABC):
         require_non_negative(limit, "limit")
         require_positive(concurrency, "concurrency")
         page_budget = self._page_budget(max_pages)
-        selection = self._normalised_selection(countries)
+        selection = _normalised_selection(countries)
         if limit == 0 or page_budget == 0 or selection == []:
             return None
         return _WalkRequest(page_budget=page_budget, selection=selection)

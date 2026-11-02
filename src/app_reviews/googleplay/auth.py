@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from app_reviews.core.classify import error_for, http_error
+from app_reviews.core.classify import describe_failure, error_for, http_error
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.jwt import encode_base64url, encode_jwt_segment
@@ -352,13 +352,17 @@ class GoogleAuth(PooledClient):
         before the generic non-2xx check to avoid reporting a misleading
         "HTTP 0".
         """
+        failure = describe_failure(response, "Google token exchange")
+        if failure is None:
+            return
         if response.transport_error is not None:
-            raise error_for(response.status, response.transport_error)(
-                f"Google token exchange failed: {response.transport_error}",
+            error_class = error_for(
+                response.status, response.transport_error, credentialed=True
+            )
+            raise error_class(
+                f"Google token exchange failed: {failure}",
                 status=response.status or None,
             )
-        if response.ok:
-            return
         # Truncated: the body is remote content and ends up in an exception
         # message that the walk logs at WARNING.
         message = (
@@ -367,7 +371,7 @@ class GoogleAuth(PooledClient):
         )
         if _is_rejected_credential(response):
             raise AuthError(message, status=response.status)
-        raise http_error(response, message)
+        raise http_error(response, message, credentialed=True)
 
     def _parse_token(self, response: HttpResponse) -> tuple[str, int]:
         """The access token and its lifetime from a 2xx body, or ``ParseError``."""

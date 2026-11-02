@@ -460,7 +460,7 @@ class TestResultsWithoutAnIdAreSkipped:
 
 
 class TestTheAsyncPathSendsTheSameQuery:
-    """``aget_and_parse`` dropping ``params`` entirely passed the suite: every
+    """``asearch`` dropping ``params`` entirely passed the suite: every
     async assertion compared parsed output from a handler that ignored the
     request, so ``asearch`` sending no ``term`` at all looked identical."""
 

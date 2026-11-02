@@ -49,11 +49,11 @@ class GooglePlayReviews(BaseReviews):
 
     def _build_provider(self) -> ReviewProvider:
         if self._auth is None:
-            return GooglePlayScraperProvider(**self._provider_kwargs)
+            return GooglePlayScraperProvider(http=self._http)
         return GooglePlayOfficialProvider(
             self._build_google_auth(self._auth),
             translation_language=self._translation_language,
-            **self._provider_kwargs,
+            http=self._http,
         )
 
     async def _abuild_provider(self) -> ReviewProvider:

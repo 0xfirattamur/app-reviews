@@ -111,7 +111,7 @@ class GooglePlayReplies(PlayAPIClient):
 
     def _read(self, response: HttpResponse, review_id: str) -> ReviewReply | None:
         """The review's ``developerComment``, if it has one."""
-        raise_for_http_failure(response, _API)
+        raise_for_http_failure(response, _API, credentialed=True)
         try:
             for comment in response.json().get("comments", []):
                 developer = comment.get("developerComment")

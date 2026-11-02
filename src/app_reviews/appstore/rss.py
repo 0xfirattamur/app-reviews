@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 from app_reviews.appstore.atom import atom_entries
 from app_reviews.core import safe_json
-from app_reviews.core.classify import fetch_error_from_response
+from app_reviews.core.classify import page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
 from app_reviews.core.validation import require_path_segment
@@ -207,23 +207,12 @@ class AppStoreScraperProvider(PooledClient):
 
     def _failure(self, response: HttpResponse, country: str) -> PageResult | None:
         """The failed page for an exchange that got no usable answer, else None."""
-        if response.transport_error is not None:
-            message = response.transport_error
-        elif not response.ok:
-            message = f"HTTP {response.status} from the App Store RSS feed"
-            if response.status in _THROTTLE_STATUSES:
-                message += "; access may be blocked or throttled"
-        else:
-            return None
-        return PageResult(
-            error=fetch_error_from_response(
-                country=country,
-                status=response.status,
-                message=message,
-                transport_error=response.transport_error,
-                credentialed=False,
-                rate_limited_statuses=_THROTTLE_STATUSES,
-            )
+        return page_failure_from_response(
+            response,
+            country=country,
+            source_name="the App Store RSS feed",
+            credentialed=False,
+            rate_limited_statuses=_THROTTLE_STATUSES,
         )
 
     def _build_page(

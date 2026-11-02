@@ -121,15 +121,18 @@ class TestTheTwoTaxonomiesCannotDrift:
         ],
     )
     def test_error_for_maps_status_to_class(self, status, expected):
-        assert error_for(status) is expected
+        assert error_for(status, credentialed=True) is expected
 
     def test_error_for_prefers_a_transport_failure_over_the_status(self):
-        assert error_for(0, "connection refused") is TransportError
+        assert error_for(0, "connection refused", credentialed=True) is TransportError
 
     @pytest.mark.parametrize("status", (400, 401, 403, 404, 422, 429, 500, 503, 0))
     def test_error_for_and_classify_agree(self, status):
         """The raised class and the returned string describe the same failure."""
-        assert error_for(status) is CLASS_FOR_KIND[classify(status)]
+        assert (
+            error_for(status, credentialed=True)
+            is CLASS_FOR_KIND[classify(status, credentialed=True)]
+        )
 
 
 class TestRetryabilityIsReadableFromTheType:

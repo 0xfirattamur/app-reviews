@@ -10,6 +10,8 @@ from collections.abc import Awaitable
 from time import monotonic, sleep
 from typing import Protocol
 
+from app_reviews.core.classify import THROTTLE_STATUSES
+
 __all__ = ["RateLimiter", "RequestLimiter"]
 
 _LOG = logging.getLogger(__name__)
@@ -106,7 +108,7 @@ class RateLimiter:
             with self._lock:
                 self._throttle_streak = 0
             return
-        if status not in (403, 429):
+        if status not in THROTTLE_STATUSES:
             return
         with self._lock:
             streak = self._throttle_streak
