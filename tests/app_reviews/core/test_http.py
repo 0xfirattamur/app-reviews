@@ -321,6 +321,24 @@ class TestAsyncPoolFollowsTheEventLoop:
         assert (first.status, first.body) == (200, "ok")
         assert (second.status, second.body) == (200, "ok")
 
+    def test_close_releases_a_pool_whose_loop_has_ended(self, keep_alive_server):
+        http = HttpClient()
+        asyncio.run(http.aget(keep_alive_server))
+
+        http.close()
+        reopened = asyncio.run(http.aget(keep_alive_server))
+
+        assert reopened.status == 200
+
+    def test_aclose_releases_a_pool_whose_loop_has_ended(self, keep_alive_server):
+        http = HttpClient()
+        asyncio.run(http.aget(keep_alive_server))
+
+        asyncio.run(http.aclose())
+        reopened = asyncio.run(http.aget(keep_alive_server))
+
+        assert reopened.status == 200
+
     async def test_one_loop_still_shares_one_pool(self):
         with patch(
             "app_reviews.core.http.httpx.AsyncClient", wraps=httpx.AsyncClient

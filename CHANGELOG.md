@@ -62,6 +62,9 @@ recent versions are also kept in
 - `aiter_reviews()` and `aiter_pages()` close their inner page walks as soon as
   a `limit` or an early `break` ends the stream, instead of leaving them to the
   event loop.
+- `close()` and `aclose()` on a client whose async pool was built under an event
+  loop that has since closed (`asyncio.run(client.afetch(...))` then
+  `client.close()`) no longer raise `Event loop is closed`.
 
 ## [1.3.0] - 2026-10-25
 

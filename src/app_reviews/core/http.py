@@ -624,7 +624,9 @@ class HttpClient:
 
     async def aclose(self) -> None:
         """Async twin of ``close``. Releases both pools."""
-        if self._async_pool is not None:
+        if self._is_async_pool_orphaned():
+            self._forget_async_pool()
+        elif self._async_pool is not None:
             await self._async_pool.aclose()
             self._async_pool = None
         if self._sync_pool is not None:
@@ -641,6 +643,9 @@ class HttpClient:
         """
         if self._async_pool is None:
             return
+        if self._is_async_pool_orphaned():
+            self._forget_async_pool()
+            return
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -651,6 +656,22 @@ class HttpClient:
             "close() cannot release the async pool from inside a running event "
             "loop; use `await aclose()`. The async pool is still open."
         )
+
+    def _is_async_pool_orphaned(self) -> bool:
+        """Whether the async pool was built under an event loop that has closed.
+
+        Its connections belong to that loop, so ``aclose()`` on them schedules
+        callbacks there and raises ``Event loop is closed``: the usual ending of a
+        script that ran ``asyncio.run(client.afetch(...))`` and then ``close()``.
+        Nothing can be closed through a dead loop; the sockets go when the pool is
+        garbage collected.
+        """
+        loop = self._async_pool_loop
+        return self._async_pool is not None and loop is not None and loop.is_closed()
+
+    def _forget_async_pool(self) -> None:
+        self._async_pool = None
+        self._async_pool_loop = None
 
     def __enter__(self) -> HttpClient:
         return self
