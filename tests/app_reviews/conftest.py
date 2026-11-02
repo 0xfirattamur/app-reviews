@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import itertools
 import locale
+import threading
 from collections.abc import Callable, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -128,3 +130,37 @@ def twin(request: pytest.FixtureRequest) -> Twin:
     See ``Twin``: the test is ``async def`` and calls ``await twin.call(...)``.
     """
     return Twin(request.param)
+
+
+class _KeepAliveHandler(BaseHTTPRequestHandler):
+    """Answers every GET with ``ok`` and leaves the connection open."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        body = b"ok"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Keep the test output free of per-request access logs."""
+
+
+@pytest.fixture
+def keep_alive_server() -> Iterator[str]:
+    """Base URL of a localhost HTTP/1.1 server that keeps connections open.
+
+    For tests that need a pooled connection to survive between requests, which a
+    ``MockTransport`` never opens. The server runs on a daemon thread and is shut
+    down after the test.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _KeepAliveHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+    thread.join()

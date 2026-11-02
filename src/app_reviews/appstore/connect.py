@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
@@ -40,14 +41,26 @@ def parse_review_response(resource: Any, review_id: str) -> ReviewReply:
     text = attributes["responseBody"]
     if not isinstance(text, str):
         raise TypeError(f"responseBody is {type(text).__name__}, expected a string")
-    last_modified = attributes.get("lastModifiedDate")
     return ReviewReply(
         review_id=review_id,
         reply_id=str(resource["id"]),
         text=text,
         state=state,
-        updated_at=datetime.fromisoformat(last_modified) if last_modified else None,
+        updated_at=_reply_timestamp(attributes.get("lastModifiedDate")),
     )
+
+
+def _reply_timestamp(last_modified: Any) -> datetime | None:
+    """``last_modified`` as an aware datetime; an offset-less one is read as UTC.
+
+    The same rule ``Review`` applies to its timestamps, so a reply and its review
+    always compare.
+    """
+    if not last_modified:
+        return None
+    modified_at = datetime.fromisoformat(last_modified)
+    is_naive = modified_at.tzinfo is None
+    return modified_at.replace(tzinfo=UTC) if is_naive else modified_at
 
 
 class AppStoreOfficialProvider(PooledClient):
@@ -119,6 +132,7 @@ class AppStoreOfficialProvider(PooledClient):
         JWT, so a cursor pointing anywhere else would hand that token to whoever
         owns the host, so the cursor must be https on Connect's own host.
         """
+        require_path_segment(app_id, "app_id")
         if cursor is None:
             return self._first_page_url(app_id)
 
@@ -209,7 +223,7 @@ class AppStoreOfficialProvider(PooledClient):
         if failure is not None:
             return failure
         try:
-            payload = json.loads(response.body)
+            payload = safe_json.loads(response.body)
             entries = self._read_review_entries(payload)
             next_cursor = self._read_next_cursor(payload)
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:

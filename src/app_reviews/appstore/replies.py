@@ -23,6 +23,7 @@ from app_reviews.appstore.api import ConnectAPIClient
 from app_reviews.appstore.connect import parse_review_response
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError
 from app_reviews.models.reply import ReviewReply
 from app_reviews.reply_failure import StoreError, json_object, raise_for_reply_failure
@@ -106,12 +107,14 @@ class AppStoreReplies(ConnectAPIClient):
 
     def _replies_url(self, reply_id: str | None = None) -> str:
         url = f"{self.API_BASE}/v1/customerReviewResponses"
-        return url if reply_id is None else f"{url}/{quote(reply_id, safe='')}"
+        if reply_id is None:
+            return url
+        reply = quote(require_path_segment(reply_id, "reply_id"), safe="")
+        return f"{url}/{reply}"
 
     def _review_reply_url(self, review_id: str) -> str:
-        return (
-            f"{self.API_BASE}/v1/customerReviews/{quote(review_id, safe='')}/response"
-        )
+        review = quote(require_path_segment(review_id, "review_id"), safe="")
+        return f"{self.API_BASE}/v1/customerReviews/{review}/response"
 
     def _written(self, response: HttpResponse, review_id: str) -> ReviewReply:
         raise_for_reply_failure(response, _API, _store_error)

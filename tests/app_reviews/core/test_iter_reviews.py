@@ -6,6 +6,7 @@ that is 155 storefronts. ``iter_pages`` streams but hands back pages, so every
 caller wrote the same nested loop. This is the rung in between.
 """
 
+import contextlib
 import logging
 from datetime import timedelta
 
@@ -437,3 +438,54 @@ class TestOnPage:
         ]
 
         assert async_seen == sync_seen == [("us", "1"), ("us", None)]
+
+
+class _WalkTracingClient(FakeClient):
+    """Records when each page walk is closed, to prove nothing waits for the GC."""
+
+    def __init__(self, provider) -> None:
+        super().__init__(provider)
+        self.closed_walks: list[str] = []
+
+    async def _awalk(self, provider, app_id, country, *args, **kwargs):
+        walk = super()._awalk(provider, app_id, country, *args, **kwargs)
+        try:
+            async with contextlib.aclosing(walk):
+                async for page in walk:
+                    yield page
+        finally:
+            self.closed_walks.append(country)
+
+
+def _two_pages_of_two_reviews() -> FakeProvider:
+    first = [make_review(created_at=NOW, id="a"), make_review(created_at=NOW, id="b")]
+    second = [make_review(created_at=NOW, id="c"), make_review(created_at=NOW, id="d")]
+    return FakeProvider([make_page(first, "1"), make_page(second, None)])
+
+
+class TestAsyncStreamsCloseTheirInnerGenerators:
+    """An async generator abandoned mid-iteration is closed by the event loop at
+    some later point, not by the code that abandoned it, so an early exit left
+    the page walk (and its pooled request) suspended past the stream's end."""
+
+    async def test_aiter_reviews_closes_the_walk_when_limit_is_reached(self):
+        client = _WalkTracingClient(_two_pages_of_two_reviews())
+
+        reviews = [
+            review
+            async for review in client.aiter_reviews("123", countries=["us"], limit=1)
+        ]
+
+        assert [review.id for review in reviews] == ["a"]
+        assert client.closed_walks == ["us"]
+
+    async def test_aiter_pages_closes_the_walk_when_the_consumer_stops(self):
+        client = _WalkTracingClient(_two_pages_of_two_reviews())
+
+        async with contextlib.aclosing(
+            client.aiter_pages("123", country="us")
+        ) as pages:
+            async for _page in pages:
+                break
+
+        assert client.closed_walks == ["us"]

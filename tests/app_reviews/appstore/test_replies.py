@@ -400,3 +400,41 @@ class TestTheKeyIsLoadedOnceUnderConcurrentFirstRequests:
             second.result(timeout=2)
 
         assert len(loads) == 1
+
+
+class TestATimeoutStatusMeansTheOutcomeIsUnknown:
+    """A 408 or 425 on a write says the store gave up or declined to process it
+    now; it may still have applied the reply, so a caller must not resend blindly."""
+
+    @pytest.mark.parametrize("status", [408, 425])
+    async def test_the_write_is_sent_once_and_its_outcome_is_unknown(
+        self, twin, status
+    ):
+        record = Recorder(httpx.Response(status))
+
+        with pytest.raises(ReplyOutcomeUnknownError) as caught:
+            await twin.call(_replies(record), "reply", "review-9", "Thanks!")
+
+        assert len(record.requests) == 1
+        assert caught.value.status == status
+
+
+class TestANaiveReplyTimestampIsUtc:
+    """``Review`` reads an offset-less timestamp as UTC; a reply must agree, or
+    comparing the two raises ``TypeError``."""
+
+    async def test_a_last_modified_date_without_an_offset_is_utc(self, twin):
+        document = _response_doc()
+        document["data"]["attributes"]["lastModifiedDate"] = "2026-09-28T10:00:00"
+        record = Recorder(httpx.Response(200, json=document))
+
+        reply = await twin.call(_replies(record), "get_reply", "review-9")
+
+        assert reply.updated_at == datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
+
+    async def test_an_offset_is_kept_and_converted_to_the_same_instant(self, twin):
+        record = Recorder(httpx.Response(200, json=_response_doc()))
+
+        reply = await twin.call(_replies(record), "get_reply", "review-9")
+
+        assert reply.updated_at == datetime(2026, 9, 28, 17, 0, tzinfo=UTC)

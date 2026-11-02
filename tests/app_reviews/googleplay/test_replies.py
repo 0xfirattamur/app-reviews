@@ -338,3 +338,22 @@ class TestTheKeyIsLoadedOnceUnderConcurrentFirstRequests:
             second.result(timeout=2)
 
         assert len(built) == 1
+
+
+class TestATimeoutStatusMeansTheOutcomeIsUnknown:
+    """A 408 or 425 on a write says the store gave up or declined to process it
+    now; it may still have applied the reply, so a caller must not resend blindly."""
+
+    @pytest.mark.parametrize("status", [408, 425])
+    async def test_the_write_is_sent_once_and_its_outcome_is_unknown(
+        self, twin, status
+    ):
+        api = _Api(httpx.Response(status))
+
+        with pytest.raises(ReplyOutcomeUnknownError) as caught:
+            await twin.call(
+                _replies(api), "reply", "gp-1", "Thanks!", package_name="com.example"
+            )
+
+        assert len(api.requests) == 1
+        assert caught.value.status == status

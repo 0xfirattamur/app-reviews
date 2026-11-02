@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, time
 from math import isfinite
 from typing import Any
 
+from app_reviews.models._validate import require_count
 from app_reviews.models.review import Review
 from app_reviews.models.types import (
     RETRYABLE_KINDS,
@@ -16,12 +17,6 @@ from app_reviews.models.types import (
     Sort,
     StopReason,
 )
-
-
-def _validate_non_negative_int(value: object, field_name: str) -> None:
-    """Reject values that cannot be a JSON-safe count."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +79,7 @@ class CountryOutcome:
     def __post_init__(self) -> None:
         if not isfinite(self.elapsed) or self.elapsed < 0:
             raise ValueError("elapsed must be finite and non-negative")
-        _validate_non_negative_int(self.skipped_reviews, "skipped_reviews")
+        require_count(self.skipped_reviews, "skipped_reviews")
 
     def to_dict(self) -> dict[str, Any]:
         """Return the complete JSON-safe per-country outcome."""

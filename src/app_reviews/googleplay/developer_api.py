@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
+from app_reviews.core import safe_json
 from app_reviews.core.auth import TokenSource
 from app_reviews.core.classify import malformed_page, page_failure_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.models.page import PageResult
 from app_reviews.models.reply import ReviewReply
 from app_reviews.models.review import DeviceMetadata, Review
@@ -149,7 +150,8 @@ class GooglePlayOfficialProvider(PooledClient):
         another path on the API. The cursor needs no such care: it is a query
         value, which the client encodes.
         """
-        url = self.URL_TEMPLATE.format(app_id=quote(app_id, safe=""))
+        app = quote(require_path_segment(app_id, "app_id"), safe="")
+        url = self.URL_TEMPLATE.format(app_id=app)
         params = {"maxResults": "100"}
         if cursor:
             params["token"] = cursor
@@ -181,7 +183,7 @@ class GooglePlayOfficialProvider(PooledClient):
 
     def _parse_envelope(self, body: str) -> tuple[list[Any], str | None]:
         """The review entries and next page token; raises on a malformed envelope."""
-        payload = json.loads(body)
+        payload = safe_json.loads(body)
         entries = payload.get("reviews", [])
         if not isinstance(entries, list):
             raise TypeError(f"'reviews' is {type(entries).__name__}, expected a list")

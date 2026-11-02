@@ -148,6 +148,26 @@ an exception from it ends the stream.
 
 ---
 
+## Deadline and memory bounds
+
+Two limits shape a long walk, and they differ between the sync and async twins.
+
+**Time per request.** `HttpClient(max_duration=...)` (120 seconds by default) caps
+one attempt, body read included, so a server that trickles a response cannot hold
+a walk open forever. The async twins cancel the attempt at the deadline. The sync
+twins cannot interrupt a read that is in progress: they check the deadline between
+body chunks, and each socket wait is capped by `timeout`, so a sync attempt can
+overrun `max_duration` by up to a few socket waits before it is abandoned. Set
+`timeout` as well when a tight bound matters on the sync path.
+
+**Memory per fetch.** `fetch()` keeps every review it collects, `raw` payload
+included, until it returns. For each country that is up to `max_pages` pages of
+reviews, and `Country.ALL` multiplies it by 155 storefronts. Bound a large walk
+with `max_pages` and `limit`, or stream it with `iter_reviews()` (or
+`aiter_reviews()`), which holds one page at a time.
+
+---
+
 ## Errors
 
 `iter_pages()` reports failures rather than raising: a failed page is yielded

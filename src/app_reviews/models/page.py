@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app_reviews.models.result import FetchError, _validate_non_negative_int
+from app_reviews.models._validate import require_count
+from app_reviews.models.result import FetchError
 from app_reviews.models.review import Review
 from app_reviews.models.types import FeedFormat, StopReason
 
@@ -37,7 +38,7 @@ class PageResult:
     xml_fallback_error: FetchError | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        _validate_non_negative_int(self.skipped_reviews, "skipped_reviews")
+        require_count(self.skipped_reviews, "skipped_reviews")
 
     def to_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
         """Return the complete JSON-safe page envelope."""

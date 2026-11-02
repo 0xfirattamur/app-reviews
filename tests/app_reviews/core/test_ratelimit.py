@@ -220,6 +220,17 @@ class TestHttpClientWithLimiter:
 
         assert fake_clock.waited() == pytest.approx(120.0)
 
+    def test_an_overflowing_retry_after_date_does_not_crash_a_success(self, fake_clock):
+        """The limiter parsed the header of every response, 200s included, and
+        ``OverflowError`` from a hostile date escaped the request."""
+        limiter = RateLimiter(rate=100, burst=100)
+        overflowing = {"Retry-After": "Sun, 06 Nov 1994 08:49:37 +9999999999999999"}
+        http = _http(_answer(200, headers=overflowing), limiter)
+
+        response = http.get("https://example.test/x")
+
+        assert response.status == 200
+
     def test_retry_after_is_capped_at_max_penalty(self, fake_clock):
         limiter = RateLimiter(rate=100, burst=100, max_penalty=300)
         http = _http(_answer(429, headers={"Retry-After": "86400"}), limiter)

@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from app_reviews.appstore.product_page import parse_version_history
+from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -92,7 +94,11 @@ class AppStoreSearch(PooledClient):
         *,
         country: Country | str = Country.US,
     ) -> AppMetadata | None:
-        """Look up an app by numeric trackId or reverse-DNS bundleId."""
+        """Look up an app by numeric trackId or reverse-DNS bundleId.
+
+        None when the store has no such app. A result this cannot turn into an
+        app raises ``ParseError``.
+        """
         return get_and_parse(
             self._http,
             self.LOOKUP_URL,
@@ -156,12 +162,12 @@ class AppStoreSearch(PooledClient):
 
     def _product_page_url(self, app_id: str, country: Country | str) -> str:
         """The product page only exists under the numeric trackId."""
-        if not app_id.isdigit():
+        if not _is_track_id(app_id):
             raise ValueError(
                 f"version_history needs a numeric App Store trackId, got {app_id!r}"
             )
         return self.PRODUCT_PAGE_URL.format(
-            country=self._storefront(country), app_id=app_id
+            country=quote(self._storefront(country), safe=""), app_id=app_id
         )
 
     def _search_params(
@@ -180,7 +186,7 @@ class AppStoreSearch(PooledClient):
         Picking the param that matches the input shape lets callers chain
         ``search() -> lookup()`` with whichever id ``search()`` returned.
         """
-        id_param = "id" if app_id.isdigit() else "bundleId"
+        id_param = "id" if _is_track_id(app_id) else "bundleId"
         return {id_param: app_id, "country": self._storefront(country)}
 
     def _storefront(self, country: Country | str) -> str:
@@ -202,11 +208,22 @@ class AppStoreSearch(PooledClient):
         return apps
 
     def _parse_lookup(self, response: HttpResponse) -> AppMetadata | None:
-        """The one result, or None, which is also how "no such app" is reported."""
+        """The one result, or None for an empty ``results``: "no such app".
+
+        A first result with no usable app is a page this cannot read, and raises
+        ``ParseError``, as Google Play's lookup does. Answering None would read
+        as an app that does not exist.
+        """
         search_entries = self._read_search_results(response, "iTunes Lookup API")
         if not search_entries:
             return None
-        return self._parse_metadata(search_entries[0])
+        app = self._parse_metadata(search_entries[0])
+        if app is None:
+            raise ParseError(
+                "iTunes Lookup API returned a result with no usable app",
+                status=response.status,
+            )
+        return app
 
     def _read_search_results(self, response: HttpResponse, api: str) -> list[Any]:
         """The ``results`` array, or ``ParseError`` if the body is unreadable.
@@ -217,7 +234,7 @@ class AppStoreSearch(PooledClient):
         """
         raise_for_http_failure(response, api, credentialed=False)
         try:
-            search_entries = json.loads(response.body)["results"]
+            search_entries = safe_json.loads(response.body)["results"]
         except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise ParseError(
                 f"Unreadable response from {api}: {exc}", status=response.status
@@ -276,3 +293,8 @@ class AppStoreSearch(PooledClient):
             first_release_date=scraped_datetime(search_entry.get("releaseDate")),
             release_notes=scraped_text(search_entry.get("releaseNotes")),
         )
+
+
+def _is_track_id(app_id: str) -> bool:
+    """True for ASCII digits only; ``str.isdigit`` also accepts ``²`` and more."""
+    return app_id.isascii() and app_id.isdigit()

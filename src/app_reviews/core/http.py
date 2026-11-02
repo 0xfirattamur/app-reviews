@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
+from app_reviews.core import safe_json
 from app_reviews.core.ratelimit import RequestLimiter
 from app_reviews.core.retry import RetryPolicy, retry_after_seconds
 from app_reviews.models.config import RetryConfig
@@ -50,6 +50,10 @@ covers genuine mid-body truncation, which is. Treating the pair as retryable
 transport failures is the safer default: a real bug in ``_read`` fails loudly in
 the suite long before it reaches a retry.
 """
+
+DEFAULT_TIMEOUT = 30.0
+"""Seconds per socket operation when neither ``timeout`` nor a ``RetryConfig``
+names one."""
 
 DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 """Bytes of one response body this client will hold in memory.
@@ -93,10 +97,13 @@ class HttpResponse:
 
     ``retry_after`` is the raw ``Retry-After`` header of the final attempt, so a
     caller that gives up on a 429 can say how long the store asked it to wait.
+
+    ``body`` is left out of ``repr``: some responses (the Google token exchange)
+    carry a bearer token in it.
     """
 
     status: int
-    body: str
+    body: str = field(repr=False)
     transport_error: str | None = None
     retry_after: str | None = None
 
@@ -107,7 +114,7 @@ class HttpResponse:
 
     def json(self) -> Any:
         """Parse body as JSON."""
-        return json.loads(self.body)
+        return safe_json.loads(self.body)
 
 
 class HttpClient:
@@ -145,7 +152,7 @@ class HttpClient:
     def __init__(
         self,
         *,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         proxy: str | None = None,
         retry: RetryConfig | None = None,
         transport: Any = None,
@@ -153,6 +160,7 @@ class HttpClient:
         max_duration: float = DEFAULT_MAX_DURATION,
         rate_limiter: RequestLimiter | None = None,
     ) -> None:
+        timeout = self._resolve_timeout(timeout, retry)
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_duration = max_duration
@@ -166,7 +174,21 @@ class HttpClient:
         self._transport = transport
         self._sync_pool: httpx.Client | None = None
         self._async_pool: httpx.AsyncClient | None = None
+        self._async_pool_loop: asyncio.AbstractEventLoop | None = None
         self._pool_lock = threading.Lock()
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None, retry: RetryConfig | None) -> float:
+        """An explicit ``timeout`` wins, then ``retry.timeout``, then the default.
+
+        ``RetryConfig`` documents ``timeout`` as the per-request timeout, so a
+        client built from one honours it without the caller saying it twice.
+        """
+        if timeout is not None:
+            return timeout
+        if retry is not None:
+            return retry.timeout
+        return DEFAULT_TIMEOUT
 
     def get(
         self,
@@ -320,15 +342,37 @@ class HttpClient:
         return self._sync_pool
 
     def _apool(self) -> httpx.AsyncClient:
-        if self._async_pool is None:
-            with self._pool_lock:
-                if self._async_pool is None:
-                    self._async_pool = httpx.AsyncClient(
-                        timeout=self._socket_timeout,
-                        proxy=self._proxy,
-                        transport=self._transport,
-                        follow_redirects=True,
-                    )
+        """The async pool for the running loop, rebuilt when the loop changed.
+
+        Pooled connections belong to the loop that opened them, so a pool built
+        under a loop that has since closed (a second ``asyncio.run``) fails every
+        request. The stale pool cannot be closed from here, its loop is gone, so
+        it is dropped and a new one built under the same lock as first use. A
+        client serves one event loop at a time.
+        """
+        loop = _running_loop()
+        pool = self._async_pool_for(loop)
+        if pool is not None:
+            return pool
+        with self._pool_lock:
+            pool = self._async_pool_for(loop)
+            if pool is None:
+                pool = httpx.AsyncClient(
+                    timeout=self._socket_timeout,
+                    proxy=self._proxy,
+                    transport=self._transport,
+                    follow_redirects=True,
+                )
+                self._async_pool = pool
+                self._async_pool_loop = loop
+        return pool
+
+    def _async_pool_for(
+        self, loop: asyncio.AbstractEventLoop | None
+    ) -> httpx.AsyncClient | None:
+        """The current async pool if it was built under ``loop``, else None."""
+        if self._async_pool_loop is not loop:
+            return None
         return self._async_pool
 
     def _headers(self, extra: dict[str, str] | None) -> dict[str, str]:
@@ -529,9 +573,17 @@ class HttpClient:
             )
 
     def _decode_body(self, buffered: list[bytes], raw: httpx.Response) -> str:
-        return b"".join(buffered).decode(
-            raw.charset_encoding or "utf-8", errors="replace"
-        )
+        """Decode with the charset the server named, or UTF-8 when it names none.
+
+        A charset Python has no codec for (``charset=bogus``) is the server's
+        quirk, not a failed exchange, and would otherwise escape as a
+        ``LookupError`` from a client that promises ``HttpResponse``.
+        """
+        body = b"".join(buffered)
+        try:
+            return body.decode(raw.charset_encoding or "utf-8", errors="replace")
+        except LookupError:
+            return body.decode("utf-8", errors="replace")
 
     def _to_error_response(self, exc: Exception) -> HttpResponse:
         return HttpResponse(
@@ -572,7 +624,9 @@ class HttpClient:
 
     async def aclose(self) -> None:
         """Async twin of ``close``. Releases both pools."""
-        if self._async_pool is not None:
+        if self._is_async_pool_orphaned():
+            self._forget_async_pool()
+        elif self._async_pool is not None:
             await self._async_pool.aclose()
             self._async_pool = None
         if self._sync_pool is not None:
@@ -589,6 +643,9 @@ class HttpClient:
         """
         if self._async_pool is None:
             return
+        if self._is_async_pool_orphaned():
+            self._forget_async_pool()
+            return
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -599,6 +656,22 @@ class HttpClient:
             "close() cannot release the async pool from inside a running event "
             "loop; use `await aclose()`. The async pool is still open."
         )
+
+    def _is_async_pool_orphaned(self) -> bool:
+        """Whether the async pool was built under an event loop that has closed.
+
+        Its connections belong to that loop, so ``aclose()`` on them schedules
+        callbacks there and raises ``Event loop is closed``: the usual ending of a
+        script that ran ``asyncio.run(client.afetch(...))`` and then ``close()``.
+        Nothing can be closed through a dead loop; the sockets go when the pool is
+        garbage collected.
+        """
+        loop = self._async_pool_loop
+        return self._async_pool is not None and loop is not None and loop.is_closed()
+
+    def _forget_async_pool(self) -> None:
+        self._async_pool = None
+        self._async_pool_loop = None
 
     def __enter__(self) -> HttpClient:
         return self
@@ -611,6 +684,14 @@ class HttpClient:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The running event loop, or None when called outside one."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _carries_credential(headers: dict[str, str] | None) -> bool:

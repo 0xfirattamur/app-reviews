@@ -277,6 +277,107 @@ class TestTokenExchangeFailuresAreClassified:
             _auth_on(handler).authorization_header()
 
 
+class TestGoogleRejectingTheKeyIsAnAuthError:
+    """Google refuses a revoked or disabled key with HTTP 400, not 401."""
+
+    @staticmethod
+    def _provider(status, body):
+        def handler(request):
+            if "oauth2" in str(request.url):
+                return httpx.Response(status, text=body)
+            return httpx.Response(200, text=json.dumps({"reviews": []}))
+
+        return GooglePlayReviews(
+            auth=GooglePlayAuth(service_account_info=dict(service_account_json())),
+            http=HttpClient(transport=httpx.MockTransport(handler)),
+        )
+
+    @pytest.mark.parametrize(
+        "code", ["invalid_grant", "invalid_client", "unauthorized_client"]
+    )
+    async def test_a_rejected_credential_raises_auth_error(self, twin, code):
+        provider = self._provider(400, json.dumps({"error": code}))
+
+        with pytest.raises(AuthError, match=code) as caught:
+            await twin.call(provider, "fetch", "com.example.app")
+
+        assert caught.value.status == 400
+
+    @pytest.mark.parametrize(
+        "body", ['{"error":"invalid_request"}', "not json", "[1]", '{"error":["x"]}']
+    )
+    async def test_any_other_400_stays_a_request_error(self, twin, body):
+        """Not raised: only ``AuthError`` escapes a walk; the rest lands on
+        ``.errors`` classified as ``request``."""
+        provider = self._provider(400, body)
+
+        result = await twin.call(provider, "fetch", "com.example.app")
+
+        assert [error.kind for error in result.errors] == ["request"]
+
+
+class TestTheAccessTokenIsChecked:
+    @pytest.mark.parametrize("bad", [None, "", 123, ["tok"]])
+    def test_a_token_that_is_not_a_non_empty_string_is_a_parse_error(self, bad):
+        with pytest.raises(ParseError, match="access_token"):
+            _auth_on(_token(bad)).authorization_header()
+
+    @pytest.mark.parametrize("bad", [None, "", 123])
+    async def test_the_async_exchange_rejects_them_too(self, bad):
+        with pytest.raises(ParseError, match="access_token"):
+            await _auth_on(_token(bad)).aauthorization_header()
+
+    def test_a_concurrent_close_cannot_produce_a_bearer_none(self, monkeypatch):
+        """``close()`` lands between the freshness check and the return."""
+        auth = _auth_on(_token())
+        held = auth.authorization_header()
+
+        def close_then_report_a_time_before_expiry():
+            auth.close()
+            return -1.0
+
+        monkeypatch.setattr(
+            "app_reviews.googleplay.auth.time.time",
+            close_then_report_a_time_before_expiry,
+        )
+
+        assert auth._cached_header() == held
+
+
+class TestTheTokenLifetimeIsClamped:
+    @staticmethod
+    def _counting_auth(expires_in_json: str):
+        exchanges = []
+
+        def handler(request):
+            exchanges.append(request)
+            body = f'{{"access_token": "tok", "expires_in": {expires_in_json}}}'
+            return httpx.Response(200, text=body)
+
+        return _auth_on(handler), exchanges
+
+    @pytest.mark.parametrize("expires_in", ["999999999", "1e999"])
+    def test_an_absurd_lifetime_is_re_exchanged_after_an_hour(
+        self, fake_clock, expires_in
+    ):
+        auth, exchanges = self._counting_auth(expires_in)
+
+        auth.authorization_header()
+        fake_clock.advance(GoogleAuth.MAX_EXPIRES_IN - 1)
+        auth.authorization_header()
+
+        assert len(exchanges) == 2
+
+    def test_a_modest_lifetime_is_kept_as_given(self, fake_clock):
+        auth, exchanges = self._counting_auth("1800")
+
+        auth.authorization_header()
+        fake_clock.advance(1000)
+        auth.authorization_header()
+
+        assert len(exchanges) == 1
+
+
 class TestAsyncTokenExchange:
     async def test_aauthorization_header_returns_bearer_token(self):
         auth = _auth_on(_token("at-123"))

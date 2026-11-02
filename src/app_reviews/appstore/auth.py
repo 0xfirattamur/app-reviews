@@ -31,9 +31,9 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
     """Read and validate the .p8 key; any failure is an ``AuthError``.
 
     No failure may leave the PEM reachable from the error: the key is unbound
-    before raising, and the ``ValueError`` is re-raised outside its ``except`` so
-    no ``__context__`` points at the dataclass frame that holds it. Pinned by
-    ``tests/app_reviews/test_credential_hygiene.py``.
+    before raising, and the ``TypeError`` or ``ValueError`` is re-raised outside
+    its ``except`` so no ``__context__`` points at the dataclass frame that holds
+    it. Pinned by ``tests/app_reviews/test_credential_hygiene.py``.
     """
     private_key: str | None
     if auth.key_path is None:
@@ -60,7 +60,7 @@ def load_connect_credentials(auth: AppStoreAuth) -> ConnectCredentials:
             issuer_id=auth.issuer_id,
             private_key=private_key,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         reason = str(exc)
     del private_key
 
@@ -136,12 +136,18 @@ class ConnectAuth:
         The clock is read once and used for both the JWT's ``iat``/``exp`` and the
         local expiry, so what this class believes about the token cannot drift
         from what it actually signed.
+
+        ``self._token`` is read once into a local: a ``close()`` from another
+        thread between the check and the return would otherwise make this
+        return ``"Bearer None"``.
         """
-        if self._token is None or time.time() >= self._expires_at:
+        token = self._token
+        if token is None or time.time() >= self._expires_at:
             issued_at = int(time.time())
-            self._token = self.generate_token(issued_at)
+            token = self.generate_token(issued_at)
+            self._token = token
             self._expires_at = issued_at + TOKEN_EXPIRY_SECONDS - REFRESH_MARGIN_SECONDS
-        return f"Bearer {self._token}"
+        return f"Bearer {token}"
 
     async def aauthorization_header(self) -> str:
         """Signing is local CPU work with nothing to await, so it runs off the loop."""

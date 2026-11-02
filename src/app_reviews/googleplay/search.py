@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import html
-import json
 import logging
 import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
+from app_reviews.core import safe_json
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpResponse
@@ -75,7 +75,8 @@ class GooglePlaySearch(PooledClient):
     SEARCH_DATASET = "ds:4"
     DETAIL_DATASET = "ds:5"
 
-    _BLOCK = re.compile(r"AF_initDataCallback[\s\S]*?</script")
+    _BLOCK_START = "AF_initDataCallback"
+    _BLOCK_END = "</script"
     _KEY = re.compile(r"(ds:\d+)'")
     _DATA = re.compile(r"\bdata:\s*")
 
@@ -313,19 +314,34 @@ class GooglePlaySearch(PooledClient):
         which leaves the trailer after it alone.
         """
         datasets: dict[str, Any] = {}
-        decoder = json.JSONDecoder()
-        for block_match in self._BLOCK.finditer(page_html):
-            block = block_match.group(0)
+        for block in self._iter_blocks(page_html):
             key_match = self._KEY.search(block)
             data_start = self._DATA.search(block)
             if key_match is None or data_start is None:
                 continue
             dataset_key = key_match.group(1)
             try:
-                datasets[dataset_key], _ = decoder.raw_decode(block, data_start.end())
+                datasets[dataset_key], _ = safe_json.raw_decode(block, data_start.end())
             except ValueError:
                 _LOG.debug("Skipped an unreadable %s payload", dataset_key)
         return datasets
+
+    def _iter_blocks(self, page_html: str) -> Iterator[str]:
+        """Each ``AF_initDataCallback`` block, up to and including its ``</script``.
+
+        Found with ``str.find`` rather than ``AF_initDataCallback[\\s\\S]*?</script``:
+        with no closing tag that lazy match rescans the rest of the page from
+        every marker, so a page of repeated markers took quadratic time. Without
+        a closing tag after one marker there is none after the next, so the scan
+        stops.
+        """
+        position = 0
+        while (start := page_html.find(self._BLOCK_START, position)) != -1:
+            closing = page_html.find(self._BLOCK_END, start)
+            if closing == -1:
+                return
+            position = closing + len(self._BLOCK_END)
+            yield page_html[start:position]
 
     def _order_datasets(
         self, datasets: dict[str, Any], preferred_key: str
@@ -532,13 +548,21 @@ class GooglePlaySearch(PooledClient):
         return node
 
     def _build_store_url(self, app_id: str) -> str:
-        return f"{self.DETAIL_URL}?id={app_id}"
+        return f"{self.DETAIL_URL}?id={quote(app_id, safe='')}"
 
     def _read_app_id_from_url(self, url: str | None) -> str | None:
-        """The package name in a store link's ``id`` parameter."""
+        """The package name in a store link's ``id`` parameter.
+
+        None for a link that does not parse: ``urlsplit`` raises on a malformed
+        IPv6 literal, and one bad link must cost only its own result.
+        """
         if url is None:
             return None
-        ids = parse_qs(urlsplit(url).query).get("id", [])
+        try:
+            query = urlsplit(url).query
+        except ValueError:
+            return None
+        ids = parse_qs(query).get("id", [])
         if not ids or not ids[0]:
             return None
         return ids[0]

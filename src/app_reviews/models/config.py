@@ -8,6 +8,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from app_reviews.models._validate import (
+    require_count,
+    require_finite_non_negative,
+    require_finite_positive,
+    require_http_statuses,
+)
+
 GOOGLE_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "sts.googleapis.com"})
 """The only hosts a signed assertion may be POSTed to.
 
@@ -37,14 +44,11 @@ class RetryConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "retry_on", tuple(self.retry_on))
-        if self.max_retries < 0:
-            raise ValueError("max_retries must be >= 0")
-        if self.backoff_factor < 0:
-            raise ValueError("backoff_factor must be >= 0")
-        if self.timeout <= 0:
-            raise ValueError("timeout must be > 0")
-        if self.max_backoff <= 0:
-            raise ValueError("max_backoff must be > 0")
+        require_count(self.max_retries, "max_retries")
+        require_finite_non_negative(self.backoff_factor, "backoff_factor")
+        require_finite_positive(self.timeout, "timeout")
+        require_finite_positive(self.max_backoff, "max_backoff")
+        require_http_statuses(self.retry_on, "retry_on")
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -128,6 +132,8 @@ class ConnectCredentials:
             raise ValueError("key_id must not be empty.")
         if not self.issuer_id:
             raise ValueError("issuer_id must not be empty.")
+        if not isinstance(self.private_key, str):
+            raise TypeError("private_key must be a str.")
         if not self.private_key:
             raise ValueError("private_key must not be empty.")
         if "-----BEGIN" not in self.private_key:
@@ -145,6 +151,7 @@ class ServiceAccountCredentials:
     token_uri: str
 
     def __post_init__(self) -> None:
+        self._check_field_types()
         if not self.client_email:
             raise ValueError("client_email must not be empty.")
         if not self.private_key_pem:
@@ -154,6 +161,17 @@ class ServiceAccountCredentials:
         if not self.token_uri:
             raise ValueError("token_uri must not be empty.")
         self._check_token_uri()
+
+    def _check_field_types(self) -> None:
+        """Require every field to be a ``str`` before any check reads it.
+
+        On another type the checks below would raise a stdlib ``TypeError``
+        (``"-----BEGIN" in b"..."``, ``urlsplit(1)``) whose text may carry the
+        value. Only the field name and the expected type are reported.
+        """
+        for field_name in ("client_email", "private_key_pem", "token_uri"):
+            if not isinstance(getattr(self, field_name), str):
+                raise TypeError(f"{field_name} must be a str.")
 
     def _check_token_uri(self) -> None:
         """The token endpoint is checked, not trusted.

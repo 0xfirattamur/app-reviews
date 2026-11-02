@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from dataclasses import dataclass, replace
@@ -12,9 +11,11 @@ from urllib.parse import quote
 from xml.etree import ElementTree
 
 from app_reviews.appstore.atom import atom_entries
+from app_reviews.core import safe_json
 from app_reviews.core.classify import fetch_error_from_response
 from app_reviews.core.client import PooledClient
 from app_reviews.core.http import HttpClient, HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.models.country import normalise_country
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError
@@ -137,8 +138,11 @@ class AppStoreScraperProvider(PooledClient):
     ) -> _PageRef | PageResult:
         """The page to request, or a ``PageResult`` that ends the walk.
 
-        An unusable cursor is reported, not raised, as other page failures are.
+        An unusable cursor is reported, not raised, as other page failures are. A
+        dot-segment id or country is a caller error and raises ``ValueError``.
         """
+        require_path_segment(app_id, "app_id")
+        require_path_segment(country, "country")
         if cursor is None:
             return _PageRef(app_id, country, 1)
         try:
@@ -162,7 +166,7 @@ class AppStoreScraperProvider(PooledClient):
         if failure is not None:
             return failure
         try:
-            entries = self._read_review_entries(json.loads(response.body))
+            entries = self._read_review_entries(safe_json.loads(response.body))
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
             return PageResult(
                 error=FetchError(

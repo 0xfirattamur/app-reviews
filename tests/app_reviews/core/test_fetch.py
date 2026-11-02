@@ -1,12 +1,14 @@
 """Tests for the full fetch: rung 3 of the client ladder."""
 
 import asyncio
+import time
 from datetime import timedelta
 from threading import Event, Lock
 from typing import Literal
 
 import pytest
 
+from app_reviews.errors import AuthError
 from app_reviews.models.country import Country
 from app_reviews.models.page import PageResult
 from app_reviews.models.result import FetchError, FetchResult
@@ -105,6 +107,97 @@ class BlockingInFlightProvider:
     def _leave(self) -> None:
         with self.lock:
             self.active -= 1
+
+
+class FailingFirstCountryProvider:
+    """The first country raises ``AuthError`` once a second walk is in flight.
+
+    Every other country takes ``_WALK_SECONDS``, so walks still queued behind the
+    failure are the ones a fix must not start. ``started`` lists every country a
+    walk began for.
+    """
+
+    source = "appstore_scraper"
+    _WALK_SECONDS: float = 0.2
+    _WAIT_SECONDS: float = 2
+
+    def __init__(self, failing_country: str) -> None:
+        self.failing_country = failing_country
+        self.started: list[str] = []
+        self.lock: Lock = Lock()
+        self.another_walk_started: _Signal = _Signal()
+
+    def fetch_page(self, app_id, country, cursor):
+        if self._begin(country):
+            self.another_walk_started.wait(self._WAIT_SECONDS)
+            raise AuthError("credential rejected")
+        time.sleep(self._WALK_SECONDS)
+        return PageResult()
+
+    async def afetch_page(self, app_id, country, cursor):
+        if self._begin(country):
+            await self.another_walk_started.wait_async(self._WAIT_SECONDS)
+            raise AuthError("credential rejected")
+        await asyncio.sleep(self._WALK_SECONDS)
+        return PageResult()
+
+    def _begin(self, country: str) -> bool:
+        """Record the start; True when this is the walk that must fail."""
+        with self.lock:
+            self.started.append(country)
+        if country == self.failing_country:
+            return True
+        self.another_walk_started.set()
+        return False
+
+
+class TestAFatalErrorStopsQueuedWalks:
+    """``AuthError`` is identical for every country, so walks still queued behind
+    it could only repeat it, each costing requests against a rejected credential."""
+
+    async def test_queued_walks_never_start(self, twin):
+        countries = ["us", "gb", "de", "fr", "ca", "au"]
+        provider = FailingFirstCountryProvider(failing_country="us")
+
+        with pytest.raises(AuthError):
+            await twin.call(
+                FakeClient(provider), "fetch", "123", countries=countries, concurrency=2
+            )
+
+        assert "us" in provider.started
+        assert len(provider.started) < len(countries)
+
+    async def test_in_flight_walks_finish_before_the_error_propagates(self, twin):
+        provider = FailingFirstCountryProvider(failing_country="us")
+        finished: list[str] = []
+        fetch_page = provider.fetch_page
+        afetch_page = provider.afetch_page
+
+        def fetch_page_and_record_finish(app_id, country, cursor):
+            try:
+                return fetch_page(app_id, country, cursor)
+            finally:
+                finished.append(country)
+
+        async def afetch_page_and_record_finish(app_id, country, cursor):
+            try:
+                return await afetch_page(app_id, country, cursor)
+            finally:
+                finished.append(country)
+
+        provider.fetch_page = fetch_page_and_record_finish
+        provider.afetch_page = afetch_page_and_record_finish
+
+        with pytest.raises(AuthError):
+            await twin.call(
+                FakeClient(provider),
+                "fetch",
+                "123",
+                countries=["us", "gb", "de", "fr"],
+                concurrency=2,
+            )
+
+        assert sorted(finished) == sorted(provider.started)
 
 
 class TestSingleCountry:

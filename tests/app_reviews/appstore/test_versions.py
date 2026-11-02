@@ -165,7 +165,7 @@ class TestVersions:
 
         assert len(calls) == 1
 
-    async def test_a_repeated_next_link_ends_the_walk(self, twin):
+    async def test_a_repeated_next_link_is_a_parse_error(self, twin):
         calls = []
 
         def handler(request):
@@ -178,9 +178,51 @@ class TestVersions:
                 },
             )
 
-        await twin.call(_client(handler), "versions", "123")
+        with pytest.raises(ParseError, match="repeated"):
+            await twin.call(_client(handler), "versions", "123")
 
         assert len(calls) == 2
+
+    async def test_a_cycle_through_another_page_is_a_parse_error(self, twin):
+        cursors = ["a", "b", "a"]
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            next_url = f"{_URL}?cursor={cursors[len(calls) - 1]}"
+            return httpx.Response(
+                200,
+                json={
+                    "data": [_version("v1", "1.0", "2025-01-01T00:00:00Z")],
+                    "links": {"next": next_url},
+                },
+            )
+
+        with pytest.raises(ParseError, match="repeated"):
+            await twin.call(_client(handler), "versions", "123")
+
+        assert len(calls) == 3
+
+    async def test_a_walk_past_the_page_ceiling_is_a_parse_error(
+        self, twin, monkeypatch
+    ):
+        monkeypatch.setattr(AppStoreVersions, "MAX_PAGES", 3)
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "data": [_version("v1", "1.0", "2025-01-01T00:00:00Z")],
+                    "links": {"next": f"{_URL}?cursor={len(calls)}"},
+                },
+            )
+
+        with pytest.raises(ParseError, match="more than 3 pages"):
+            await twin.call(_client(handler), "versions", "123")
+
+        assert len(calls) == 3
 
     async def test_an_unknown_app_is_not_found(self, twin):
         with pytest.raises(NotFoundError):

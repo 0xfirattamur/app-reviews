@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from app_reviews.appstore.api import ConnectAPIClient
 from app_reviews.core.classify import raise_for_http_failure
 from app_reviews.core.http import HttpResponse
+from app_reviews.core.validation import require_path_segment
 from app_reviews.errors import ParseError
 from app_reviews.models.version import AppStoreVersion
 
@@ -58,18 +59,23 @@ class AppStoreVersions(ConnectAPIClient):
     Needs a key that can read the app (any App Store Connect role does).
     """
 
+    MAX_PAGES = 50
+    """Most pages one call follows. At 200 versions a page that is far past any
+    real app, so reaching it means a hostile or broken ``links.next`` chain."""
+
     def versions(self, app_id: str) -> list[AppStoreVersion]:
         """Every version Connect has for ``app_id``, newest ``created_at`` first.
 
         ``app_id`` is the numeric Apple ID. Raises ``NotFoundError`` for an app
         the key cannot see, and ``ParseError`` rather than returning a partial
-        list when a page cannot be read.
+        list when a page cannot be read, when ``links.next`` repeats a page
+        already read, or when the walk passes ``MAX_PAGES``.
         """
         found: list[AppStoreVersion] = []
         url: str | None = self._first_url(app_id)
         seen: set[str] = set()
-        while url is not None and url not in seen:
-            seen.add(url)
+        while url is not None:
+            self._claim_page(url, seen)
             response = self._http.get(url, headers=self._headers())
             page, url = self._parse_versions_page(response, app_id)
             found += page
@@ -80,19 +86,35 @@ class AppStoreVersions(ConnectAPIClient):
         found: list[AppStoreVersion] = []
         url: str | None = self._first_url(app_id)
         seen: set[str] = set()
-        while url is not None and url not in seen:
-            seen.add(url)
+        while url is not None:
+            self._claim_page(url, seen)
             response = await self._http.aget(url, headers=await self._aheaders())
             page, url = self._parse_versions_page(response, app_id)
             found += page
         return self._sort_newest_first(found)
+
+    def _claim_page(self, url: str, seen: set[str]) -> None:
+        """Record ``url`` as about to be read, or refuse a walk that cannot end.
+
+        A version list is a prefix of a finite set, so a repeated page means the
+        chain loops, and silently stopping there would return a partial list as
+        if it were whole.
+        """
+        if url in seen:
+            raise ParseError(f"{_API} repeated a page in 'links.next'")
+        if len(seen) >= self.MAX_PAGES:
+            raise ParseError(
+                f"{_API} listed more than {self.MAX_PAGES} pages of versions"
+            )
+        seen.add(url)
 
     def _first_url(self, app_id: str) -> str:
         """Escaped: the id lands in the path of a request carrying the JWT."""
         return f"{self.API_BASE}{self._path(app_id)}?{_QUERY}"
 
     def _path(self, app_id: str) -> str:
-        return f"/v1/apps/{quote(app_id, safe='')}/appStoreVersions"
+        segment = quote(require_path_segment(app_id, "app_id"), safe="")
+        return f"/v1/apps/{segment}/appStoreVersions"
 
     def _parse_versions_page(
         self, response: HttpResponse, app_id: str

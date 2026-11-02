@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
 import dataclasses
 import functools
 import logging
-from collections.abc import AsyncIterator, Callable, Collection, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Collection,
+    Iterator,
+)
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from datetime import date, datetime
 from typing import Any
 
@@ -64,6 +71,14 @@ class _FetchPlan:
     matching_limit: int | None
     """Matching-review count that may end one country walk."""
     worker_count: int
+
+
+def _first_failure(futures: list[Future[Any]]) -> BaseException | None:
+    """The exception of the first finished future that failed, in submit order."""
+    for future in futures:
+        if future.done() and not future.cancelled() and future.exception():
+            return future.exception()
+    return None
 
 
 class BaseReviews(PooledClient, abc.ABC):
@@ -292,7 +307,7 @@ class BaseReviews(PooledClient, abc.ABC):
         if limit == 0 or page_budget == 0:
             return
         provider = await self._aensure_provider()
-        async for page in self._awalk(
+        walk = self._awalk(
             provider,
             app_id,
             self._country_arg(provider, country),
@@ -300,8 +315,10 @@ class BaseReviews(PooledClient, abc.ABC):
             since,
             limit,
             page_budget,
-        ):
-            yield page
+        )
+        async with contextlib.aclosing(walk):
+            async for page in walk:
+                yield page
 
     def _walk(
         self,
@@ -345,7 +362,7 @@ class BaseReviews(PooledClient, abc.ABC):
         since: date | datetime | None,
         limit: int | None,
         max_pages: int,
-    ) -> AsyncIterator[PageResult]:
+    ) -> AsyncGenerator[PageResult, None]:
         """Async equivalent of ``_walk``.
 
         The loop body is written twice because an async generator cannot share
@@ -475,13 +492,18 @@ class BaseReviews(PooledClient, abc.ABC):
                 max_pages=request.page_budget,
             )
             country_on_page = self._bind_page_callback(on_page, provider, country)
-            async for review in self._aiter_country_reviews(
+            country_reviews = self._aiter_country_reviews(
                 pages, country, matches_since, country_on_page
-            ):
-                if limit is not None and yielded_count >= limit:
-                    return
-                yield review
-                yielded_count += 1
+            )
+            # Closed explicitly, ``country_reviews`` before the ``pages`` it reads
+            # from: an early return leaves both suspended, and the event loop
+            # would only close them at some later point.
+            async with contextlib.aclosing(pages), contextlib.aclosing(country_reviews):
+                async for review in country_reviews:
+                    if limit is not None and yielded_count >= limit:
+                        return
+                    yield review
+                    yielded_count += 1
 
     def _page(
         self,
@@ -596,7 +618,7 @@ class BaseReviews(PooledClient, abc.ABC):
         country: str,
         matches_since: Callable[[Review], bool] | None,
         on_page: Callable[[PageResult], None] | None,
-    ) -> AsyncIterator[Review]:
+    ) -> AsyncGenerator[Review, None]:
         """Async twin of ``_iter_country_reviews``."""
         async for page in pages:
             self._log_stream_error(page, country)
@@ -729,7 +751,12 @@ class BaseReviews(PooledClient, abc.ABC):
     def _collect_countries(
         self, provider: ReviewProvider, app_id: str, plan: _FetchPlan
     ) -> list[tuple[list[Review], CountryOutcome]]:
-        """Walk every planned country, on a thread pool when more than one."""
+        """Walk every planned country, on a thread pool when more than one.
+
+        The first failure stops the walks still queued: ``AuthError`` is the same
+        for every country, so starting them only spends requests on a rejected
+        credential. Walks already running are waited for, never abandoned.
+        """
         if plan.worker_count == 1:
             return [
                 self._walk_country(provider, app_id, country, plan)
@@ -740,6 +767,11 @@ class BaseReviews(PooledClient, abc.ABC):
                 pool.submit(self._walk_country, provider, app_id, country, plan)
                 for country in plan.countries
             ]
+            wait(futures, return_when=FIRST_EXCEPTION)
+            failure = _first_failure(futures)
+            if failure is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+                raise failure
             return [future.result() for future in futures]
 
     async def _acollect_countries(
@@ -747,26 +779,57 @@ class BaseReviews(PooledClient, abc.ABC):
     ) -> list[tuple[list[Review], CountryOutcome]]:
         """Async twin of ``_collect_countries``, bounded by a semaphore."""
         semaphore = asyncio.Semaphore(plan.worker_count)
-
-        async def walk_when_allowed(
-            country: str,
-        ) -> tuple[list[Review], CountryOutcome]:
-            async with semaphore:
-                return await self._awalk_country(provider, app_id, country, plan)
-
+        failures: list[Exception] = []
         # return_exceptions so one country's failure does not cancel the others
         # mid-flight, orphaning their requests on the shared pool. The threaded
-        # sync twin waits for every worker; this makes the async path match.
+        # sync twin waits for every running worker; this makes the async path
+        # match. Walks that have not started check ``failures`` and skip.
         settled = await asyncio.gather(
-            *(walk_when_allowed(country) for country in plan.countries),
+            *(
+                self._awalk_unless_failed(
+                    provider, app_id, country, plan, semaphore, failures
+                )
+                for country in plan.countries
+            ),
             return_exceptions=True,
         )
+        if failures:
+            raise failures[0]
         collected: list[tuple[list[Review], CountryOutcome]] = []
         for outcome in settled:
             if isinstance(outcome, BaseException):
                 raise outcome
-            collected.append(outcome)
+            if outcome is not None:
+                collected.append(outcome)
         return collected
+
+    async def _awalk_unless_failed(
+        self,
+        provider: ReviewProvider,
+        app_id: str,
+        country: str,
+        plan: _FetchPlan,
+        semaphore: asyncio.Semaphore,
+        failures: list[Exception],
+    ) -> tuple[list[Review], CountryOutcome] | None:
+        """Walk one country once a slot is free, or skip it after a failure.
+
+        Only a walk that had to queue is skipped, like a job still waiting in the
+        sync pool's queue: one that found a free slot is already running
+        alongside the failing walk, as a pool worker would be. The check follows
+        the semaphore so a queued walk sees failures recorded while it waited,
+        and a failure is recorded before the slot is released, so the next queued
+        walk is guaranteed to see it.
+        """
+        had_to_queue = semaphore.locked()
+        async with semaphore:
+            if had_to_queue and failures:
+                return None
+            try:
+                return await self._awalk_country(provider, app_id, country, plan)
+            except Exception as error:
+                failures.append(error)
+                raise
 
     def _walk_limit(
         self,
@@ -899,14 +962,15 @@ class BaseReviews(PooledClient, abc.ABC):
             limit=plan.walk_limit,
             max_pages=plan.page_budget,
         )
-        async for page in pages:
-            fetched_review_count = len(page.reviews)
-            page, matching_review_count = self._retain_matching_reviews(
-                page, plan, matching_review_count
-            )
-            collector.add(page, reviews_fetched=fetched_review_count)
-            if page.stopped_because is not None:
-                break
+        async with contextlib.aclosing(pages):
+            async for page in pages:
+                fetched_review_count = len(page.reviews)
+                page, matching_review_count = self._retain_matching_reviews(
+                    page, plan, matching_review_count
+                )
+                collector.add(page, reviews_fetched=fetched_review_count)
+                if page.stopped_because is not None:
+                    break
         return collector.reviews, collector.outcome()
 
     def _retain_matching_reviews(

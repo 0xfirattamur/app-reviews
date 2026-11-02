@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 from app_reviews.models.config import RetryConfig
 
 __all__ = ["RetryPolicy", "retry_after_seconds"]
+
+_MAX_BACKOFF_EXPONENT = 1000
+"""Largest power of two the backoff schedule computes.
+
+``2.0 ** 1024`` overflows a float, and ``max_retries`` has no ceiling, so a long
+schedule would raise instead of waiting. ``max_backoff`` caps the delay long
+before this exponent matters; this only keeps the arithmetic finite.
+"""
 
 
 class RetryPolicy:
@@ -41,9 +48,9 @@ class RetryPolicy:
         asked = retry_after_seconds(retry_after)
         if asked is not None:
             return min(asked, self._config.max_backoff)
-        return float(
-            min(self._config.backoff_factor * (2**attempt), self._config.max_backoff)
-        )
+        exponent = min(attempt, _MAX_BACKOFF_EXPONENT)
+        backoff = self._config.backoff_factor * 2.0**exponent
+        return min(backoff, self._config.max_backoff)
 
 
 def retry_after_seconds(value: str | None) -> float | None:
@@ -53,26 +60,28 @@ def retry_after_seconds(value: str | None) -> float | None:
     seconds; the date form is accepted because it costs one stdlib call. A
     value already in the past, in either form, means "now".
 
-    NaN is rejected rather than clamped. It parses as a float, so it used to
-    reach the clamp, where every comparison against it is False, making
-    ``max(0.0, nan)`` return ``0.0`` and a throttled client retry with no
-    backoff at all. Unlike ``-10`` it names no instant, so "unusable" is the
-    honest reading and the exponential schedule applies. ``inf`` does name an
-    instant and stays: callers cap it, and for a 429 the safe error is waiting
-    too long.
+    Untrusted text, so only what is certainly a delay is read as one: ASCII
+    digits, optionally negative (a past instant, meaning "now"). Everything
+    ``float()`` would also swallow (``1_0``, Arabic-Indic digits, ``nan``,
+    ``inf``, ``1e400``) names no honest delay, and ``nan`` in particular made
+    ``max(0.0, nan)`` return ``0.0``, so a throttled client retried with no
+    backoff. Those fall through to the date form and then to None, where the
+    exponential schedule applies. A date too large for the stdlib is None too.
     """
     if value is None or not (text := value.strip()):
         return None
-    try:
-        seconds = float(text)
-    except ValueError:
-        pass
-    else:
-        return None if math.isnan(seconds) else max(0.0, seconds)
+    if _is_seconds(text):
+        return max(0.0, float(text))
     try:
         when = parsedate_to_datetime(text)
-    except (IndexError, TypeError, ValueError):
+    except (IndexError, TypeError, ValueError, OverflowError):
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)
     return max(0.0, (when - datetime.now(tz=UTC)).total_seconds())
+
+
+def _is_seconds(text: str) -> bool:
+    """Whether ``text`` is ASCII digits, after at most one leading ``-``."""
+    digits = text.removeprefix("-")
+    return digits.isascii() and digits.isdigit()

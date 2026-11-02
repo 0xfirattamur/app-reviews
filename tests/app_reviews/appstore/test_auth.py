@@ -117,3 +117,21 @@ class TestTheTokenLifetimeMatchesApplesCap:
         )
 
         assert claims["exp"] - claims["iat"] == 20 * 60
+
+    def test_a_concurrent_close_cannot_produce_a_bearer_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``close()`` lands between the freshness check and the return."""
+        auth = ConnectAuth(connect_credentials())
+        held = auth.authorization_header()
+
+        def close_then_report_a_time_before_expiry() -> float:
+            auth.close()
+            return -1.0
+
+        monkeypatch.setattr(
+            "app_reviews.appstore.auth.time.time",
+            close_then_report_a_time_before_expiry,
+        )
+
+        assert auth.authorization_header() == held

@@ -4,6 +4,68 @@ All notable changes to `app-reviews` are recorded here. Release details for
 recent versions are also kept in
 [`.github/release-notes`](https://github.com/0xfirattamur/app-reviews/tree/main/.github/release-notes).
 
+## Unreleased
+
+### Fixed
+
+- A non-string App Store `private_key`, or a non-string `client_email`,
+  `private_key` or `token_uri` in a Google service account, now raises
+  `AuthError` when the key is loaded instead of a bare `TypeError`.
+- `HttpClient` decodes a response naming a charset Python does not know
+  (`Content-Type: ...; charset=bogus`) as UTF-8 instead of raising
+  `LookupError`.
+- `HttpResponse.body` is left out of `repr()`, so a token-exchange body cannot
+  leak through logs or tracebacks.
+- `Retry-After` reads only plain ASCII digits as seconds and ignores an
+  overflowing date, so a hostile header (`1_0`, `inf`, `Sun, 06 Nov 1994
+  08:49:37 +9999999999999999`) no longer crashes a request, and retry schedules
+  past 1023 attempts no longer overflow.
+- Store responses nested deeper than Python can parse are now reported as
+  `ParseError`, or as a page `error` of kind `"parse"`, instead of raising
+  `RecursionError`.
+- `HttpClient` rebuilds its async pool when the running event loop changes, so
+  one client reused across separate `asyncio.run()` calls no longer fails with
+  `Event loop is closed`.
+- `GooglePlayReviews` token exchange now raises `AuthError` when Google answers
+  400 with `invalid_grant`, `invalid_client` or `unauthorized_client`, instead
+  of a request error.
+- `GooglePlayReviews` now reports a rejected page token as a `FetchError` of
+  kind `"request"` instead of ending the walk as if the reviews had run out.
+- `fetch()` / `afetch()` stop starting queued country walks after a fatal error
+  such as `AuthError`, instead of running every remaining country against the
+  rejected credential.
+- `HttpClient(retry=RetryConfig(timeout=...))` now uses `RetryConfig.timeout`
+  for requests; an explicit `HttpClient(timeout=...)` still wins.
+- `RetryConfig` now rejects `bool` counts, `nan` or infinite `timeout`,
+  `backoff_factor` and `max_backoff`, and `retry_on` entries that are not HTTP
+  status codes.
+- `GooglePlayReviews` token exchange now raises `ParseError` for a missing,
+  empty or non-string `access_token`, and caps `expires_in` at one hour.
+- `AppStoreReviews`, `AppStoreVersions`, `AppStoreReplies`, `GooglePlayReviews`
+  and `GooglePlayReplies` now raise `ValueError` for an id or country of `.` or
+  `..` instead of sending a request to another path, and `AppStoreSearch` no
+  longer treats non-ASCII digits such as `²` as a trackId.
+- `AppStoreVersions.versions()` and `aversions()` now raise `ParseError` when
+  `links.next` repeats a page or the walk passes `AppStoreVersions.MAX_PAGES`,
+  instead of returning a partial list or never ending.
+- `AppStoreSearch.lookup()` and `alookup()` now raise `ParseError` when the
+  store returns a result with no usable app, instead of returning `None` as if
+  the app did not exist.
+- `reply()` and `areply()` on `AppStoreReplies` and `GooglePlayReplies` now
+  raise `ReplyOutcomeUnknownError` for HTTP 408 and 425 instead of
+  `ReplyRejectedError`, since the store may have applied the write.
+- `ReviewReply.updated_at` is now timezone-aware for App Store Connect replies
+  whose `lastModifiedDate` carries no offset, read as UTC like `Review`
+  timestamps.
+- `GooglePlaySearch` and `AppStoreSearch.version_history()` now parse a page
+  full of unclosed script markers in linear time instead of stalling.
+- `aiter_reviews()` and `aiter_pages()` close their inner page walks as soon as
+  a `limit` or an early `break` ends the stream, instead of leaving them to the
+  event loop.
+- `close()` and `aclose()` on a client whose async pool was built under an event
+  loop that has since closed (`asyncio.run(client.afetch(...))` then
+  `client.close()`) no longer raise `Event loop is closed`.
+
 ## [1.3.0] - 2026-10-25
 
 Developer replies, Play device data and translation on fetched reviews, App
