@@ -100,11 +100,11 @@ exclude = [
 
 [dependency-groups]
 dev = [
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-cov==7.1.0",
-    "pytest-asyncio==1.4.0",
-    "mypy==2.4.0",
-    "ruff==0.17.2",
+    "pytest-asyncio==1.4.1.post1",
+    "mypy==2.4.1",
+    "ruff==0.17.3",
     "pre-commit==4.7.0",
     "mkdocs-material[imaging]>=9.7.7,<10",
     "mkdocs-llmstxt>=0.5,<0.6",
